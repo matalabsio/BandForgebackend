@@ -1,0 +1,74 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+
+from app.config import settings_diagnostics
+from app.routers import tests
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    diag = settings_diagnostics()
+    print(
+        f"[bandforge-api] Supabase project_ref={diag['project_ref']} "
+        f"env_file={diag['env_file']} exists={diag['env_file_exists']}"
+    )
+    yield
+
+
+app = FastAPI(
+    title="BandForge API",
+    description="bandforge-api — test engine, evaluation, async jobs",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(tests.router)
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=True)
+def root() -> str:
+    """Browser-friendly landing page when visiting the API base URL."""
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BandForge API</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; color: #1c1917; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    .ok { color: #047857; font-weight: 600; }
+    ul { line-height: 1.8; }
+    a { color: #0d9488; }
+    code { background: #f5f5f4; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>BandForge API</h1>
+  <p class="ok">Python backend is running.</p>
+  <p>FastAPI · bandforge-api (local)</p>
+  <ul>
+    <li><a href="/docs">Swagger UI</a> — <code>/docs</code></li>
+    <li><a href="/health">Health</a> — <code>/health</code></li>
+    <li><a href="/api/tests/health">Tests router</a> — <code>/api/tests/health</code></li>
+    <li><a href="/api/tests/db-check">DB check</a> — <code>/api/tests/db-check</code></li>
+    <li><a href="/api/tests/r2-check">R2 check</a> — <code>/api/tests/r2-check</code></li>
+  </ul>
+</body>
+</html>"""
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}

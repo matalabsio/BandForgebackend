@@ -1,0 +1,95 @@
+{
+  "info": {
+    "name": "BandForge API",
+    "description": "Manual API testing — no frontend required.\n\n1. Start server: `uvicorn app.main:app --reload --port 8000`\n2. Import environment `BandForge-Local.postman_environment.json`\n3. Select environment **BandForge — Local**\n4. Run **Day 1 — Health & DB** folder first",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Day 1 — Health & DB",
+      "item": [
+        {
+          "name": "GET / (API home)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/",
+            "description": "Browser landing page — confirms Python backend is running. Returns HTML."
+          }
+        },
+        {
+          "name": "GET /health",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/health"
+          }
+        },
+        {
+          "name": "GET /api/tests/health",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/tests/health"
+          }
+        },
+        {
+          "name": "GET /api/tests/db-check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/tests/db-check",
+            "description": "Probes Supabase + Phase 2 tables. 200 = all OK. 503 = connection or missing tables (see response body)."
+          }
+        },
+        {
+          "name": "GET /api/tests/r2-check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/tests/r2-check",
+            "description": "Uploads health-check object to R2, mints presigned URL, HEADs it. 200 = R2 OK. 503 = missing env or bucket error."
+          }
+        }
+      ]
+    },
+    {
+      "name": "OpenAPI (import more routes later)",
+      "item": [
+        {
+          "name": "GET /openapi.json",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/openapi.json",
+            "description": "In Postman: Import → Link → paste this URL while server is running to auto-add new endpoints."
+          }
+        },
+        {
+          "name": "GET /docs (browser)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/docs"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Day 2+ — Sessions & questions (placeholder)",
+      "description": "Add requests here as routes ship (start attempt, list questions, submit answers).",
+      "item": []
+    }
+  ]
+}
