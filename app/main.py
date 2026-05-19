@@ -4,16 +4,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.config import settings_diagnostics
+from app.config import reload_settings, settings_diagnostics
+from app.auth import router as auth_router
 from app.routers import tests
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings = reload_settings()
     diag = settings_diagnostics()
+    google_ok = bool(
+        settings.google_client_id
+        and settings.google_client_secret
+        and settings.google_redirect_uri
+    )
     print(
         f"[bandforge-api] Supabase project_ref={diag['project_ref']} "
-        f"env_file={diag['env_file']} exists={diag['env_file_exists']}"
+        f"env_file={diag['env_file']} exists={diag['env_file_exists']} "
+        f"google_oauth={'on' if google_ok else 'off'}"
     )
     yield
 
@@ -33,6 +41,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(tests.router)
 
 

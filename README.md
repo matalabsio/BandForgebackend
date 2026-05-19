@@ -65,6 +65,31 @@ Fully specified in your paste:
 - `questions` — all columns match Section 2.2
 - `test_attempts` — all columns match Section 2.2
 
+## Auth (`/auth/*`)
+
+JWT access + refresh (httpOnly cookies). Implemented in `app/auth/`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/register` | Email signup — sends verification email, **no cookies** |
+| POST | `/auth/login` | Email login — requires `email_verified_at` |
+| POST | `/auth/send-otp` | Phone OTP — **503** unless `PHONE_OTP_ENABLED=true` |
+| POST | `/auth/verify-otp` | Verify phone OTP — **503** unless enabled |
+| POST | `/auth/verify-email` | Verify email — issues JWT cookies |
+| POST | `/auth/refresh` | Rotate tokens |
+| POST | `/auth/logout` | Revoke session |
+| POST | `/auth/forgot-password` | Send reset email (Resend) |
+| POST | `/auth/reset-password` | Set new password |
+| GET | `/auth/me` | Current user (Bearer or `bf_access` cookie) |
+| GET | `/auth/google/authorize` | Google OAuth URL (`?next=/dashboard`) |
+| POST | `/auth/google/callback` | Exchange code → JWT cookies |
+
+**Migration:** run `supabase/migrations/20260519120000_auth_tables.sql` in the Supabase SQL Editor (extends `users`, adds `otp_verifications`, `refresh_sessions`, `password_reset_tokens`).
+
+**Env:** see `.env.example` — `JWT_SECRET`, `RESEND_API_KEY`, `FRONTEND_URL`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI`, `PHONE_OTP_ENABLED=false`, `AUTH_SKIP_EMAIL_VERIFY` for local dev without Resend.
+
+**Google:** In [Google Cloud Console](https://console.cloud.google.com/) create OAuth credentials (Web). Authorized redirect URI: `http://localhost:3000/api/auth/google/callback`. Run migration `20260520120000_users_google_id.sql`.
+
 ## Run API
 
 ```bash
@@ -73,6 +98,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 - App health: `GET http://localhost:8000/health`
 - Tests router: `GET http://localhost:8000/api/tests/health`
+- Auth: `GET http://localhost:8000/docs` → **auth** tag
 - OpenAPI: `http://localhost:8000/docs`
 
 ## R2 signed URL (manual test)
