@@ -10,6 +10,7 @@ class TestAttempt(BaseModel):
     id: UUID
     user_id: UUID
     mock_test_id: UUID | None = None
+    module: str | None = None
     started_at: datetime
     completed_at: datetime | None = None
     status: str = "in_progress"

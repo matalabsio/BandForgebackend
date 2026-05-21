@@ -65,6 +65,9 @@ class Settings(BaseSettings):
         validation_alias="EMAIL_FROM",
     )
 
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4o", validation_alias="OPENAI_MODEL")
+
     auth_demo_otp: str = Field(default="", validation_alias="AUTH_DEMO_OTP")
     auth_open_otp: bool = Field(default=False, validation_alias="AUTH_OPEN_OTP")
     auth_demo_otp_enabled: bool = Field(
@@ -74,7 +77,8 @@ class Settings(BaseSettings):
         default=False, validation_alias="PHONE_OTP_ENABLED"
     )
     auth_skip_email_verify: bool = Field(
-        default=False, validation_alias="AUTH_SKIP_EMAIL_VERIFY"
+        default=True,
+        validation_alias="AUTH_SKIP_EMAIL_VERIFY",
     )
 
     google_client_id: str = Field(
@@ -106,6 +110,7 @@ class Settings(BaseSettings):
         "google_client_secret",
         "google_redirect_uri",
         "resend_api_key",
+        "openai_api_key",
         mode="before",
     )
     @classmethod

@@ -6,7 +6,8 @@ from fastapi.responses import HTMLResponse
 
 from app.config import reload_settings, settings_diagnostics
 from app.auth import router as auth_router
-from app.routers import tests
+from app.listening import router as listening_router
+from app.routers import attempts, dashboard, tests
 
 
 @asynccontextmanager
@@ -43,6 +44,9 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(tests.router)
+app.include_router(attempts.router)
+app.include_router(dashboard.router)
+app.include_router(listening_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=True)

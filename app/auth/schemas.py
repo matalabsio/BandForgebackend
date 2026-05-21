@@ -75,6 +75,32 @@ class UserPublic(BaseModel):
     phone: str | None = None
     email_verified: bool = False
     phone_verified: bool = False
+    avatar_url: str | None = None
+    avatar_display_url: str | None = None
+    target_band: float | None = None
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=120)
+    phone: str | None = None
+    target_band: float | None = Field(default=None, ge=4.0, le=9.0)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone_optional(cls, v: str | None) -> str | None:
+        if v is None or v.strip() == "":
+            return None
+        digits = normalize_india_phone(v)
+        if not is_valid_india_phone(digits):
+            raise ValueError("Enter a valid 10-digit Indian mobile number.")
+        return digits
+
+    @field_validator("target_band")
+    @classmethod
+    def round_target_band(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        return round(v * 2) / 2
 
 
 class AuthResponse(BaseModel):
@@ -82,6 +108,12 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    # Returned for client-side persistence (httpOnly cookies remain primary).
+    refresh_token: str | None = None
+
+
+class RestoreSessionRequest(BaseModel):
+    refresh_token: str = Field(min_length=16, max_length=4096)
 
 
 class MessageResponse(BaseModel):
@@ -121,5 +153,6 @@ class GoogleAuthResponse(BaseModel):
     message: str | None = None
     user: UserPublic | None = None
     access_token: str | None = None
+    refresh_token: str | None = None
     token_type: str = "bearer"
     expires_in: int = 0

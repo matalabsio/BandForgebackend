@@ -1,6 +1,18 @@
-from fastapi import APIRouter, HTTPException
+from typing import Annotated, Literal
+from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import UserPublic
 from app.config import get_settings, settings_diagnostics
+from app.schemas.test_engine import (
+    QuestionsResponse,
+    StartAttemptRequest,
+    StartAttemptResponse,
+    TestSummary,
+)
+from app.services import test_engine
 from app.db.supabase_client import get_supabase
 from app.storage.r2_check import run_r2_check
 from app.supabase_probe import probe_supabase, project_ref_from_url
@@ -33,6 +45,16 @@ def _classify_table_error(exc: Exception) -> str:
 def tests_health() -> dict[str, str]:
     """Router-level health check (full app health is GET /health)."""
     return {"status": "ok", "router": "tests"}
+
+
+@router.get("/mock-tests", response_model=list[TestSummary])
+def list_mock_tests(
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> list[TestSummary]:
+    """List dashboard-visible mock tests (published in prod, all in dev)."""
+    _ = current_user
+    include_unpublished = get_settings().app_env.strip().lower() == "development"
+    return test_engine.list_published_tests(include_unpublished=include_unpublished)
 
 
 @router.get("/db-check")
@@ -99,7 +121,10 @@ def db_check() -> dict[str, object]:
         if "auth_error" in error_kinds:
             hints.append("Use SUPABASE_SECRET_KEY (secret / service role), not the publishable key.")
         if "table_missing" in error_kinds:
-            hints.append("Run supabase/migrations/20260518120000_phase2_new_tables.sql in SQL Editor.")
+            hints.append(
+                "Run supabase/migrations/*.sql in SQL Editor "
+                "(phase2, auth, 20260522120000_test_attempts_module.sql)."
+            )
 
         raise HTTPException(
             status_code=503,
@@ -118,6 +143,37 @@ def db_check() -> dict[str, object]:
         "config": diag,
         "tables": tables,
     }
+
+
+@router.get("/{mock_test_id}/questions", response_model=QuestionsResponse)
+def get_test_questions(
+    mock_test_id: UUID,
+    module: Annotated[
+        Literal["reading", "listening"],
+        Query(description="Module to serve (Day 2: reading or listening)"),
+    ],
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> QuestionsResponse:
+    """Serve questions for a mock test module. Never returns correct_answer."""
+    return test_engine.get_questions(
+        mock_test_id,
+        module,
+        user_id=current_user.id,
+    )
+
+
+@router.post("/{mock_test_id}/start", response_model=StartAttemptResponse)
+def start_test_attempt(
+    mock_test_id: UUID,
+    body: StartAttemptRequest,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> StartAttemptResponse:
+    """Create an in-progress test attempt for the given mock test and module."""
+    return test_engine.start_attempt(
+        mock_test_id,
+        body.module,
+        user_id=current_user.id,
+    )
 
 
 @router.get("/r2-check")

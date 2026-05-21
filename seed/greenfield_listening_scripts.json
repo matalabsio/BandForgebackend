@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "description": "Greenfield College Part 1 — single continuous registration dialogue (~60–90s).",
+    "mock_test_id": "d0000000-0000-4000-8000-000000000001",
+    "r2_key": "listening/greenfield/part-1/full.mp3",
+    "answers": "Matches backend/seed/greenfield_listening_part1_seed.sql"
+  },
+  "full_part": {
+    "key": "part-1/full.mp3",
+    "tld": "co.uk",
+    "text": "Good morning, Greenfield College, how can I help you? Hello, I'd like to register for an English course please. Certainly. Could I take your first name? Yes, it's Priya. P-R-I-Y-A. Thank you, Priya. And your surname? Mehta. M-E-H-T-A. Mehta, lovely. What is your nationality? Indian. I was based in Dubai but I grew up in Mumbai. And your current occupation? I'm a nurse at the city hospital. Which course level are you interested in? Upper intermediate please. My reading and writing are fairly good. Which day would you prefer for classes? Tuesday suits me best. When would you like to start? The fourteenth of March if possible. The course fee is six hundred and eighty-five pounds. How will you be paying? I'll pay by bank transfer please. Any additional notes for us? Could you provide large print handouts? They're very helpful for me. Noted. Thank you for calling Greenfield College."
+  }
+}

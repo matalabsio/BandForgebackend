@@ -90,6 +90,22 @@ JWT access + refresh (httpOnly cookies). Implemented in `app/auth/`.
 
 **Google:** In [Google Cloud Console](https://console.cloud.google.com/) create OAuth credentials (Web). Authorized redirect URI: `http://localhost:3000/api/auth/google/callback`. Run migration `20260520120000_users_google_id.sql`.
 
+## Day 2 — Test engine (A1 + A2)
+
+**Migration:** `supabase/migrations/20260522120000_test_attempts_module.sql` (adds `test_attempts.module`).
+
+**Seed (dev):** `seed/day2_dev_seed.sql` then set Postman `mock_test_id` = `a0000000-0000-4000-8000-000000000001`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/tests/{mock_test_id}/questions?module=reading\|listening` | Bearer | Questions only — **never** `correct_answer` |
+| POST | `/api/tests/{mock_test_id}/start` | Bearer | Body `{ "module": "reading" }` → `attempt_id` |
+| POST | `/api/attempts/{attempt_id}/submit` | Bearer | Body `{ "answers": [{ "question_id", "user_answer" }] }` |
+
+Listening `audio_url` in DB = R2 object key; API returns presigned URLs in `audio_urls`.
+
+Postman folder: **Day 2 — Sessions & questions**.
+
 ## Run API
 
 ```bash
