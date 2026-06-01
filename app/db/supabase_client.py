@@ -16,10 +16,12 @@ def _is_transient_supabase_error(exc: Exception) -> bool:
         "keyerror",
         "stream",
         "connection",
+        "disconnect",
         "timeout",
         "temporarily unavailable",
         "remoteprotocolerror",
         "proxyerror",
+        "server disconnected",
     )
     return any(marker in msg for marker in transient_markers)
 
