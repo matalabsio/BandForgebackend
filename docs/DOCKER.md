@@ -2,6 +2,8 @@
 
 Run **bandforge-api** in a container behind nginx/Caddy on EC2. The frontend stays on Vercel; only this backend image runs on the server.
 
+**Full EC2 walkthrough (Ubuntu, nginx, TLS, Vercel):** [EC2_DEPLOYMENT.md](EC2_DEPLOYMENT.md)
+
 ## Files
 
 | File | Purpose |

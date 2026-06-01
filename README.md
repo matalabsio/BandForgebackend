@@ -14,7 +14,8 @@ FastAPI service for BandForge — question serving, test sessions, scoring, and 
 
 ## Docker (production / EC2)
 
-See **[docs/DOCKER.md](docs/DOCKER.md)**.
+- **Step-by-step EC2 (Ubuntu):** **[docs/EC2_DEPLOYMENT.md](docs/EC2_DEPLOYMENT.md)**
+- **Docker quick reference:** **[docs/DOCKER.md](docs/DOCKER.md)**
 
 ```bash
 cp .env.docker.example .env   # edit secrets
