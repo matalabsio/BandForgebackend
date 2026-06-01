@@ -1,4 +1,4 @@
-#!/Users/divyanshsingh/programing/MATA-lab/backend/.venv/bin/python3.12
+#!/Users/divyanshsingh/dev/MATA-lab/backend/.venv/bin/python3.12
 
 import sys
 import json

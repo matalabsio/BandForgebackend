@@ -12,6 +12,16 @@ FastAPI service for BandForge — question serving, test sessions, scoring, and 
 | Supabase client (`app/db/supabase_client.py`) | Done |
 | R2 signed URL + health check | Done — `python scripts/verify_r2.py` or `GET /api/tests/r2-check` |
 
+## Docker (production / EC2)
+
+See **[docs/DOCKER.md](docs/DOCKER.md)**.
+
+```bash
+cp .env.docker.example .env   # edit secrets
+docker compose up -d --build
+curl -fsS http://127.0.0.1:8000/health
+```
+
 ## Setup
 
 ```bash
@@ -39,6 +49,27 @@ Optional for R2:
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
 - `R2_BUCKET_NAME` (default `bandforge-speaking-audio`)
 - `R2_ENDPOINT_URL`
+
+## Local Supabase (Phase 1A — recommended for dev speed)
+
+See **[docs/LOCAL_SUPABASE.md](docs/LOCAL_SUPABASE.md)**. Quick start:
+
+```bash
+./scripts/local_supabase.sh start
+python scripts/verify_schema.py
+uvicorn app.main:app --reload --port 8000
+```
+
+Uses `backend/.env.local` to override cloud `SUPABASE_URL` without editing `.env`.
+
+## Phase 2 — fewer DB round-trips
+
+See **[docs/PHASE2.md](docs/PHASE2.md)**. Migrations:
+
+- `20260601120000_mock_start_context_rpc.sql` — start mock (fewer reads)
+- `20260601140000_module_submit_bundle_rpc.sql` — submit (one write transaction)
+
+Included in `supabase db reset` / applied on cloud via dashboard or MCP.
 
 ## Database migration
 
@@ -90,6 +121,22 @@ JWT access + refresh (httpOnly cookies). Implemented in `app/auth/`.
 
 **Google:** In [Google Cloud Console](https://console.cloud.google.com/) create OAuth credentials (Web). Authorized redirect URI: `http://localhost:3000/api/auth/google/callback`. Run migration `20260520120000_users_google_id.sql`.
 
+## Day 2 — Test engine (A1 + A2)
+
+**Migration:** `supabase/migrations/20260522120000_test_attempts_module.sql` (adds `test_attempts.module`).
+
+**Seed (dev):** `seed/day2_dev_seed.sql` then set Postman `mock_test_id` = `a0000000-0000-4000-8000-000000000001`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/tests/{mock_test_id}/questions?module=reading\|listening` | Bearer | Questions only — **never** `correct_answer` |
+| POST | `/api/tests/{mock_test_id}/start` | Bearer | Body `{ "module": "reading" }` → `attempt_id` |
+| POST | `/api/attempts/{attempt_id}/submit` | Bearer | Body `{ "answers": [{ "question_id", "user_answer" }] }` |
+
+Listening `audio_url` in DB = R2 object key; API returns presigned URLs in `audio_urls`.
+
+Postman folder: **Day 2 — Sessions & questions**.
+
 ## Run API
 
 ```bash
@@ -113,6 +160,21 @@ Or after starting the API: `GET http://127.0.0.1:8000/api/tests/r2-check`
 from app.storage.r2 import generate_signed_url
 print(generate_signed_url("demo/user-1/part-1.webm"))
 ```
+
+## Founder listening ingestion (S2 + S3)
+
+Map founder JSON → DB rows + SQL seed. **Answers and transcripts are server-only**; audio is private R2 with presigned URLs after `POST /api/listening/{id}/start`.
+
+- Spec: [`docs/listening_ingestion_mapping.md`](docs/listening_ingestion_mapping.md)
+- Normalizer: `python -m scripts.normalize_listening_mock`
+- **S2** — mock `e0000000-0000-4000-8000-000000000002`, audio `test/listening/audio/Listening_S2_Audio.mp3` → `--preset bandforge-s2`
+- **S3** — mock `e0000000-0000-4000-8000-000000000003`, audio `test/listening/audio/Listening_S3_Audio.mp3` → `--preset bandforge-s3`
+- **S4** — mock `e0000000-0000-4000-8000-000000000004`, audio `test/listening/audio/Listening_S4_Audio.mp3` → `--preset bandforge-s4` (RTF: `test/listening/transcripts/Listening_S4_Elevenlabs_Transcript.rtf`)
+- **M01** — full mock; upload: `python -m scripts.upload_m01_listening_audio`
+- Verify: `python -m scripts.verify_listening_mock --mock-id <uuid>`
+- R2 bucket must have **no public access**; do not commit MP3s (`test/listening/audio/*.mp3`, `audio_seed/**/full.mp3` are gitignored)
+
+Frontend: `/test/listening?part=2` (Leisure Centre), `?part=3` (Tutorial), `?part=4` (Transit lecture)
 
 ## Postman-first testing (no frontend)
 

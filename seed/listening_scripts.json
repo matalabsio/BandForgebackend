@@ -1,0 +1,114 @@
+{
+  "_meta": {
+    "description": "20 IELTS-style short scripts (5-9s each) for the listening mock c0000000-0000-4000-8000-000000000001.",
+    "tld_map": {
+      "co.uk": "UK English",
+      "com.au": "Australian English",
+      "com": "North American English",
+      "co.in": "Indian English (proxy for varied accent in Part 3)"
+    },
+    "answer_targets": "Each script embeds the answer for the matching question in backend/seed/ielts_listening_20_seed.sql"
+  },
+  "clips": [
+    {
+      "key": "part-1/q-1.mp3",
+      "tld": "co.uk",
+      "text": "Hi, I'd like to book a room please. Of course, could I take your first name? Yes, it's Sophie. Lovely, Sophie."
+    },
+    {
+      "key": "part-1/q-2.mp3",
+      "tld": "co.uk",
+      "text": "And the postcode for the booking? That's B S three, four P R. B S three four P R, perfect, thank you."
+    },
+    {
+      "key": "part-1/q-3.mp3",
+      "tld": "co.uk",
+      "text": "How many nights would you like to stay? Three nights please, from Monday. Three nights from Monday, confirmed."
+    },
+    {
+      "key": "part-1/q-4.mp3",
+      "tld": "co.uk",
+      "text": "And how will you be paying today? I'll pay by credit card now if that's alright. Credit card now, lovely."
+    },
+    {
+      "key": "part-1/q-5.mp3",
+      "tld": "co.uk",
+      "text": "Any special requests for your stay? Could I have a late checkout, please? Late checkout, I'll add that to the notes."
+    },
+    {
+      "key": "part-2/q-1.mp3",
+      "tld": "com.au",
+      "text": "Welcome to the museum, everyone. All tours start here at the information desk, just to your left as you come in."
+    },
+    {
+      "key": "part-2/q-2.mp3",
+      "tld": "com.au",
+      "text": "If you'd like a souvenir, our gift shop is on the ground floor, right by the main entrance. Easy to find."
+    },
+    {
+      "key": "part-2/q-3.mp3",
+      "tld": "com.au",
+      "text": "Looking at the map in front of you, directly east of the central fountain you'll find the sculpture garden."
+    },
+    {
+      "key": "part-2/q-4.mp3",
+      "tld": "com.au",
+      "text": "The next guided tour begins at eleven thirty, so please be back at the information desk a few minutes before."
+    },
+    {
+      "key": "part-2/q-5.mp3",
+      "tld": "com.au",
+      "text": "One quick reminder: photography is permitted only in the temporary exhibition rooms on the first floor."
+    },
+    {
+      "key": "part-3/q-1.mp3",
+      "tld": "com",
+      "text": "Anna: Honestly, the main weakness of our methodology was the sample size. Fifteen participants was just too small to draw conclusions from."
+    },
+    {
+      "key": "part-3/q-2.mp3",
+      "tld": "co.uk",
+      "text": "Ben: I think our literature review is already sufficient. Supervisor: That's exactly where I'd push back, Ben. It really isn't sufficient yet."
+    },
+    {
+      "key": "part-3/q-3.mp3",
+      "tld": "co.uk",
+      "text": "Anna: We have to hit Friday. Ben: Agreed, the deadline matters most. Supervisor: Deadlines mean nothing if the work isn't actually ready."
+    },
+    {
+      "key": "part-3/q-4.mp3",
+      "tld": "co.uk",
+      "text": "Supervisor: For your follow-up task, please submit a polished draft to me by Friday. That's the priority for now."
+    },
+    {
+      "key": "part-3/q-5.mp3",
+      "tld": "co.uk",
+      "text": "Supervisor: Overall I'd say I'm cautiously supportive. The direction is sound, but the execution still needs noticeable work."
+    },
+    {
+      "key": "part-4/q-1.mp3",
+      "tld": "co.uk",
+      "text": "Today we'll see that coastal erosion is driven primarily by wave action: the relentless impact of waves against the shoreline."
+    },
+    {
+      "key": "part-4/q-2.mp3",
+      "tld": "co.uk",
+      "text": "On average, soft cliffs retreat at roughly one metre per year, though this figure rises sharply after major storms."
+    },
+    {
+      "key": "part-4/q-3.mp3",
+      "tld": "co.uk",
+      "text": "Sea defences are most effective when combined with beach nourishment, that is, adding sand to widen the beach."
+    },
+    {
+      "key": "part-4/q-4.mp3",
+      "tld": "co.uk",
+      "text": "Managed retreat is preferable in many cases because it is far more cost-effective than building hard defences."
+    },
+    {
+      "key": "part-4/q-5.mp3",
+      "tld": "co.uk",
+      "text": "A striking example is the village of Happisburgh on the Norfolk coast, which has lost dozens of homes to the sea."
+    }
+  ]
+}

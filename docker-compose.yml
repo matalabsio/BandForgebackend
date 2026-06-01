@@ -1,0 +1,42 @@
+# Production API on EC2 (or any Docker host).
+# Usage:
+#   cp .env.docker.example .env   # edit secrets, then:
+#   docker compose up -d --build
+#   curl -fsS http://127.0.0.1:8000/health
+#
+# Put nginx/Caddy on the host in front of port 8000 for TLS.
+
+name: bandforge-api
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bandforge-api:latest
+    container_name: bandforge-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      # Tune for instance size: t3.small → 2, t3.medium → 4
+      WEB_CONCURRENCY: "${WEB_CONCURRENCY:-2}"
+    ports:
+      - "${API_PUBLISH_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Optional: mount host .env instead of baking secrets (default uses env_file above)
+    # volumes:
+    #   - ./.env:/app/.env:ro

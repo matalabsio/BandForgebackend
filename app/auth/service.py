@@ -16,7 +16,8 @@ from app.auth.constants import (
 from app.auth.email import send_password_reset_email, send_verification_email
 from app.auth.jwt import create_access_token, create_refresh_token, decode_refresh_token
 from app.auth.otp import OtpError, create_and_send_otp, verify_otp_code
-from app.auth.schemas import AuthResponse, MessageResponse, UserPublic
+from app.auth.schemas import AuthResponse, MessageResponse, UpdateProfileRequest, UserPublic
+from app.storage.r2 import delete_object, upload_object
 from app.auth.security import hash_password, verify_password
 from app.auth.utils import generate_opaque_token, hash_token, phone_e164, utcnow
 from app.config import get_settings
@@ -33,10 +34,8 @@ def _ensure_phone_otp_enabled() -> None:
 
 
 def _email_verification_required() -> bool:
-    settings = get_settings()
-    if settings.auth_skip_email_verify:
-        return False
-    return True
+    """Temporary: email verification disabled until Resend/production is configured."""
+    return False
 
 
 async def _queue_email_verification(
@@ -74,7 +73,20 @@ class GoogleLoginResult:
     message: str | None = None
 
 
+def _avatar_display_url(key: str | None) -> str | None:
+    if not key:
+        return None
+    try:
+        from app.storage.r2 import generate_signed_url
+
+        return generate_signed_url(key, expiry=86400)
+    except Exception:
+        logger.warning("avatar presign failed for key=%s", key, exc_info=True)
+        return None
+
+
 def _row_to_user(row: dict[str, Any]) -> UserPublic:
+    target = row.get("target_band")
     return UserPublic(
         id=UUID(str(row["id"])),
         email=row.get("email"),
@@ -82,6 +94,9 @@ def _row_to_user(row: dict[str, Any]) -> UserPublic:
         phone=row.get("phone"),
         email_verified=row.get("email_verified_at") is not None,
         phone_verified=row.get("phone_verified_at") is not None,
+        avatar_url=row.get("avatar_url"),
+        avatar_display_url=_avatar_display_url(row.get("avatar_url")),
+        target_band=float(target) if target is not None else None,
     )
 
 
@@ -518,6 +533,80 @@ async def google_login_or_register(
         refresh_token=refresh,
         session_id=session_id,
     )
+
+
+async def update_user_profile(
+    *,
+    user_id: UUID,
+    body: UpdateProfileRequest,
+) -> UserPublic:
+    sb = get_supabase()
+    e164: str | None = None
+    if body.phone:
+        e164 = phone_e164(body.phone)
+        clash = (
+            sb.table("users")
+            .select("id")
+            .eq("phone", e164)
+            .neq("id", str(user_id))
+            .limit(1)
+            .execute()
+        )
+        if clash.data:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "This phone number is already linked to another account.",
+            )
+
+    payload: dict[str, Any] = {
+        "full_name": body.full_name.strip(),
+        "target_band": body.target_band,
+        "phone": e164,
+        "updated_at": utcnow().isoformat(),
+    }
+
+    sb.table("users").update(payload).eq("id", str(user_id)).execute()
+    return await get_user_by_id(user_id)
+
+
+async def upload_user_avatar(
+    *,
+    user_id: UUID,
+    content: bytes,
+    content_type: str,
+) -> UserPublic:
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Image must be 2 MB or smaller.",
+        )
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if content_type not in allowed:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Use JPEG, PNG, or WebP.",
+        )
+
+    ext = "jpg"
+    if content_type == "image/png":
+        ext = "png"
+    elif content_type == "image/webp":
+        ext = "webp"
+
+    key = f"avatars/{user_id}.{ext}"
+    sb = get_supabase()
+    existing = (
+        sb.table("users").select("avatar_url").eq("id", str(user_id)).limit(1).execute()
+    )
+    old_key = existing.data[0].get("avatar_url") if existing.data else None
+    if old_key and old_key != key:
+        delete_object(old_key)
+
+    upload_object(key=key, body=content, content_type=content_type)
+    sb.table("users").update(
+        {"avatar_url": key, "updated_at": utcnow().isoformat()}
+    ).eq("id", str(user_id)).execute()
+    return await get_user_by_id(user_id)
 
 
 async def get_user_by_id(user_id: UUID) -> UserPublic:

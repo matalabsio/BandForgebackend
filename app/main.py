@@ -4,9 +4,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.config import reload_settings, settings_diagnostics
+from app.config import get_settings, reload_settings, settings_diagnostics
+from app.cache.hybrid_cache import redis_status
+from app.middleware.timing import ApiTimingMiddleware
 from app.auth import router as auth_router
-from app.routers import tests
+from app.listening import router as listening_router
+from app.reading import router as reading_router
+from app.writing import router as writing_router
+from app.routers import attempts, dashboard, mock_attempts, tests
 
 
 @asynccontextmanager
@@ -20,8 +25,10 @@ async def lifespan(_app: FastAPI):
     )
     print(
         f"[bandforge-api] Supabase project_ref={diag['project_ref']} "
-        f"env_file={diag['env_file']} exists={diag['env_file_exists']} "
-        f"google_oauth={'on' if google_ok else 'off'}"
+        f"url={diag['supabase_url']} "
+        f"env_local_active={diag['env_local_active']} "
+        f"google_oauth={'on' if google_ok else 'off'} "
+        f"redis={redis_status()}"
     )
     yield
 
@@ -33,9 +40,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(ApiTimingMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=get_settings().cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,6 +51,12 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(tests.router)
+app.include_router(attempts.router)
+app.include_router(dashboard.router)
+app.include_router(mock_attempts.router)
+app.include_router(listening_router)
+app.include_router(reading_router)
+app.include_router(writing_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=True)

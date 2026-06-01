@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 
 from app.auth.constants import (
     ACCESS_TOKEN_COOKIE,
@@ -28,7 +28,9 @@ from app.auth.schemas import (
     MessageResponse,
     RegisterRequest,
     ResetPasswordRequest,
+    RestoreSessionRequest,
     SendOtpRequest,
+    UpdateProfileRequest,
     UserPublic,
     VerifyEmailRequest,
     VerifyOtpRequest,
@@ -37,6 +39,9 @@ from app.auth import service
 from app.config import get_settings
 
 router = APIRouter(prefix=AUTH_ROUTER_PREFIX, tags=["auth"])
+
+
+AUTH_TEMP_BLOCK_MSG = "Temporarily disabled. Continue with Google sign-in."
 
 
 def _cookie_secure() -> bool:
@@ -73,10 +78,9 @@ def _clear_auth_cookies(response: Response) -> None:
 
 @router.post("/register", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest) -> MessageResponse:
-    return await service.register_user(
-        email=body.email,
-        password=body.password,
-        full_name=body.full_name,
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=AUTH_TEMP_BLOCK_MSG,
     )
 
 
@@ -92,35 +96,34 @@ async def collect_lead(body: CollectLeadRequest) -> MessageResponse:
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest, response: Response) -> AuthResponse:
-    auth, refresh, _ = await service.login_user(email=body.email, password=body.password)
-    _set_auth_cookies(response, access_token=auth.access_token, refresh_token=refresh)
-    return auth
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=AUTH_TEMP_BLOCK_MSG,
+    )
 
 
 @router.post("/send-otp", response_model=MessageResponse)
 async def send_otp(body: SendOtpRequest) -> MessageResponse:
-    demo = await service.send_phone_otp(phone_digits=body.phone)
-    msg = "OTP sent."
-    if demo:
-        msg = f"{msg} {demo}"
-    return MessageResponse(message=msg)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Phone OTP is temporarily disabled.",
+    )
 
 
 @router.post("/verify-otp", response_model=AuthResponse)
 async def verify_otp(body: VerifyOtpRequest, response: Response) -> AuthResponse:
-    auth, refresh, _ = await service.verify_phone_otp(
-        phone_digits=body.phone,
-        code=body.code,
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Phone OTP is temporarily disabled.",
     )
-    _set_auth_cookies(response, access_token=auth.access_token, refresh_token=refresh)
-    return auth
 
 
 @router.post("/verify-email", response_model=AuthResponse)
 async def verify_email(body: VerifyEmailRequest, response: Response) -> AuthResponse:
-    auth, refresh, _ = await service.verify_email_token(token=body.token)
-    _set_auth_cookies(response, access_token=auth.access_token, refresh_token=refresh)
-    return auth
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=AUTH_TEMP_BLOCK_MSG,
+    )
 
 
 @router.post("/refresh", response_model=AuthResponse)
@@ -132,7 +135,18 @@ async def refresh(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No refresh token.")
     auth, new_refresh, _ = await service.refresh_session(refresh_token=refresh_token)
     _set_auth_cookies(response, access_token=auth.access_token, refresh_token=new_refresh)
-    return auth
+    return auth.model_copy(update={"refresh_token": new_refresh})
+
+
+@router.post("/restore", response_model=AuthResponse)
+async def restore_session(
+    body: RestoreSessionRequest, response: Response
+) -> AuthResponse:
+    auth, new_refresh, _ = await service.refresh_session(
+        refresh_token=body.refresh_token
+    )
+    _set_auth_cookies(response, access_token=auth.access_token, refresh_token=new_refresh)
+    return auth.model_copy(update={"refresh_token": new_refresh})
 
 
 @router.post("/logout", response_model=MessageResponse)
@@ -147,21 +161,45 @@ async def logout(
 
 @router.post("/forgot-password", response_model=MessageResponse)
 async def forgot_password(body: ForgotPasswordRequest) -> MessageResponse:
-    await service.forgot_password(email=body.email)
-    return MessageResponse(
-        message="If that email exists, we sent a reset link.",
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=AUTH_TEMP_BLOCK_MSG,
     )
 
 
 @router.post("/reset-password", response_model=MessageResponse)
 async def reset_password(body: ResetPasswordRequest) -> MessageResponse:
-    await service.reset_password(token=body.token, password=body.password)
-    return MessageResponse(message="Password updated. Please sign in.")
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=AUTH_TEMP_BLOCK_MSG,
+    )
 
 
 @router.get("/me", response_model=UserPublic)
 async def me(user: Annotated[UserPublic, Depends(get_current_user)]) -> UserPublic:
     return user
+
+
+@router.patch("/profile", response_model=UserPublic)
+async def update_profile(
+    body: UpdateProfileRequest,
+    user: Annotated[UserPublic, Depends(get_current_user)],
+) -> UserPublic:
+    return await service.update_user_profile(user_id=user.id, body=body)
+
+
+@router.post("/profile/avatar", response_model=UserPublic)
+async def upload_profile_avatar(
+    user: Annotated[UserPublic, Depends(get_current_user)],
+    file: UploadFile = File(...),
+) -> UserPublic:
+    raw = await file.read()
+    content_type = file.content_type or "image/jpeg"
+    return await service.upload_user_avatar(
+        user_id=user.id,
+        content=raw,
+        content_type=content_type,
+    )
 
 
 @router.get("/google/authorize", response_model=GoogleAuthorizeResponse)
@@ -212,6 +250,7 @@ async def google_callback(
     return GoogleAuthResponse(
         user=result.auth.user,
         access_token=result.auth.access_token,
+        refresh_token=result.refresh_token,
         token_type=result.auth.token_type,
         expires_in=result.auth.expires_in,
         redirect_to=redirect_to,

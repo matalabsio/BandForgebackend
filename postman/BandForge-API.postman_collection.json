@@ -87,9 +87,128 @@
       ]
     },
     {
-      "name": "Day 2+ — Sessions & questions (placeholder)",
-      "description": "Add requests here as routes ship (start attempt, list questions, submit answers).",
-      "item": []
+      "name": "Day 2 — Sessions & questions",
+      "description": "Requires auth. Set access_token after login. Set mock_test_id (see backend/seed/day2_dev_seed.sql).",
+      "item": [
+        {
+          "name": "POST /api/tests/{mock_test_id}/start",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const j = pm.response.json();",
+                  "  pm.environment.set('attempt_id', j.attempt_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"module\": \"reading\"\n}"
+            },
+            "url": "{{base_url}}/api/tests/{{mock_test_id}}/start",
+            "description": "Creates test_attempts row (status in_progress). Saves attempt_id to env."
+          }
+        },
+        {
+          "name": "GET /api/tests/{mock_test_id}/questions?module=reading",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('no correct_answer leak', function () {",
+                  "  pm.expect(pm.response.text()).to.not.include('correct_answer');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tests/{{mock_test_id}}/questions?module=reading",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tests", "{{mock_test_id}}", "questions"],
+              "query": [{ "key": "module", "value": "reading" }]
+            },
+            "description": "Returns questions without correct_answer. Reading includes passage_text once at root."
+          }
+        },
+        {
+          "name": "GET /api/tests/{mock_test_id}/questions?module=listening",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('no correct_answer leak', function () {",
+                  "  pm.expect(pm.response.text()).to.not.include('correct_answer');",
+                  "});",
+                  "pm.test('has audio_urls when seeded', function () {",
+                  "  if (pm.response.code === 200) {",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.audio_urls).to.be.an('array');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tests/{{mock_test_id}}/questions?module=listening",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tests", "{{mock_test_id}}", "questions"],
+              "query": [{ "key": "module", "value": "listening" }]
+            },
+            "description": "Returns presigned R2 audio_urls. Requires listening questions with audio_url keys in DB + R2 file uploaded."
+          }
+        },
+        {
+          "name": "POST /api/attempts/{attempt_id}/submit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('no correct_answer leak', function () {",
+                  "  pm.expect(pm.response.text()).to.not.include('correct_answer');",
+                  "});",
+                  "pm.test('completed', function () {",
+                  "  if (pm.response.code === 200) {",
+                  "    pm.expect(pm.response.json().status).to.eql('completed');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answers\": [\n    { \"question_id\": \"REPLACE_WITH_QUESTION_UUID\", \"user_answer\": \"B\" },\n    { \"question_id\": \"REPLACE_WITH_QUESTION_UUID\", \"user_answer\": \"B\" },\n    { \"question_id\": \"REPLACE_WITH_QUESTION_UUID\", \"user_answer\": \"FALSE\" }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/attempts/{{attempt_id}}/submit",
+            "description": "Replace question_id values from GET questions response. Marks attempt completed."
+          }
+        }
+      ]
     }
   ]
 }
