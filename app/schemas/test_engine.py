@@ -13,6 +13,8 @@ class TestSummary(BaseModel):
     description: str | None = None
     listening_question_count: int | None = None
     listening_duration_minutes: int = 30
+    reading_question_count: int | None = None
+    reading_duration_minutes: int = 60
 
 
 class QuestionPublic(BaseModel):
@@ -34,6 +36,8 @@ class QuestionsResponse(BaseModel):
 
 class StartAttemptRequest(BaseModel):
     module: TestModule
+    """When true, abandon any in-progress attempt and create a new one."""
+    force_new: bool = False
 
 
 class StartAttemptResponse(BaseModel):
@@ -41,6 +45,7 @@ class StartAttemptResponse(BaseModel):
     started_at: datetime
     status: str
     module: TestModule
+    resumed: bool = False
 
 
 class AnswerSubmission(BaseModel):

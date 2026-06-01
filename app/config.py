@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,11 +16,20 @@ def _env_bool(v: object) -> bool:
 # Always load backend/.env regardless of shell cwd (e.g. uvicorn started from repo root).
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _ENV_FILE = _BACKEND_DIR / ".env"
+_ENV_LOCAL_FILE = _BACKEND_DIR / ".env.local"
+
+
+def _env_files() -> tuple[str, ...]:
+    """`.env.local` overrides `.env` in dev only (never in production / Docker prod)."""
+    paths: list[Path] = [_ENV_FILE]
+    app_env = os.environ.get("APP_ENV", "development").strip().lower()
+    if app_env != "production" and _ENV_LOCAL_FILE.is_file():
+        paths.append(_ENV_LOCAL_FILE)
+    return tuple(str(p) for p in paths)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -52,6 +62,11 @@ class Settings(BaseSettings):
     frontend_url: str = Field(
         default="http://localhost:3000",
         validation_alias=AliasChoices("FRONTEND_URL", "NEXT_PUBLIC_APP_URL"),
+    )
+    cors_origins: str = Field(
+        default="",
+        validation_alias="CORS_ORIGINS",
+        description="Comma-separated extra browser origins (production Vercel, staging).",
     )
 
     redis_url: str = Field(default="", validation_alias="REDIS_URL")
@@ -130,10 +145,24 @@ class Settings(BaseSettings):
     def supabase_url_normalized(self) -> str:
         return self.supabase_url.rstrip("/")
 
+    def cors_allow_origins(self) -> list[str]:
+        """Origins for CORSMiddleware (frontend + optional CORS_ORIGINS + localhost in dev)."""
+        origins: list[str] = []
+        for raw in (self.frontend_url, self.cors_origins):
+            for part in raw.split(","):
+                origin = part.strip().rstrip("/")
+                if origin and origin not in origins:
+                    origins.append(origin)
+        if self.app_env.strip().lower() != "production":
+            for local in ("http://localhost:3000", "http://127.0.0.1:3000"):
+                if local not in origins:
+                    origins.append(local)
+        return origins
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(_env_file=_env_files())
 
 
 def reload_settings() -> Settings:
@@ -149,9 +178,12 @@ def settings_diagnostics() -> dict[str, str]:
     from app.supabase_probe import project_ref_from_url
 
     s = get_settings()
+    local = _ENV_LOCAL_FILE.is_file()
     return {
         "env_file": str(_ENV_FILE),
         "env_file_exists": str(_ENV_FILE.is_file()),
+        "env_local": str(_ENV_LOCAL_FILE) if local else "",
+        "env_local_active": str(local),
         "project_ref": project_ref_from_url(s.supabase_url_normalized),
         "supabase_url": s.supabase_url_normalized,
     }

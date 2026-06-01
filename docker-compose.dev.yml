@@ -1,0 +1,21 @@
+# Local API in Docker with hot reload (not for EC2 production).
+#   docker compose -f docker-compose.dev.yml up --build
+
+name: bandforge-api-dev
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bandforge-api:dev
+    env_file:
+      - .env
+    environment:
+      APP_ENV: development
+      UVICORN_RELOAD: "1"
+      WEB_CONCURRENCY: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app:ro

@@ -1,0 +1,188 @@
+{
+  "mock_test": {
+    "id": "e0000000-0000-4000-8000-000000000004",
+    "title": "IELTS Listening — Public Transit Systems and the Reduction of CO2 Emissions",
+    "description": "Founder Section 4: Public Transit Systems and the Reduction of CO2 Emissions. Source: ielts_listening_section_4. Audio: listening/bandforge-s4/part-1/full.mp3.",
+    "is_published": true,
+    "source_section": 4,
+    "resource_id": "ielts_listening_section_4"
+  },
+  "questions": [
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 1,
+      "prompt": "Transport produces approximately a ___ of global CO2 emissions",
+      "passage_text": "Complete the notes below. Write NO MORE THAN TWO WORDS for each answer.",
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "quarter",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 2,
+      "prompt": "Emissions vary by mode: a full bus is far cleaner per ___ than a car",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "traveller/traveler",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 3,
+      "prompt": "Buses operate in dedicated ___ , kept separate from other traffic",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "lanes",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 4,
+      "prompt": "The model was first established in ___ , Brazil",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "Curitiba",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 5,
+      "prompt": "Main advantage = low ___ → suited to cities with limited budgets",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "construction cost",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 6,
+      "prompt": "Light rail and metro run on ___ , so emissions at point of use are minimal",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "electricity",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 7,
+      "prompt": "Capacity: one metro line carries as many people as a ___ full of cars",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "motorway",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 8,
+      "prompt": "Integration: coordinated timetables + a single ___ for all modes",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "ticket",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 9,
+      "prompt": "Driving discouraged by introducing a ___",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "congestion charge",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000004",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 10,
+      "prompt": "Higher-density housing near transit stops — known as ___ development",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s4/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "transit-oriented/transit oriented",
+      "skill_tag": "completion"
+    }
+  ],
+  "metadata": {
+    "transcript": "LECTURER: Good morning. Today we're looking at how public transit systems can help cities cut their carbon emissions — a central question in contemporary urban planning.\nLet me begin with the scale of the problem. Globally, the transport sector is responsible for around a quarter of all carbon dioxide emissions, though in dense cities the figure can approach a third. The crucial point is that emissions vary enormously by mode. A full bus, for instance, emits far less carbon per traveller than a private car carrying just one person. So the planner's task is essentially to shift people out of cars and onto shared modes — and for that, the alternative has to be genuinely attractive.\nFirstly, let's consider bus-based solutions. The most significant innovation here is what's called Bus Rapid Transit, or BRT. The defining feature of BRT is that buses run in dedicated lanes, completely separated from ordinary traffic, so they're never held up by congestion. The system that really established the model was built in the Brazilian city of Curitiba — that's C-U-R-I-T-I-B-A — back in the nineteen-seventies, and the approach was later adopted in cities such as Bogotá and Jakarta. BRT's great strength is affordability: its construction cost is a fraction of that of an underground railway, which makes it especially suitable for rapidly growing cities with limited budgets.\nIn contrast, rail-based systems require much heavier investment, but they offer advantages buses cannot match. Light rail and metro systems are powered by electricity, so — as long as that power is generated cleanly — the journey itself produces almost no emissions at the point of use. Significantly, a single metro line can carry the equivalent of a major motorway's worth of cars, and it does so while occupying very little land at street level.\nHowever, building the infrastructure is only half the story. The evidence consistently shows that transit succeeds only when it's supported by wider planning decisions. One key measure is integration — coordinating timetables and using a single ticket across buses, trams and trains, so that transferring between them is seamless. Another is to make driving less appealing: many cities now use a congestion charge, requiring motorists to pay for entering the centre during peak hours, which has proven remarkably effective at reducing traffic. Land-use policy matters too. When housing is built at higher density close to transit stops — an approach known as transit-oriented development — ridership rises sharply.\nFinally, a word on the main obstacle. The greatest barrier is rarely engineering; it's funding. Because the benefits, particularly the environmental ones, accumulate slowly over decades, transit projects struggle to compete for short-term political attention. The cities that succeed are those that treat public transport not as a cost, but as essential infrastructure. We'll look at three such cities next week.",
+    "audio_file": "Listening_S4_Audio.mp3",
+    "transcript_locations": [
+      {
+        "question_number": 1,
+        "transcript_location": "...the transport sector is responsible for around a quarter of all carbon dioxide emissions..."
+      },
+      {
+        "question_number": 2,
+        "transcript_location": "A full bus, for instance, emits far less carbon per traveller than a private car carrying just one person."
+      },
+      {
+        "question_number": 3,
+        "transcript_location": "...buses run in dedicated lanes, completely separated from ordinary traffic..."
+      },
+      {
+        "question_number": 4,
+        "transcript_location": "...built in the Brazilian city of Curitiba — that's C-U-R-I-T-I-B-A..."
+      },
+      {
+        "question_number": 5,
+        "transcript_location": "...its construction cost is a fraction of that of an underground railway..."
+      },
+      {
+        "question_number": 6,
+        "transcript_location": "Light rail and metro systems are powered by electricity..."
+      },
+      {
+        "question_number": 7,
+        "transcript_location": "...a single metro line can carry the equivalent of a major motorway's worth of cars..."
+      },
+      {
+        "question_number": 8,
+        "transcript_location": "...coordinating timetables and using a single ticket across buses, trams and trains..."
+      },
+      {
+        "question_number": 9,
+        "transcript_location": "...many cities now use a congestion charge, requiring motorists to pay for entering the centre during peak hours..."
+      },
+      {
+        "question_number": 10,
+        "transcript_location": "...an approach known as transit-oriented development — ridership rises sharply."
+      }
+    ]
+  }
+}

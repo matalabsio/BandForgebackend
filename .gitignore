@@ -8,6 +8,11 @@ env/
 .env
 .env.*
 !.env.example
+!env.local.example
+
+# Local Supabase (Docker)
+supabase/.branches
+supabase/.temp
 
 # Python bytecode & caches
 __pycache__/

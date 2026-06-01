@@ -2,7 +2,7 @@
 
 Presets:
   ielts-day3 (default) — 20 clips: listening/ielts-day3/part-<N>/q-<M>.mp3
-  greenfield           — 1 clip:   listening/greenfield/part-1/full.mp3
+  greenfield           — 4 clips:  listening/greenfield/part-<N>/full.mp3
 
 Usage::
 
@@ -35,6 +35,26 @@ PRESETS: dict[str, dict[str, Path | str]] = {
     "greenfield": {
         "source": REPO_ROOT / "audio_seed" / "greenfield",
         "key_prefix": "listening/greenfield",
+        "mode": "full_part",
+    },
+    "bandforge-s2": {
+        "source": REPO_ROOT / "audio_seed" / "bandforge-s2",
+        "key_prefix": "listening/bandforge-s2",
+        "mode": "full_part",
+    },
+    "bandforge-s3": {
+        "source": REPO_ROOT / "audio_seed" / "bandforge-s3",
+        "key_prefix": "listening/bandforge-s3",
+        "mode": "full_part",
+    },
+    "bandforge-s4": {
+        "source": REPO_ROOT / "audio_seed" / "bandforge-s4",
+        "key_prefix": "listening/bandforge-s4",
+        "mode": "full_part",
+    },
+    "m01": {
+        "source": REPO_ROOT / "audio_seed" / "m01",
+        "key_prefix": "listening/m01",
         "mode": "full_part",
     },
 }
@@ -109,14 +129,27 @@ def upload_grid(source: Path, key_prefix: str, *, dry_run: bool = False) -> int:
     return uploaded
 
 
-def upload_greenfield(source: Path, key_prefix: str, *, dry_run: bool = False) -> int:
+def upload_full_part_set(source: Path, key_prefix: str, *, dry_run: bool = False) -> int:
     client, bucket = _build_client()
-    local = source / "part-1" / "full.mp3"
-    key = f"{key_prefix}/part-1/full.mp3"
-    if not _upload_file(client, bucket, local, key, dry_run=dry_run):
-        print(f"\nMissing file: {local}", file=sys.stderr)
-        return 0
-    return 1
+    uploaded = 0
+    missing: list[str] = []
+    for part in (1, 2, 3, 4):
+        local = source / f"part-{part}" / "full.mp3"
+        key = f"{key_prefix}/part-{part}/full.mp3"
+        if _upload_file(client, bucket, local, key, dry_run=dry_run):
+            uploaded += 1
+        else:
+            missing.append(str(local))
+
+    if missing:
+        print(
+            f"\nMissing {len(missing)} full-part file(s):",
+            *[f"  - {m}" for m in missing],
+            sep="\n",
+            file=sys.stderr,
+        )
+
+    return uploaded
 
 
 def main() -> None:
@@ -146,7 +179,7 @@ def main() -> None:
         raise SystemExit(f"Source folder not found: {source}")
 
     if preset["mode"] == "full_part":
-        count = upload_greenfield(source, key_prefix, dry_run=args.dry_run)
+        count = upload_full_part_set(source, key_prefix, dry_run=args.dry_run)
     else:
         count = upload_grid(source, key_prefix, dry_run=args.dry_run)
 

@@ -12,6 +12,9 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.cache.hybrid_cache import get_json, set_json
+from app.cache.mock_cache import invalidate_mock_progress_caches
+from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
 from app.listening import repository as repo
 from app.listening.constants import (
@@ -22,20 +25,34 @@ from app.listening.constants import (
 from app.listening.evaluation import (
     build_skill_breakdown,
     calculate_band,
+    is_answer_correct,
     score_answers,
 )
+from app.listening.explanations import build_explanation
+from app.listening.practice_tip import build_practice_tip
 from app.listening.schemas import (
     AutosaveResponse,
     ListeningPart,
     ListeningQuestion,
     ListeningQuestionsResponse,
     ListeningScoreReport,
+    QuestionReviewItem,
     SkillBreakdownEntry,
     StartListeningResponse,
     SubmitListeningResponse,
 )
 from app.schemas.test_engine import TestSummary
-from app.storage.r2 import generate_signed_url, parse_r2_object_url
+from app.listening.instructions import extract_listening_instructions
+from app.storage.r2 import generate_signed_url, object_exists, parse_r2_object_url
+
+
+def _listening_display_number(
+    *, mock_test_id: UUID, part: int, question_number: int
+) -> int:
+    return (
+        repo.display_offset_before_part(mock_test_id=mock_test_id, part=part)
+        + question_number
+    )
 
 
 PART_META: dict[int, dict[str, str]] = {
@@ -66,15 +83,41 @@ def _is_dev() -> bool:
     return get_settings().app_env.strip().lower() == "development"
 
 
+def _audio_key_candidates(stored: str) -> list[str]:
+    key = parse_r2_object_url(stored.strip()) or stored.strip().lstrip("/")
+    candidates = [key]
+    if key.startswith("listening/m01/"):
+        candidates.append(key.replace("listening/m01/", "listening/greenfield/", 1))
+    deduped: list[str] = []
+    for c in candidates:
+        if c not in deduped:
+            deduped.append(c)
+    return deduped
+
+
 def _presign_audio(stored: str | None) -> str | None:
     if not stored or not stored.strip():
         return None
-    key = parse_r2_object_url(stored.strip()) or stored.strip().lstrip("/")
+    keys = _audio_key_candidates(stored)
+    cache_key = f"r2_presign:{keys[0]}"
+    cached = get_json(cache_key)
+    if isinstance(cached, str) and cached:
+        return cached
+
+    resolved: str | None = None
+    for key in keys:
+        if object_exists(key):
+            resolved = key
+            break
+    if resolved is None:
+        resolved = keys[0]
     try:
-        return generate_signed_url(
-            key,
+        url = generate_signed_url(
+            resolved,
             expiry=LISTENING_AUDIO_PRESIGN_EXPIRY_SECONDS,
         )
+        set_json(cache_key, url, ttl_seconds=2700)
+        return url
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -90,6 +133,28 @@ def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
         )
 
 
+def _listening_duration_seconds(
+    *, mock_test_id: UUID, mock_attempt_id: UUID | None
+) -> int:
+    if mock_attempt_id is not None:
+        from app.services import mock_orchestrator_repository as mock_repo
+
+        minutes = mock_repo.module_duration_minutes(
+            mock_test_id=mock_test_id, module="listening"
+        )
+        if minutes:
+            return minutes * 60
+    return LISTENING_DURATION_MINUTES * 60
+
+
+def _listening_duration_minutes(
+    *, mock_test_id: UUID, mock_attempt_id: UUID | None
+) -> int:
+    return _listening_duration_seconds(
+        mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
+    ) // 60
+
+
 def _parse_started_at(attempt: dict[str, Any]) -> datetime:
     raw = attempt.get("started_at")
     if isinstance(raw, str):
@@ -99,43 +164,186 @@ def _parse_started_at(attempt: dict[str, Any]) -> datetime:
     return datetime.now(UTC)
 
 
-def start_attempt(*, mock_test_id: UUID, user_id: UUID) -> StartListeningResponse:
+def _mock_listening_session_started_at(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    mock_attempt_id: UUID,
+    current_attempt: dict[str, Any],
+) -> datetime:
+    """One clock for all listening parts within a mock attempt."""
+    earliest = repo.earliest_listening_started_at(
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        mock_attempt_id=mock_attempt_id,
+    )
+    if earliest and earliest.get("started_at"):
+        return _parse_started_at(earliest)
+    return _parse_started_at(current_attempt)
+
+
+def start_attempt(
+    *,
+    mock_test_id: UUID,
+    user_id: UUID,
+    force_new: bool = False,
+    part: int = 1,
+    mock_attempt_id: UUID | None = None,
+    include_questions: bool = False,
+) -> StartListeningResponse:
     """Create a new listening attempt, or resume the user's existing in-progress one."""
     repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    if mock_attempt_id is not None:
+        from app.services import mock_orchestrator
+
+        repo.abandon_stale_listening_attempts(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=mock_attempt_id,
+            part=part,
+        )
+        mock_orchestrator.assert_module_unlocked(
+            mock_attempt_id=mock_attempt_id,
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            module="listening",
+            part=part,
+        )
     existing = repo.find_in_progress_listening_attempt(
-        user_id=user_id, mock_test_id=mock_test_id
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        part=part,
+        mock_attempt_id=mock_attempt_id,
     )
+    if existing and force_new:
+        repo.abandon_listening_attempt(attempt_id=UUID(str(existing["id"])))
+        existing = None
+
     if existing:
-        started_at = _parse_started_at(existing)
-        return StartListeningResponse(
+        existing_ma = existing.get("mock_attempt_id")
+        existing_mock_attempt_id = (
+            UUID(str(existing_ma)) if existing_ma else mock_attempt_id
+        )
+        started_at = (
+            _mock_listening_session_started_at(
+                user_id=user_id,
+                mock_test_id=mock_test_id,
+                mock_attempt_id=existing_mock_attempt_id,
+                current_attempt=existing,
+            )
+            if existing_mock_attempt_id is not None
+            else _parse_started_at(existing)
+        )
+        response = StartListeningResponse(
             attempt_id=UUID(str(existing["id"])),
             started_at=started_at,
             server_time=datetime.now(UTC),
             status=str(existing.get("status", "in_progress")),
-            duration_seconds=LISTENING_DURATION_MINUTES * 60,
+            duration_seconds=_listening_duration_seconds(
+                mock_test_id=mock_test_id,
+                mock_attempt_id=existing_mock_attempt_id,
+            ),
+            resumed=True,
         )
+        if mock_attempt_id is not None:
+            invalidate_mock_progress_caches(
+                user_id=user_id,
+                mock_test_id=mock_test_id,
+                mock_attempt_id=mock_attempt_id,
+            )
+        if include_questions:
+            q = get_session_questions(
+                mock_test_id=mock_test_id,
+                user_id=user_id,
+                part=part,
+            )
+            response.test = q.test
+            response.parts = q.parts
+            response.duration_seconds = q.duration_seconds
+        return response
 
-    row = repo.insert_listening_attempt(user_id=user_id, mock_test_id=mock_test_id)
-    started_at = _parse_started_at(row)
-    return StartListeningResponse(
+    row = repo.insert_listening_attempt(
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        mock_attempt_id=mock_attempt_id,
+        part=part,
+    )
+    started_at = (
+        _mock_listening_session_started_at(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=mock_attempt_id,
+            current_attempt=row,
+        )
+        if mock_attempt_id is not None
+        else _parse_started_at(row)
+    )
+    response = StartListeningResponse(
         attempt_id=UUID(str(row["id"])),
         started_at=started_at,
         server_time=datetime.now(UTC),
         status=str(row.get("status", "in_progress")),
-        duration_seconds=LISTENING_DURATION_MINUTES * 60,
+        duration_seconds=_listening_duration_seconds(
+            mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
+        ),
+        resumed=False,
     )
+    if mock_attempt_id is not None:
+        invalidate_mock_progress_caches(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=mock_attempt_id,
+        )
+    if include_questions:
+        q = get_session_questions(
+            mock_test_id=mock_test_id,
+            user_id=user_id,
+            part=part,
+        )
+        response.test = q.test
+        response.parts = q.parts
+        response.duration_seconds = q.duration_seconds
+    return response
 
 
 def get_session_questions(
-    *, mock_test_id: UUID, user_id: UUID  # noqa: ARG001 — reserved for per-user gates
+    *, mock_test_id: UUID, user_id: UUID, part: int | None = None
 ) -> ListeningQuestionsResponse:
+    cache_key = f"listening_questions:{mock_test_id}:{part or 0}"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        try:
+            payload = ListeningQuestionsResponse.model_validate(cached)
+            return payload
+        except Exception:
+            pass
+
     test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
-    rows = repo.list_questions_public(mock_test_id)
+    rows = repo.list_questions_public(mock_test_id, part=part)
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No listening questions found for this mock test.",
         )
+
+    in_progress = repo.find_in_progress_listening_attempt(
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        part=part,
+    )
+    if not in_progress:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Start a listening attempt before loading questions and audio.",
+        )
+
+    # Presign each distinct audio key once. A part shares one clip across ~10
+    # questions, so this avoids ~10x R2 HEAD + presign round trips per request.
+    presigned_by_key: dict[str, str | None] = {}
+    for row in rows:
+        raw_audio = row.get("audio_url")
+        if raw_audio and raw_audio not in presigned_by_key:
+            presigned_by_key[raw_audio] = _presign_audio(raw_audio)
 
     grouped: dict[int, list[ListeningQuestion]] = {1: [], 2: [], 3: [], 4: []}
     for row in rows:
@@ -144,13 +352,19 @@ def get_session_questions(
         if part not in grouped:
             grouped[part] = []
         raw_audio = row.get("audio_url")
-        signed_audio = _presign_audio(raw_audio) if raw_audio else None
-        instructions = row.get("passage_text") or None  # reused as per-question instructions
+        signed_audio = presigned_by_key.get(raw_audio) if raw_audio else None
+        qn = int(row["question_number"])
+        instructions: str | None = None
+        if qn == 1 or row.get("passage_text"):
+            instructions = extract_listening_instructions(row.get("passage_text"))
         grouped[part].append(
             ListeningQuestion(
                 id=UUID(str(row["id"])),
                 part=part,  # type: ignore[arg-type]
-                question_number=int(row["question_number"]),
+                question_number=qn,
+                display_number=_listening_display_number(
+                    mock_test_id=mock_test_id, part=part, question_number=qn
+                ),
                 question_type=str(row["question_type"]),
                 prompt=str(row["prompt"]),
                 instructions=instructions,
@@ -176,15 +390,22 @@ def get_session_questions(
             )
         )
 
-    return ListeningQuestionsResponse(
+    mock_attempt_raw = in_progress.get("mock_attempt_id")
+    mock_attempt_id = UUID(str(mock_attempt_raw)) if mock_attempt_raw else None
+
+    response = ListeningQuestionsResponse(
         test=TestSummary(
             id=UUID(str(test_row["id"])),
             title=str(test_row["title"]),
             description=test_row.get("description"),
         ),
         parts=parts,
-        duration_seconds=LISTENING_DURATION_MINUTES * 60,
+        duration_seconds=_listening_duration_seconds(
+            mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
+        ),
     )
+    set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=600)
+    return response
 
 
 def autosave_answer(
@@ -256,7 +477,9 @@ def submit_attempt(
         )
 
     mock_test_id = UUID(str(attempt["mock_test_id"]))
-    questions = repo.list_questions_for_scoring(mock_test_id)
+    attempt_part = attempt.get("part")
+    part = int(attempt_part) if attempt_part is not None else None
+    questions = repo.list_questions_for_scoring(mock_test_id, part=part)
     if not questions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -282,21 +505,37 @@ def submit_attempt(
         questions=questions,
         answers_by_qid=answers_by_qid,
     )
-    repo.upsert_scored_answers(attempt_id=attempt_id, rows=scored_rows)
 
     now = datetime.now(UTC)
-    started_at = _parse_started_at(attempt)
+    mock_attempt_raw = attempt.get("mock_attempt_id")
+    mock_attempt_id = UUID(str(mock_attempt_raw)) if mock_attempt_raw else None
+    started_at = (
+        _mock_listening_session_started_at(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=mock_attempt_id,
+            current_attempt=attempt,
+        )
+        if mock_attempt_id is not None
+        else _parse_started_at(attempt)
+    )
     grace = timedelta(seconds=LISTENING_GRACE_SECONDS)
-    late = now - started_at > timedelta(minutes=LISTENING_DURATION_MINUTES) + grace
+    duration_min = _listening_duration_minutes(
+        mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
+    )
+    late = now - started_at > timedelta(minutes=duration_min) + grace
 
     band = calculate_band(raw_score, total=total)
     breakdown = build_skill_breakdown(questions=questions, rows=scored_rows)
 
-    completed = repo.mark_attempt_completed(attempt_id, completed_at_iso=now.isoformat())
-    repo.upsert_module_score(
+    completed = persist_module_submit_bundle(
         attempt_id=attempt_id,
+        user_id=user_id,
+        module="listening",
+        completed_at=now,
+        answer_rows=scored_rows,
         raw_score=raw_score,
-        total=total,
+        total_count=total,
         band=band,
         skill_breakdown=breakdown,
     )
@@ -308,7 +547,23 @@ def submit_attempt(
         else completed_raw
     )
 
-    return SubmitListeningResponse(
+    mock_next_part: int | None = None
+    mock_listening_complete = False
+    if attempt.get("mock_attempt_id"):
+        from app.services import mock_orchestrator
+
+        progress = mock_orchestrator.on_module_attempt_completed(
+            test_attempt_id=attempt_id,
+            user_id=user_id,
+            attempt=completed,
+        )
+        if progress is not None:
+            if progress.status == "completed" or progress.next_module != "listening":
+                mock_listening_complete = True
+            elif progress.next_module == "listening":
+                mock_next_part = progress.next_part
+
+    response = SubmitListeningResponse(
         attempt_id=attempt_id,
         status="completed",
         submitted_at=submitted_at,
@@ -317,7 +572,17 @@ def submit_attempt(
         band=band,
         late_submission=late,
         skill_breakdown=_to_breakdown_entries(breakdown),
+        mock_next_part=mock_next_part,
+        mock_listening_complete=mock_listening_complete,
     )
+    mock_attempt_raw = attempt.get("mock_attempt_id")
+    if mock_attempt_raw is not None:
+        invalidate_mock_progress_caches(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=UUID(str(mock_attempt_raw)),
+        )
+    return response
 
 
 def get_score_report(
@@ -345,13 +610,19 @@ def get_score_report(
         )
 
     started_at = _parse_started_at(attempt)
+    mock_test_id = UUID(str(attempt["mock_test_id"]))
+    mock_attempt_raw = attempt.get("mock_attempt_id")
+    mock_attempt_id = UUID(str(mock_attempt_raw)) if mock_attempt_raw else None
+    duration_min = _listening_duration_minutes(
+        mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
+    )
     completed_raw = attempt.get("completed_at")
     submitted_at = None
     late = False
     if isinstance(completed_raw, str) and completed_raw:
         submitted_at = datetime.fromisoformat(completed_raw.replace("Z", "+00:00"))
         late = submitted_at - started_at > timedelta(
-            minutes=LISTENING_DURATION_MINUTES,
+            minutes=duration_min,
             seconds=LISTENING_GRACE_SECONDS,
         )
 
@@ -366,13 +637,59 @@ def get_score_report(
             pct=float(v.get("pct", 0.0)),
         )
 
+    mock_test_id = UUID(str(attempt["mock_test_id"]))
+    test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    answer_rows = repo.list_answers_for_attempt(attempt_id)
+    answers_by_qid = {
+        str(row["question_id"]): {
+            "user_answer": str(row.get("user_answer") or ""),
+            "is_correct": row.get("is_correct"),
+        }
+        for row in answer_rows
+    }
+
+    attempt_part = attempt.get("part")
+    review_part = int(attempt_part) if attempt_part is not None else None
+    review_items: list[QuestionReviewItem] = []
+    for q in repo.list_questions_for_review(mock_test_id, part=review_part):
+        qid = str(q["id"])
+        ans = answers_by_qid.get(qid, {})
+        user_answer = ans.get("user_answer", "")
+        stored_correct = q.get("is_correct")
+        if stored_correct is None:
+            correct_flag = is_answer_correct(user_answer, q.get("correct_answer"))
+        else:
+            correct_flag = bool(stored_correct)
+        correct_display = str(q.get("correct_answer") or "—")
+        review_items.append(
+            QuestionReviewItem(
+                question_id=UUID(qid),
+                question_number=int(q["question_number"]),
+                question_type=str(q.get("question_type") or ""),
+                prompt=str(q.get("prompt") or ""),
+                user_answer=user_answer,
+                correct_answer=correct_display,
+                is_correct=correct_flag,
+                explanation=build_explanation(
+                    prompt=str(q.get("prompt") or ""),
+                    user_answer=user_answer,
+                    correct_answer=q.get("correct_answer"),
+                    is_correct=correct_flag,
+                ),
+            )
+        )
+
     return ListeningScoreReport(
         attempt_id=attempt_id,
         status="completed",
+        module="listening",
+        test_title=str(test_row.get("title") or ""),
         submitted_at=submitted_at,
         raw_score=int(score.get("raw_score") or score.get("correct_count") or 0),
         total_questions=int(score.get("total_count") or 0),
         band=float(score.get("band") or 0.0),
         late_submission=late,
         skill_breakdown=breakdown,
+        questions=review_items,
+        practice_tip=build_practice_tip(breakdown),
     )

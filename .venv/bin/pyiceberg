@@ -1,4 +1,4 @@
-#!/Users/divyanshsingh/programing/MATA-lab/backend/.venv/bin/python3.12
+#!/Users/divyanshsingh/dev/MATA-lab/backend/.venv/bin/python3.12
 import sys
 from pyiceberg.cli.console import run
 if __name__ == '__main__':

@@ -1,0 +1,398 @@
+{
+  "mock_test": {
+    "id": "e0000000-0000-4000-8000-000000000002",
+    "title": "IELTS Listening — Leisure Centre Orientation Talk",
+    "description": "Founder Section 2: Leisure Centre Orientation Talk. Source: ielts_listening_section_2. Audio: listening/bandforge-s2/part-1/full.mp3.",
+    "is_published": true,
+    "source_section": 2,
+    "resource_id": "ielts_listening_section_2"
+  },
+  "questions": [
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 1,
+      "prompt": "The leisure centre opens on weekday mornings at",
+      "passage_text": "Choose the correct letter, A, B or C.",
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "six o'clock"
+        },
+        {
+          "label": "B",
+          "text": "seven o'clock"
+        },
+        {
+          "label": "C",
+          "text": "eight o'clock"
+        }
+      ],
+      "correct_answer": "A",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 2,
+      "prompt": "Before using the gym for the first time, new members must",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "obtain a doctor's note"
+        },
+        {
+          "label": "B",
+          "text": "book a personal trainer"
+        },
+        {
+          "label": "C",
+          "text": "complete a fitness assessment"
+        }
+      ],
+      "correct_answer": "C",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 3,
+      "prompt": "The main swimming pool will be closed",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "for one week in July"
+        },
+        {
+          "label": "B",
+          "text": "for two weeks in August"
+        },
+        {
+          "label": "C",
+          "text": "for the whole summer"
+        }
+      ],
+      "correct_answer": "B",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 4,
+      "prompt": "What is now located just inside the entrance?",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "a sports shop"
+        },
+        {
+          "label": "B",
+          "text": "a café"
+        },
+        {
+          "label": "C",
+          "text": "a crèche"
+        }
+      ],
+      "correct_answer": "C",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 5,
+      "prompt": "Members are allowed to park free of charge",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "at any time of day"
+        },
+        {
+          "label": "B",
+          "text": "for the first two hours"
+        },
+        {
+          "label": "C",
+          "text": "only in the evenings"
+        }
+      ],
+      "correct_answer": "B",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "matching",
+      "question_number": 6,
+      "prompt": "Aqua fitness",
+      "passage_text": "What does the guide say about each of the following classes? Choose your answers from the box and write the correct letter, A-G, next to Questions 6-10.",
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "It must be booked in advance."
+        },
+        {
+          "label": "B",
+          "text": "It currently has no available places."
+        },
+        {
+          "label": "C",
+          "text": "It is free of charge this month."
+        },
+        {
+          "label": "D",
+          "text": "It is intended for beginners."
+        },
+        {
+          "label": "E",
+          "text": "It has changed location."
+        },
+        {
+          "label": "F",
+          "text": "It is held only at weekends."
+        },
+        {
+          "label": "G",
+          "text": "It has had extra sessions added."
+        }
+      ],
+      "correct_answer": "B",
+      "skill_tag": "matching"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "matching",
+      "question_number": 7,
+      "prompt": "Spin",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "It must be booked in advance."
+        },
+        {
+          "label": "B",
+          "text": "It currently has no available places."
+        },
+        {
+          "label": "C",
+          "text": "It is free of charge this month."
+        },
+        {
+          "label": "D",
+          "text": "It is intended for beginners."
+        },
+        {
+          "label": "E",
+          "text": "It has changed location."
+        },
+        {
+          "label": "F",
+          "text": "It is held only at weekends."
+        },
+        {
+          "label": "G",
+          "text": "It has had extra sessions added."
+        }
+      ],
+      "correct_answer": "C",
+      "skill_tag": "matching"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "matching",
+      "question_number": 8,
+      "prompt": "Yoga",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "It must be booked in advance."
+        },
+        {
+          "label": "B",
+          "text": "It currently has no available places."
+        },
+        {
+          "label": "C",
+          "text": "It is free of charge this month."
+        },
+        {
+          "label": "D",
+          "text": "It is intended for beginners."
+        },
+        {
+          "label": "E",
+          "text": "It has changed location."
+        },
+        {
+          "label": "F",
+          "text": "It is held only at weekends."
+        },
+        {
+          "label": "G",
+          "text": "It has had extra sessions added."
+        }
+      ],
+      "correct_answer": "E",
+      "skill_tag": "matching"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "matching",
+      "question_number": 9,
+      "prompt": "Climbing",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "It must be booked in advance."
+        },
+        {
+          "label": "B",
+          "text": "It currently has no available places."
+        },
+        {
+          "label": "C",
+          "text": "It is free of charge this month."
+        },
+        {
+          "label": "D",
+          "text": "It is intended for beginners."
+        },
+        {
+          "label": "E",
+          "text": "It has changed location."
+        },
+        {
+          "label": "F",
+          "text": "It is held only at weekends."
+        },
+        {
+          "label": "G",
+          "text": "It has had extra sessions added."
+        }
+      ],
+      "correct_answer": "A",
+      "skill_tag": "matching"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000002",
+      "module": "listening",
+      "part": 1,
+      "question_type": "matching",
+      "question_number": 10,
+      "prompt": "Pilates",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s2/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "It must be booked in advance."
+        },
+        {
+          "label": "B",
+          "text": "It currently has no available places."
+        },
+        {
+          "label": "C",
+          "text": "It is free of charge this month."
+        },
+        {
+          "label": "D",
+          "text": "It is intended for beginners."
+        },
+        {
+          "label": "E",
+          "text": "It has changed location."
+        },
+        {
+          "label": "F",
+          "text": "It is held only at weekends."
+        },
+        {
+          "label": "G",
+          "text": "It has had extra sessions added."
+        }
+      ],
+      "correct_answer": "D",
+      "skill_tag": "matching"
+    }
+  ],
+  "metadata": {
+    "transcript": "Good morning everyone, and welcome to Riverside Leisure Centre. My name's Tom, and I'll show you round before your memberships begin. I'll start with a few practical points, then we'll look at the facilities.\n\nFirst, our opening hours. People often assume we open at seven, the way the old centre did, but we actually open at six o'clock on weekday mornings. At weekends it's a later start of eight o'clock, and we close at ten every night.\n\nNow, the gym. Before you use the gym equipment for the first time, there's one thing to do. You don't need a doctor's note, and you don't have to book a personal trainer unless you want one — but you do need to complete a short fitness assessment with an instructor. It takes about twenty minutes, and you can arrange it at reception today.\n\nA word about the swimming pool. The main pool will be closed for refurbishment this summer. The original plan was to shut it for one week in July, but the work's turned out bigger than expected, so it'll be closed for two whole weeks in August instead. The smaller training pool stays open.\n\nYou may have noticed some changes since your last visit. We used to have a small sports shop just inside the entrance, but that's gone — the space is now a crèche, where parents can leave young children while they exercise.\n\nAnd parking — people always ask about this. The car park is free, but not all day, I'm afraid. Members get two hours free of charge, and after that the usual rates apply, so keep an eye on the time.\n\nRight, let's talk about our classes — there's something you'll want to know about each one.\n\nLet's start with aqua fitness. It's so popular that there are no spaces left at all at the moment, though we do run a waiting list.\n\nThe spin class is a different story. It's brand new this term, and because it's new, it's completely free for members this month.\n\nThen there's yoga. It's been running for years, but it's moved — it used to be in Studio One downstairs, and it's now in Studio Three on the top floor.\n\nClimbing is one to book early for. The climbing wall sessions can't just be turned up to — you must reserve your place in advance.\n\nAnd finally, pilates. If you've never tried it, don't worry — this class is designed especially for beginners, so it's a gentle place to start.\n\nRight, that's the practical side covered. Follow me, and we'll head to the gym first.",
+    "audio_file": "BandForge_Listening_S2.mp3",
+    "transcript_locations": [
+      {
+        "question_number": 1,
+        "transcript_location": "...but we actually open at six o'clock on weekday mornings."
+      },
+      {
+        "question_number": 2,
+        "transcript_location": "...but you do need to complete a short fitness assessment with an instructor."
+      },
+      {
+        "question_number": 3,
+        "transcript_location": "...so it'll be closed for two whole weeks in August instead."
+      },
+      {
+        "question_number": 4,
+        "transcript_location": "...the space is now a crèche, where parents can leave young children while they exercise."
+      },
+      {
+        "question_number": 5,
+        "transcript_location": "Members get two hours free of charge..."
+      },
+      {
+        "question_number": 6,
+        "transcript_location": "It's so popular that there are no spaces left at all at the moment, though we do run a waiting list."
+      },
+      {
+        "question_number": 7,
+        "transcript_location": "It's brand new this term, and because it's new, it's completely free for members this month."
+      },
+      {
+        "question_number": 8,
+        "transcript_location": "...it used to be in Studio One downstairs, and it's now in Studio Three on the top floor."
+      },
+      {
+        "question_number": 9,
+        "transcript_location": "The climbing wall sessions can't just be turned up to — you must reserve your place in advance."
+      },
+      {
+        "question_number": 10,
+        "transcript_location": "...this class is designed especially for beginners, so it's a gentle place to start."
+      }
+    ]
+  }
+}

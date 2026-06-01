@@ -1,0 +1,244 @@
+"""Supabase accessors for the Writing module."""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import UUID
+
+from fastapi import HTTPException, status
+
+from app.db.supabase_client import get_supabase
+
+QUESTION_PUBLIC_COLUMNS = (
+    "id, mock_test_id, module, question_type, question_number, part, prompt, options"
+)
+
+
+def get_mock_test(mock_test_id: UUID, *, allow_unpublished: bool = False) -> dict[str, Any]:
+    client = get_supabase()
+    result = (
+        client.table("mock_tests")
+        .select("id, title, description, is_published")
+        .eq("id", str(mock_test_id))
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+    row = rows[0]
+    if not row.get("is_published") and not allow_unpublished:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+    return row
+
+
+def list_questions_for_part(*, mock_test_id: UUID, part: int) -> list[dict[str, Any]]:
+    client = get_supabase()
+    result = (
+        client.table("questions")
+        .select(QUESTION_PUBLIC_COLUMNS)
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("module", "writing")
+        .eq("part", part)
+        .order("question_number")
+        .execute()
+    )
+    return list(result.data or [])
+
+
+def find_in_progress_writing_attempt(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    part: int,
+    mock_attempt_id: UUID | None = None,
+) -> dict[str, Any] | None:
+    client = get_supabase()
+    query = (
+        client.table("test_attempts")
+        .select("id, started_at, status, part, mock_attempt_id")
+        .eq("user_id", str(user_id))
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("module", "writing")
+        .eq("status", "in_progress")
+        .eq("part", part)
+    )
+    if mock_attempt_id is not None:
+        query = query.eq("mock_attempt_id", str(mock_attempt_id))
+    result = query.limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def abandon_writing_attempt(*, attempt_id: UUID) -> None:
+    client = get_supabase()
+    client.table("test_attempts").update({"status": "abandoned"}).eq(
+        "id", str(attempt_id)
+    ).execute()
+
+
+def insert_writing_attempt(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    mock_attempt_id: UUID | None = None,
+    part: int,
+) -> dict[str, Any]:
+    client = get_supabase()
+    payload: dict[str, Any] = {
+        "user_id": str(user_id),
+        "mock_test_id": str(mock_test_id),
+        "module": "writing",
+        "status": "in_progress",
+        "part": part,
+    }
+    if mock_attempt_id is not None:
+        payload["mock_attempt_id"] = str(mock_attempt_id)
+    insert = client.table("test_attempts").insert(payload).execute()
+    if not insert.data:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Failed to create writing attempt.",
+        )
+    return insert.data[0]
+
+
+def get_attempt(attempt_id: UUID) -> dict[str, Any]:
+    client = get_supabase()
+    result = (
+        client.table("test_attempts")
+        .select(
+            "id, user_id, mock_test_id, module, status, started_at, completed_at, "
+            "part, mock_attempt_id"
+        )
+        .eq("id", str(attempt_id))
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Test attempt not found.")
+    return rows[0]
+
+
+def question_belongs_to(
+    mock_test_id: UUID, question_id: UUID, *, part: int | None = None
+) -> bool:
+    client = get_supabase()
+    query = (
+        client.table("questions")
+        .select("id")
+        .eq("id", str(question_id))
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("module", "writing")
+    )
+    if part is not None:
+        query = query.eq("part", part)
+    result = query.limit(1).execute()
+    return bool(result.data)
+
+
+def upsert_answer(*, attempt_id: UUID, question_id: UUID, user_answer: str) -> None:
+    client = get_supabase()
+    client.table("answers").upsert(
+        {
+            "attempt_id": str(attempt_id),
+            "question_id": str(question_id),
+            "user_answer": user_answer,
+        },
+        on_conflict="attempt_id,question_id",
+    ).execute()
+
+
+def get_answer_for_attempt(
+    *, attempt_id: UUID, question_id: UUID
+) -> dict[str, Any] | None:
+    client = get_supabase()
+    result = (
+        client.table("answers")
+        .select("user_answer, answered_at")
+        .eq("attempt_id", str(attempt_id))
+        .eq("question_id", str(question_id))
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def upsert_module_score(
+    *,
+    attempt_id: UUID,
+    band: float,
+    word_count: int,
+    part: int,
+) -> None:
+    """Persist a writing band so it rolls up into mock progress and aggregate."""
+    client = get_supabase()
+    client.table("module_scores").upsert(
+        {
+            "attempt_id": str(attempt_id),
+            "module": "writing",
+            "raw_score": word_count,
+            "correct_count": word_count,
+            "total_count": word_count,
+            "band": band,
+            "skill_breakdown": {
+                "word_count": {"count": word_count, "part": part},
+            },
+        },
+        on_conflict="attempt_id,module",
+    ).execute()
+
+
+def get_module_score(attempt_id: UUID) -> dict[str, Any] | None:
+    client = get_supabase()
+    result = (
+        client.table("module_scores")
+        .select("attempt_id, module, band, raw_score, total_count, skill_breakdown")
+        .eq("attempt_id", str(attempt_id))
+        .eq("module", "writing")
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def mark_attempt_completed(attempt_id: UUID, *, completed_at_iso: str) -> dict[str, Any]:
+    client = get_supabase()
+    updated = (
+        client.table("test_attempts")
+        .update({"status": "completed", "completed_at": completed_at_iso})
+        .eq("id", str(attempt_id))
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Failed to complete writing attempt.",
+        )
+    return updated.data[0]
+
+
+def has_completed_part(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    part: int,
+    mock_attempt_id: UUID | None = None,
+) -> bool:
+    client = get_supabase()
+    query = (
+        client.table("test_attempts")
+        .select("id")
+        .eq("user_id", str(user_id))
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("module", "writing")
+        .eq("part", part)
+        .eq("status", "completed")
+    )
+    if mock_attempt_id is not None:
+        query = query.eq("mock_attempt_id", str(mock_attempt_id))
+    result = query.limit(1).execute()
+    return bool(result.data)

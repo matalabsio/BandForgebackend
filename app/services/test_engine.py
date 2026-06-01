@@ -18,7 +18,8 @@ from app.schemas.test_engine import (
     TestModule,
     TestSummary,
 )
-from app.listening.constants import LISTENING_TEST_ID
+from app.mock_catalog.constants import PUBLISHED_FULL_MOCK_IDS
+from app.reading.constants import READING_DURATION_MINUTES
 from app.storage.r2 import generate_signed_url, parse_r2_object_url
 
 LATE_SUBMISSION_MINUTES = 65
@@ -76,12 +77,13 @@ def _get_mock_test_row(mock_test_id: UUID) -> dict[str, Any]:
 
 
 def list_published_tests(*, include_unpublished: bool = False) -> list[TestSummary]:
-    """Return dashboard-visible tests. Until admin exists, only the live listening test."""
+    """Return dashboard-visible full mocks."""
+    published_ids = list(PUBLISHED_FULL_MOCK_IDS)
     client = get_supabase()
     query = (
         client.table("mock_tests")
         .select("id, title, description")
-        .eq("id", LISTENING_TEST_ID)
+        .in_("id", published_ids)
         .order("created_at")
     )
     if not include_unpublished:
@@ -90,18 +92,35 @@ def list_published_tests(*, include_unpublished: bool = False) -> list[TestSumma
     rows: list[dict[str, Any]] = result.data or []
 
     listening_counts: dict[str, int] = {}
+    reading_counts: dict[str, int] = {}
     if rows:
         mock_ids = [str(row["id"]) for row in rows]
         q_result = (
             client.table("questions")
-            .select("mock_test_id")
-            .eq("module", "listening")
+            .select("mock_test_id, module")
             .in_("mock_test_id", mock_ids)
+            .in_("module", ["listening", "reading"])
             .execute()
         )
         for q_row in q_result.data or []:
             mid = str(q_row["mock_test_id"])
-            listening_counts[mid] = listening_counts.get(mid, 0) + 1
+            mod = str(q_row.get("module") or "")
+            if mod == "listening":
+                listening_counts[mid] = listening_counts.get(mid, 0) + 1
+            elif mod == "reading":
+                reading_counts[mid] = reading_counts.get(mid, 0) + 1
+
+    from app.services import mock_orchestrator_repository as mor
+
+    module_durations: dict[str, dict[str, int]] = {}
+    for mid in [str(row["id"]) for row in rows]:
+        try:
+            for m in mor.list_mock_modules(UUID(mid)):
+                module_durations.setdefault(mid, {})[str(m["module"])] = int(
+                    m["duration_minutes"]
+                )
+        except Exception:
+            module_durations[mid] = {"listening": 30, "reading": READING_DURATION_MINUTES}
 
     summaries = [
         TestSummary(
@@ -109,7 +128,13 @@ def list_published_tests(*, include_unpublished: bool = False) -> list[TestSumma
             title=str(row["title"]),
             description=row.get("description"),
             listening_question_count=listening_counts.get(str(row["id"])),
-            listening_duration_minutes=30,
+            listening_duration_minutes=module_durations.get(str(row["id"]), {}).get(
+                "listening", 30
+            ),
+            reading_question_count=reading_counts.get(str(row["id"])),
+            reading_duration_minutes=module_durations.get(str(row["id"]), {}).get(
+                "reading", READING_DURATION_MINUTES
+            ),
         )
         for row in rows
     ]
@@ -181,30 +206,68 @@ def get_questions(
     )
 
 
+def _parse_started_at(row: dict[str, Any]) -> datetime:
+    started_at = row.get("started_at")
+    if isinstance(started_at, str):
+        return datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    if isinstance(started_at, datetime):
+        return started_at
+    return datetime.now(UTC)
+
+
+def _find_in_progress_attempt(
+    client: Any,
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    module: TestModule,
+) -> dict[str, Any] | None:
+    result = (
+        client.table("test_attempts")
+        .select("id, started_at, status, module")
+        .eq("user_id", str(user_id))
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("module", module)
+        .eq("status", "in_progress")
+        .order("started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
 def start_attempt(
     mock_test_id: UUID,
     module: TestModule,
     *,
     user_id: UUID,
+    force_new: bool = False,
 ) -> StartAttemptResponse:
+    """Start a new attempt or resume the latest in-progress one for this mock + module."""
     _get_mock_test_row(mock_test_id)
     client = get_supabase()
 
-    existing = (
-        client.table("test_attempts")
-        .select("id")
-        .eq("user_id", str(user_id))
-        .eq("mock_test_id", str(mock_test_id))
-        .eq("module", module)
-        .eq("status", "in_progress")
-        .limit(1)
-        .execute()
+    existing = _find_in_progress_attempt(
+        client,
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        module=module,
     )
-    if existing.data:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="An in-progress attempt already exists for this test and module.",
+
+    if existing and not force_new:
+        return StartAttemptResponse(
+            attempt_id=UUID(str(existing["id"])),
+            started_at=_parse_started_at(existing),
+            status=str(existing.get("status", "in_progress")),
+            module=module,
+            resumed=True,
         )
+
+    if existing and force_new:
+        client.table("test_attempts").update({"status": "abandoned"}).eq(
+            "id", str(existing["id"])
+        ).execute()
 
     insert = (
         client.table("test_attempts")
@@ -224,17 +287,13 @@ def start_attempt(
             detail="Failed to create test attempt.",
         )
     row = insert.data[0]
-    started_at = row.get("started_at")
-    if isinstance(started_at, str):
-        started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    elif started_at is None:
-        started_at = datetime.now(UTC)
 
     return StartAttemptResponse(
         attempt_id=UUID(str(row["id"])),
-        started_at=started_at,
+        started_at=_parse_started_at(row),
         status=str(row.get("status", "in_progress")),
         module=module,
+        resumed=False,
     )
 
 

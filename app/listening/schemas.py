@@ -20,6 +20,7 @@ class ListeningQuestion(BaseModel):
     id: UUID
     part: IeltsPart
     question_number: int
+    display_number: int | None = None
     question_type: str
     prompt: str
     instructions: str | None = None
@@ -46,6 +47,9 @@ class StartListeningResponse(BaseModel):
     status: str
     module: str = "listening"
     duration_seconds: int
+    resumed: bool = False
+    test: TestSummary | None = None
+    parts: list[ListeningPart] | None = None
 
 
 class ListeningQuestionsResponse(BaseModel):
@@ -81,15 +85,32 @@ class SkillBreakdownEntry(BaseModel):
     pct: float
 
 
+class QuestionReviewItem(BaseModel):
+    """Post-submit only — includes correct_answer."""
+
+    question_id: UUID
+    question_number: int
+    question_type: str
+    prompt: str
+    user_answer: str
+    correct_answer: str
+    is_correct: bool
+    explanation: str
+
+
 class ListeningScoreReport(BaseModel):
     attempt_id: UUID
     status: str
+    module: str = "listening"
+    test_title: str | None = None
     submitted_at: datetime | None = None
     raw_score: int
     total_questions: int
     band: float
     late_submission: bool = False
     skill_breakdown: dict[str, SkillBreakdownEntry] = Field(default_factory=dict)
+    questions: list[QuestionReviewItem] = Field(default_factory=list)
+    practice_tip: str | None = None
 
 
 class SubmitListeningResponse(BaseModel):
@@ -101,3 +122,5 @@ class SubmitListeningResponse(BaseModel):
     band: float
     late_submission: bool = False
     skill_breakdown: dict[str, SkillBreakdownEntry] = Field(default_factory=dict)
+    mock_next_part: int | None = None
+    mock_listening_complete: bool = False

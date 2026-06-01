@@ -8,10 +8,12 @@ TODO: add per-user rate limiting on `start` and `submit`.
 
 from __future__ import annotations
 
+import json
+from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
@@ -29,6 +31,20 @@ from app.listening.schemas import (
 router = APIRouter(prefix="/api/listening", tags=["listening"])
 
 
+def _timing_log(route: str, started: float, status_code: int) -> None:
+    print(
+        json.dumps(
+            {
+                "route": route,
+                "duration_ms": round((perf_counter() - started) * 1000, 2),
+                "cache_hit": False,
+                "cache_layer": "none",
+                "status": status_code,
+            }
+        )
+    )
+
+
 @router.post(
     "/{mock_test_id}/start",
     response_model=StartListeningResponse,
@@ -36,12 +52,38 @@ router = APIRouter(prefix="/api/listening", tags=["listening"])
 def start_listening(
     mock_test_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
+    force_new: Annotated[
+        bool,
+        Query(
+            description="Abandon the current in-progress attempt and start a fresh one.",
+        ),
+    ] = False,
+    part: Annotated[int, Query(ge=1, le=4, description="Listening part 1–4")] = 1,
+    mock_attempt_id: Annotated[
+        UUID | None,
+        Query(description="Parent full-mock attempt for orchestration."),
+    ] = None,
+    include_questions: Annotated[
+        bool,
+        Query(description="Include questions and presigned audio in the start response."),
+    ] = True,
 ) -> StartListeningResponse:
-    """Create a new listening attempt for the current user."""
-    return service.start_attempt(
-        mock_test_id=mock_test_id,
-        user_id=current_user.id,
-    )
+    """Start or resume a listening attempt for the current user."""
+    started = perf_counter()
+    try:
+        response = service.start_attempt(
+            mock_test_id=mock_test_id,
+            user_id=current_user.id,
+            force_new=force_new,
+            part=part,
+            mock_attempt_id=mock_attempt_id,
+            include_questions=include_questions,
+        )
+        _timing_log("/api/listening/{mock_test_id}/start", started, 200)
+        return response
+    except Exception:
+        _timing_log("/api/listening/{mock_test_id}/start", started, 500)
+        raise
 
 
 @router.get(
@@ -51,12 +93,24 @@ def start_listening(
 def get_listening_questions(
     mock_test_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
+    part: Annotated[
+        int | None,
+        Query(ge=1, le=4, description="Return only this part (M01 multi-part mock)."),
+    ] = None,
 ) -> ListeningQuestionsResponse:
     """Return listening questions + signed R2 audio URLs. Never returns correct_answer."""
-    return service.get_session_questions(
-        mock_test_id=mock_test_id,
-        user_id=current_user.id,
-    )
+    started = perf_counter()
+    try:
+        response = service.get_session_questions(
+            mock_test_id=mock_test_id,
+            user_id=current_user.id,
+            part=part,
+        )
+        _timing_log("/api/listening/{mock_test_id}/questions", started, 200)
+        return response
+    except Exception:
+        _timing_log("/api/listening/{mock_test_id}/questions", started, 500)
+        raise
 
 
 @router.post(

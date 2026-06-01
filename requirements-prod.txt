@@ -1,0 +1,13 @@
+# Production image only (see Dockerfile). Dev deps stay in requirements.txt.
+fastapi
+python-multipart
+uvicorn[standard]
+gunicorn
+pydantic-settings
+email-validator
+bcrypt
+supabase
+python-jose[cryptography]
+httpx
+boto3
+redis

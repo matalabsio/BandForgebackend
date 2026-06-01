@@ -1,0 +1,285 @@
+{
+  "mock_test": {
+    "id": "e0000000-0000-4000-8000-000000000003",
+    "title": "IELTS Listening — Tutorial Discussion — Reviewing a Student Research Proposal",
+    "description": "Founder Section 3: Tutorial Discussion — Reviewing a Student Research Proposal. Source: ielts_listening_section_3. Audio: listening/bandforge-s3/part-1/full.mp3.",
+    "is_published": true,
+    "source_section": 3,
+    "resource_id": "ielts_listening_section_3"
+  },
+  "questions": [
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 1,
+      "prompt": "Which TWO weaknesses does the tutor identify in the students' draft proposal?",
+      "passage_text": "Choose TWO letters, A-E.",
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "The research question is too broad."
+        },
+        {
+          "label": "B",
+          "text": "The sample is not large enough."
+        },
+        {
+          "label": "C",
+          "text": "The proposed timeline is too tight."
+        },
+        {
+          "label": "D",
+          "text": "The two variables may be difficult to separate."
+        },
+        {
+          "label": "E",
+          "text": "It relies too heavily on students reporting their own grades."
+        }
+      ],
+      "correct_answer": "A",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 2,
+      "prompt": "Which TWO weaknesses does the tutor identify in the students' draft proposal?",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "The research question is too broad."
+        },
+        {
+          "label": "B",
+          "text": "The sample is not large enough."
+        },
+        {
+          "label": "C",
+          "text": "The proposed timeline is too tight."
+        },
+        {
+          "label": "D",
+          "text": "The two variables may be difficult to separate."
+        },
+        {
+          "label": "E",
+          "text": "It relies too heavily on students reporting their own grades."
+        }
+      ],
+      "correct_answer": "E",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 3,
+      "prompt": "Which TWO changes do the students decide to make to their proposal?",
+      "passage_text": "Choose TWO letters, A-E.",
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "carry out a pilot study first"
+        },
+        {
+          "label": "B",
+          "text": "narrow the focus to a single department"
+        },
+        {
+          "label": "C",
+          "text": "lengthen the data-collection period"
+        },
+        {
+          "label": "D",
+          "text": "increase the number of participants"
+        },
+        {
+          "label": "E",
+          "text": "obtain grade data directly from the university"
+        }
+      ],
+      "correct_answer": "B",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 4,
+      "prompt": "Which TWO changes do the students decide to make to their proposal?",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "carry out a pilot study first"
+        },
+        {
+          "label": "B",
+          "text": "narrow the focus to a single department"
+        },
+        {
+          "label": "C",
+          "text": "lengthen the data-collection period"
+        },
+        {
+          "label": "D",
+          "text": "increase the number of participants"
+        },
+        {
+          "label": "E",
+          "text": "obtain grade data directly from the university"
+        }
+      ],
+      "correct_answer": "E",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "mcq",
+      "question_number": 5,
+      "prompt": "Which part of the proposal does the tutor consider the strongest?",
+      "passage_text": "Choose the correct letter, A, B or C.",
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": [
+        {
+          "label": "A",
+          "text": "the originality of the topic"
+        },
+        {
+          "label": "B",
+          "text": "the review of earlier studies"
+        },
+        {
+          "label": "C",
+          "text": "the plan for analysing the data"
+        }
+      ],
+      "correct_answer": "B",
+      "skill_tag": "detail"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 6,
+      "prompt": "The students will define long working hours as more than ___ hours per week.",
+      "passage_text": "Complete the sentences below. Write NO MORE THAN TWO WORDS for each answer.",
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "fifteen",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 7,
+      "prompt": "Academic performance will be measured using students' end-of- ___ results.",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "semester",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 8,
+      "prompt": "All participant responses must be kept ___ .",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "anonymous",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 9,
+      "prompt": "The students plan to present their early findings at a department ___ .",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "seminar",
+      "skill_tag": "completion"
+    },
+    {
+      "mock_test_id": "e0000000-0000-4000-8000-000000000003",
+      "module": "listening",
+      "part": 1,
+      "question_type": "sentence_completion",
+      "question_number": 10,
+      "prompt": "The tutor advises including a section on the ___ of the study in the final write-up.",
+      "passage_text": null,
+      "audio_url": "listening/bandforge-s3/part-1/full.mp3",
+      "options": null,
+      "correct_answer": "limitations",
+      "skill_tag": "completion"
+    }
+  ],
+  "metadata": {
+    "transcript": "TUTOR: Right, thanks for sending through the draft proposal — I've had a good read of it. Overall it's a promising start, but there are a couple of things to think about before you take it further. So, my first thought: the proposal sets out to investigate the impact of part-time work on academic performance — which is fine — but the question you're asking is really very wide. You're trying to cover every kind of student across the whole university, and I'm not sure that's manageable in one term.\n\nSTUDENT 2: Yes, we wondered about that.\n\nTUTOR: And the other thing — the one I'd flag most strongly — is how you'll measure academic performance. Right now you're relying on students telling you their own grades, which isn't the most reliable source — people tend to round up. Your sample of two hundred is perfectly adequate, mind, and the timeline looks realistic, so it's really those two issues.\n\nSTUDENT 1: Right. So for the first one — the breadth — what if we looked at just one department, rather than the whole institution? The Business students, say, since that's where most part-time workers are.\n\nTUTOR: That would help enormously, yes.\n\nSTUDENT 2: And for the grades — could we ask the department to give us the actual results directly?\n\nTUTOR: You could certainly ask. The registry can release anonymised data with the right permissions, so that's the route I'd take rather than self-reported figures.\n\nSTUDENT 1: Should we run a pilot first?\n\nTUTOR: You could, but with the time you've got, I wouldn't bother.\n\nSTUDENT 2: And what about the rest of it?\n\nTUTOR: Well, honestly, the part that stood out was your review of the earlier studies. It's thorough, it's critical, and it sets your own work up nicely — that's the section an examiner would be most impressed by. The analysis plan is fine, and the topic, while interesting, isn't especially new.\n\nSTUDENT 1: Good to know. So for the design, we'll compare students working longer hours with those doing less.\n\nTUTOR: Yes, you'll want a clear cut-off. I'd say the dividing line should be more than fifteen hours a week — not ten, that's too low to show an effect, and twenty would leave too few students in the group.\n\nSTUDENT 2: Right, that makes sense. And for the performance data, we'll use their end-of-semester results, so we're comparing the same point for everyone.\n\nTUTOR: Good. And remember, since you're handling personal data, every response must be kept anonymous — no names anywhere in the dataset.\n\nSTUDENT 1: Understood. We were also thinking of presenting the early results at the department seminar in March.\n\nTUTOR: Nice idea. One last thing — when you write it up, include a proper section on the limitations of the study. Examiners always look for that.\n\nSTUDENT 2: Will do. Thanks.\n\nTUTOR: Good. Send me the revised version next week.",
+    "audio_file": "BandForge_Listening_S3.mp3",
+    "transcript_locations": [
+      {
+        "question_number": 1,
+        "transcript_location": "...but the question you're asking is really very wide. You're trying to cover every kind of student across the whole university..."
+      },
+      {
+        "question_number": 2,
+        "transcript_location": "Right now you're relying on students telling you their own grades, which isn't the most reliable source — people tend to round up."
+      },
+      {
+        "question_number": 3,
+        "transcript_location": "...what if we looked at just one department, rather than the whole institution? ... That would help enormously, yes."
+      },
+      {
+        "question_number": 4,
+        "transcript_location": "The registry can release anonymised data with the right permissions, so that's the route I'd take rather than self-reported figures."
+      },
+      {
+        "question_number": 5,
+        "transcript_location": "...the part that stood out was your review of the earlier studies. It's thorough, it's critical... that's the section an examiner would be most impressed by."
+      },
+      {
+        "question_number": 6,
+        "transcript_location": "I'd say the dividing line should be more than fifteen hours a week..."
+      },
+      {
+        "question_number": 7,
+        "transcript_location": "...we'll use their end-of-semester results, so we're comparing the same point for everyone."
+      },
+      {
+        "question_number": 8,
+        "transcript_location": "...every response must be kept anonymous — no names anywhere in the dataset."
+      },
+      {
+        "question_number": 9,
+        "transcript_location": "We were also thinking of presenting the early results at the department seminar in March."
+      },
+      {
+        "question_number": 10,
+        "transcript_location": "...include a proper section on the limitations of the study."
+      }
+    ]
+  }
+}

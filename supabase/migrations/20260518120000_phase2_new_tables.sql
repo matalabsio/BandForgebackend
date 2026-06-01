@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS questions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   mock_test_id uuid NOT NULL REFERENCES mock_tests(id) ON DELETE CASCADE,
   module varchar(20) NOT NULL,
+  part smallint,
   question_type varchar(40) NOT NULL,
   question_number integer NOT NULL,
   prompt text NOT NULL,

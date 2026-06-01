@@ -173,6 +173,7 @@ def start_test_attempt(
         mock_test_id,
         body.module,
         user_id=current_user.id,
+        force_new=body.force_new,
     )
 
 

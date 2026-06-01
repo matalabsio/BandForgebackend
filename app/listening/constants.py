@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
-# Single live listening test (founder Greenfield Part 1). Admin UI will manage many later.
-LISTENING_TEST_ID = "d0000000-0000-4000-8000-000000000001"
+from app.mock_catalog.constants import M01_MOCK_TEST_ID
+
+# Canonical full mock (all listening parts live under one mock_tests row)
+LISTENING_TEST_ID = M01_MOCK_TEST_ID
+
+# Legacy aliases (redirect / compat)
+LISTENING_S2_TEST_ID = LISTENING_TEST_ID
+LISTENING_S3_TEST_ID = LISTENING_TEST_ID
+LISTENING_S4_TEST_ID = LISTENING_TEST_ID
+
+PUBLISHED_LISTENING_TEST_IDS: tuple[str, ...] = (M01_MOCK_TEST_ID,)
 
 LISTENING_DURATION_MINUTES = 30
 LISTENING_GRACE_SECONDS = 120
@@ -11,9 +20,6 @@ LISTENING_AUDIO_PRESIGN_EXPIRY_SECONDS = 10800  # 3 hours
 
 LISTENING_QUESTION_COUNT_TARGET = 40
 
-# IELTS Academic Listening raw-score to band conversion.
-# Source: standard IELTS Listening table (raw out of 40 -> band).
-# A short table that always returns a valid band for raw in [0, 40].
 LISTENING_BAND_TABLE: tuple[tuple[int, float], ...] = (
     (39, 9.0),
     (37, 8.5),
