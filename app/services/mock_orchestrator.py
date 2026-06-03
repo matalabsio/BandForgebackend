@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
@@ -11,9 +12,15 @@ from fastapi import HTTPException, status
 from app.config import get_settings
 from app.cache.hybrid_cache import delete_many, get_json, invalidate_prefix, set_json
 from app.cache.mock_cache import (
-    invalidate_mock_history_caches,
     invalidate_mock_progress_caches,
+    read_progress_from_cache,
+    read_unlock_snapshot,
+    refresh_mock_in_progress_cache,
+    schedule_mock_history_cache_invalidation,
+    write_progress_cache,
+    write_unlock_snapshot_cache,
 )
+from app.services.mock_progress_timing import MockProgressTiming, _elapsed_ms
 from app.mock_catalog.constants import (
     M01_MOCK_TEST_ID,
     PUBLISHED_FULL_MOCK_IDS,
@@ -23,6 +30,8 @@ from app.schemas.mock_orchestrator import (
     CheckpointSkillEntry,
     InProgressMockAttempt,
     MockAttemptProgress,
+    MockUnlockSnapshot,
+    ModuleProgressStatus,
     MockAttemptSummary,
     MockCatalogItem,
     MockCheckpointResponse,
@@ -264,13 +273,11 @@ def list_catalog(*, include_unpublished: bool = False) -> list[MockCatalogItem]:
 
 
 def get_progress(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptProgress:
-    cache_key = f"mock_progress:{mock_attempt_id}:{user_id}"
-    cached = get_json(cache_key)
-    if isinstance(cached, dict):
-        try:
-            return MockAttemptProgress.model_validate(cached)
-        except Exception:
-            pass
+    cached_progress = read_progress_from_cache(
+        mock_attempt_id=mock_attempt_id, user_id=user_id
+    )
+    if cached_progress is not None:
+        return cached_progress
     row, mock_test_id, modules, module_attempts, scores = _load_mock_attempt_context(
         mock_attempt_id=mock_attempt_id, user_id=user_id
     )
@@ -282,8 +289,91 @@ def get_progress(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptProgress
         scores_by_attempt=scores,
         include_bands=True,
     )
-    set_json(cache_key, progress.model_dump(mode="json"), ttl_seconds=30)
+    unlock = build_unlock_snapshot(
+        mock_test_id=mock_test_id,
+        modules=modules,
+        module_attempts=module_attempts,
+        current_module=row.get("current_module"),
+    )
+    write_progress_cache(
+        mock_attempt_id=mock_attempt_id,
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        progress=progress,
+        unlock=unlock,
+    )
     return progress
+
+
+def build_unlock_snapshot(
+    *,
+    mock_test_id: UUID,
+    modules: list[dict[str, Any]],
+    module_attempts: list[dict[str, Any]],
+    current_module: str | None,
+) -> MockUnlockSnapshot:
+    module_progress = _compute_module_statuses(
+        mock_test_id=mock_test_id,
+        modules=modules,
+        module_attempts=module_attempts,
+        include_bands=False,
+    )
+    done_parts: dict[str, list[int]] = {}
+    for attempt in module_attempts:
+        if attempt.get("status") != "completed":
+            continue
+        part_raw = attempt.get("part")
+        mod = str(attempt.get("module", ""))
+        if not mod or part_raw is None:
+            continue
+        done_parts.setdefault(mod, []).append(int(part_raw))
+    for mod, parts in done_parts.items():
+        done_parts[mod] = sorted(set(parts))
+    module_status = {mp.module: mp.status for mp in module_progress}
+    return MockUnlockSnapshot(
+        done_parts=done_parts,
+        current_module=current_module,  # type: ignore[arg-type]
+        module_status=module_status,  # type: ignore[arg-type]
+    )
+
+
+def _validate_unlock_from_snapshot(
+    *,
+    snapshot: MockUnlockSnapshot,
+    mock_test_id: UUID,
+    module: str,
+    part: int,
+) -> None:
+    live_parts = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
+    done_parts = set(snapshot.done_parts.get(module, []))
+    mp_status: ModuleProgressStatus | None = snapshot.module_status.get(module)  # type: ignore[arg-type]
+    has_started_module = mp_status in ("completed", "in_progress") or bool(done_parts)
+    if mp_status == "locked" and not has_started_module:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Complete the previous module before starting this one.",
+        )
+    if part in done_parts:
+        if module == "listening":
+            label = "listening part"
+        elif module == "writing":
+            label = "writing task"
+        else:
+            label = "passage"
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=f"This {label} is already completed and cannot be reopened.",
+        )
+    if part not in live_parts:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="This section is not part of the current test flow.",
+        )
+    if not all(p in done_parts for p in live_parts if p < part):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Complete earlier sections in this module first.",
+        )
 
 
 def _bundle_parts(
@@ -915,15 +1005,19 @@ def start_mock(
         include_bands=True,
     )
 
-    invalidate_mock_progress_caches(
+    unlock = build_unlock_snapshot(
+        mock_test_id=mock_test_id,
+        modules=modules,
+        module_attempts=module_attempts,
+        current_module=start_module,
+    )
+    write_progress_cache(
+        mock_attempt_id=mock_attempt_id,
         user_id=user_id,
         mock_test_id=mock_test_id,
-        mock_attempt_id=mock_attempt_id,
+        progress=progress,
+        unlock=unlock,
     )
-    cache_key = f"mock_progress:{mock_attempt_id}:{user_id}"
-    set_json(cache_key, progress.model_dump(mode="json"), ttl_seconds=30)
-    session_key = f"mock_session:{user_id}:{mock_test_id}"
-    set_json(session_key, progress.model_dump(mode="json"), ttl_seconds=30)
 
     return StartMockResponse(
         mock_attempt_id=mock_attempt_id,
@@ -1030,61 +1124,38 @@ def assert_module_unlocked(
     """Raise 403 if sequential rules block this module/part."""
     if mock_attempt_id is None:
         return
-    _assert_mock_attempt_owner(mock_attempt_id=mock_attempt_id, user_id=user_id)
+    owner_row = _assert_mock_attempt_owner(
+        mock_attempt_id=mock_attempt_id, user_id=user_id
+    )
+    snapshot = read_unlock_snapshot(mock_attempt_id=mock_attempt_id, user_id=user_id)
+    if snapshot is not None:
+        _validate_unlock_from_snapshot(
+            snapshot=snapshot,
+            mock_test_id=mock_test_id,
+            module=module,
+            part=part,
+        )
+        return
+
     modules = repo.list_mock_modules(mock_test_id)
     module_attempts = repo.list_module_attempts(mock_attempt_id)
-    module_progress = _compute_module_statuses(
+    unlock = build_unlock_snapshot(
         mock_test_id=mock_test_id,
         modules=modules,
         module_attempts=module_attempts,
-        include_bands=False,
+        current_module=owner_row.get("current_module"),
     )
-    mp = next((m for m in module_progress if m.module == module), None)
-    if not mp:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown module.")
-    live_parts = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
-    completed_attempts = [
-        a
-        for a in module_attempts
-        if a.get("module") == module and a.get("status") == "completed"
-    ]
-    done_parts = {
-        int(a["part"]) for a in completed_attempts if a.get("part") is not None
-    }
-    mod_attempts_for_module = [
-        a for a in module_attempts if a.get("module") == module
-    ]
-    has_started_module = any(
-        a.get("status") in ("completed", "in_progress")
-        for a in mod_attempts_for_module
+    _validate_unlock_from_snapshot(
+        snapshot=unlock,
+        mock_test_id=mock_test_id,
+        module=module,
+        part=part,
     )
-    if mp.status == "locked" and not has_started_module:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail="Complete the previous module before starting this one.",
-        )
-
-    if part in done_parts:
-        if module == "listening":
-            label = "listening part"
-        elif module == "writing":
-            label = "writing task"
-        else:
-            label = "passage"
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail=f"This {label} is already completed and cannot be reopened.",
-        )
-    if part not in live_parts:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail="This section is not part of the current test flow.",
-        )
-    if not all(p in done_parts for p in live_parts if p < part):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail="Complete earlier sections in this module first.",
-        )
+    write_unlock_snapshot_cache(
+        mock_attempt_id=mock_attempt_id,
+        user_id=user_id,
+        unlock=unlock,
+    )
 
 
 def resume_mock(
@@ -1134,35 +1205,85 @@ def resume_mock(
     )
 
 
+def _apply_mock_attempt_patch(
+    bundle: dict[str, Any], patch: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply mock_attempts UPDATE fields in-memory so finalize skips a refetch."""
+    merged = dict(bundle)
+    row = dict(merged.get("mock_attempt") or {})
+    row.update(patch)
+    merged["mock_attempt"] = row
+    return merged
+
+
 def _finalize_mock_progress_after_submit(
     *,
     mock_attempt_id: UUID,
     mock_test_id: UUID,
     user_id: UUID,
     invalidate_history: bool = False,
+    timing: MockProgressTiming | None = None,
+    bundle: dict[str, Any] | None = None,
+    mock_attempt_patch: dict[str, Any] | None = None,
 ) -> MockAttemptProgress:
-    """One progress bundle fetch + cache warm after mock_attempt row updates."""
-    invalidate_mock_progress_caches(
+    """Cache warm after mock_attempt row updates.
+
+    Overwrites progress/session Redis keys directly (SETEX) instead of
+    DELETE-then-SET. When ``bundle`` is passed from ``on_module_attempt_completed``,
+    skip the second ``get_mock_attempt_progress`` fetch and apply
+    ``mock_attempt_patch`` in memory instead.
+    """
+    t_finalize = perf_counter()
+
+    if invalidate_history:
+        schedule_mock_history_cache_invalidation(
+            user_id=user_id, mock_test_id=mock_test_id
+        )
+
+    if bundle is None:
+        t0 = perf_counter()
+        bundle = repo.fetch_mock_attempt_progress_bundle(
+            mock_attempt_id=mock_attempt_id, user_id=user_id
+        )
+        if timing is not None:
+            timing.progress_finalize_fetch_bundle_ms = _elapsed_ms(t0)
+            timing.progress_fetch_bundle_count += 1
+    elif mock_attempt_patch:
+        bundle = _apply_mock_attempt_patch(bundle, mock_attempt_patch)
+
+    if not bundle:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock attempt not found.")
+    t0 = perf_counter()
+    progress = _progress_from_bundle(bundle, user_id=user_id)
+    row = bundle["mock_attempt"]
+    unlock = build_unlock_snapshot(
+        mock_test_id=mock_test_id,
+        modules=list(bundle.get("modules") or []),
+        module_attempts=list(bundle.get("module_attempts") or []),
+        current_module=row.get("current_module"),
+    )
+    if timing is not None:
+        timing.progress_finalize_compute_ms = _elapsed_ms(t0)
+
+    t0 = perf_counter()
+    write_progress_cache(
+        mock_attempt_id=mock_attempt_id,
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        progress=progress,
+        unlock=unlock,
+        timing=timing,
+    )
+    refresh_mock_in_progress_cache(
         user_id=user_id,
         mock_test_id=mock_test_id,
         mock_attempt_id=mock_attempt_id,
+        status=str(row.get("status") or "in_progress"),
+        current_module=row.get("current_module"),
     )
-    if invalidate_history:
-        invalidate_mock_history_caches(user_id=user_id, mock_test_id=mock_test_id)
-
-    bundle = repo.fetch_mock_attempt_progress_bundle(
-        mock_attempt_id=mock_attempt_id, user_id=user_id
-    )
-    if not bundle:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock attempt not found.")
-    progress = _progress_from_bundle(bundle, user_id=user_id)
-    cache_key = f"mock_progress:{mock_attempt_id}:{user_id}"
-    set_json(cache_key, progress.model_dump(mode="json"), ttl_seconds=30)
-    set_json(
-        f"mock_session:{user_id}:{mock_test_id}",
-        progress.model_dump(mode="json"),
-        ttl_seconds=30,
-    )
+    if timing is not None:
+        timing.progress_finalize_write_cache_ms = _elapsed_ms(t0)
+        timing.progress_finalize_ms = _elapsed_ms(t_finalize)
     return progress
 
 
@@ -1171,8 +1292,10 @@ def on_module_attempt_completed(
     test_attempt_id: UUID,
     user_id: UUID,
     attempt: dict[str, Any] | None = None,
+    timing: MockProgressTiming | None = None,
 ) -> MockAttemptProgress | None:
     """After module submit: advance mock_attempt or unlock next module."""
+    t_progress = perf_counter()
     if attempt is None:
         from app.db.supabase_client import get_supabase
 
@@ -1202,19 +1325,26 @@ def on_module_attempt_completed(
     mock_test_id = UUID(str(attempt["mock_test_id"]))
     module = str(attempt["module"])
 
+    t0 = perf_counter()
     bundle = repo.fetch_mock_attempt_progress_bundle(
         mock_attempt_id=mock_attempt_id, user_id=user_id
     )
+    if timing is not None:
+        timing.progress_fetch_bundle_ms = _elapsed_ms(t0)
+        timing.progress_fetch_bundle_count += 1
+
     if not bundle:
         return None
     modules = list(bundle.get("modules") or [])
     module_attempts = list(bundle.get("module_attempts") or [])
 
-    if not _module_parts_complete(
+    t0 = perf_counter()
+    parts_incomplete = not _module_parts_complete(
         mock_test_id=mock_test_id,
         module=module,
         module_attempts=module_attempts,
-    ):
+    )
+    if parts_incomplete:
         parts = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
         done = {
             int(a["part"])
@@ -1224,16 +1354,30 @@ def on_module_attempt_completed(
             and a.get("part") is not None
         }
         remaining = [p for p in parts if p not in done]
+        if timing is not None:
+            timing.progress_parts_check_ms = _elapsed_ms(t0)
         if remaining:
+            patch = {"current_module": module}
+            t0 = perf_counter()
             repo.update_mock_attempt(
                 mock_attempt_id=mock_attempt_id,
-                fields={"current_module": module},
+                fields=patch,
             )
-            return _finalize_mock_progress_after_submit(
+            if timing is not None:
+                timing.progress_update_mock_attempt_ms = _elapsed_ms(t0)
+            result = _finalize_mock_progress_after_submit(
                 mock_attempt_id=mock_attempt_id,
                 mock_test_id=mock_test_id,
                 user_id=user_id,
+                timing=timing,
+                bundle=bundle,
+                mock_attempt_patch=patch,
             )
+            if timing is not None:
+                timing.progress_ms = _elapsed_ms(t_progress)
+            return result
+    elif timing is not None:
+        timing.progress_parts_check_ms = _elapsed_ms(t0)
 
     mod_order = [str(m["module"]) for m in enabled_modules_in_catalog_order(modules)]
     try:
@@ -1243,27 +1387,47 @@ def on_module_attempt_completed(
 
     if idx >= 0 and idx < len(mod_order) - 1:
         next_mod = mod_order[idx + 1]
+        patch = {"current_module": next_mod}
+        t0 = perf_counter()
         repo.update_mock_attempt(
             mock_attempt_id=mock_attempt_id,
-            fields={"current_module": next_mod},
+            fields=patch,
         )
-        return _finalize_mock_progress_after_submit(
+        if timing is not None:
+            timing.progress_update_mock_attempt_ms = _elapsed_ms(t0)
+        result = _finalize_mock_progress_after_submit(
             mock_attempt_id=mock_attempt_id,
             mock_test_id=mock_test_id,
             user_id=user_id,
+            timing=timing,
+            bundle=bundle,
+            mock_attempt_patch=patch,
         )
+        if timing is not None:
+            timing.progress_ms = _elapsed_ms(t_progress)
+        return result
 
+    patch = {
+        "status": "completed",
+        "completed_at": datetime.now(UTC).isoformat(),
+        "current_module": None,
+    }
+    t0 = perf_counter()
     repo.update_mock_attempt(
         mock_attempt_id=mock_attempt_id,
-        fields={
-            "status": "completed",
-            "completed_at": datetime.now(UTC).isoformat(),
-            "current_module": None,
-        },
+        fields=patch,
     )
-    return _finalize_mock_progress_after_submit(
+    if timing is not None:
+        timing.progress_update_mock_attempt_ms = _elapsed_ms(t0)
+    result = _finalize_mock_progress_after_submit(
         mock_attempt_id=mock_attempt_id,
         mock_test_id=mock_test_id,
         user_id=user_id,
         invalidate_history=True,
+        timing=timing,
+        bundle=bundle,
+        mock_attempt_patch=patch,
     )
+    if timing is not None:
+        timing.progress_ms = _elapsed_ms(t_progress)
+    return result

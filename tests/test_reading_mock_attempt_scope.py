@@ -30,7 +30,7 @@ def test_start_reading_abandons_orphan_without_matching_mock_attempt():
     with (
         patch("app.reading.service.repo.get_mock_test", return_value={"id": str(M01)}),
         patch("app.services.mock_orchestrator.assert_module_unlocked"),
-        patch("app.reading.service.repo.abandon_stale_reading_attempts"),
+        patch("app.reading.service.repo.abandon_stale_reading_attempts") as stale_mock,
         patch(
             "app.reading.service.repo.find_in_progress_reading_attempt",
             return_value=orphan,
@@ -73,6 +73,7 @@ def test_start_reading_abandons_orphan_without_matching_mock_attempt():
 
 
 def test_start_reading_abandons_stale_rows_not_visible_to_scoped_find():
+    """Stale cleanup runs in background after start (router), not on the hot path."""
     new_row = {
         "id": str(NEW_ID),
         "started_at": "2026-01-02T00:00:00+00:00",
@@ -117,5 +118,4 @@ def test_start_reading_abandons_stale_rows_not_visible_to_scoped_find():
             include_questions=False,
         )
 
-    stale_mock.assert_called_once()
-    assert stale_mock.call_args.kwargs["mock_attempt_id"] == MOCK_A
+    stale_mock.assert_not_called()

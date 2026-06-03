@@ -7,13 +7,14 @@ calls the synchronous evaluator, and persists module_scores.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 
 from app.cache.hybrid_cache import get_json, set_json
-from app.cache.mock_cache import invalidate_mock_progress_caches
+from app.cache.mock_cache import read_unlock_snapshot
 from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
 from app.listening import repository as repo
@@ -43,16 +44,9 @@ from app.listening.schemas import (
 )
 from app.schemas.test_engine import TestSummary
 from app.listening.instructions import extract_listening_instructions
+from app.listening.timing import ListeningStartTiming, ListeningSubmitTiming, _PhaseTimer
+from app.services.mock_progress_timing import MockProgressTiming
 from app.storage.r2 import generate_signed_url, object_exists, parse_r2_object_url
-
-
-def _listening_display_number(
-    *, mock_test_id: UUID, part: int, question_number: int
-) -> int:
-    return (
-        repo.display_offset_before_part(mock_test_id=mock_test_id, part=part)
-        + question_number
-    )
 
 
 PART_META: dict[int, dict[str, str]] = {
@@ -182,6 +176,22 @@ def _mock_listening_session_started_at(
     return _parse_started_at(current_attempt)
 
 
+def schedule_stale_listening_cleanup(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    mock_attempt_id: UUID,
+    part: int,
+) -> None:
+    """Fire-and-forget hygiene: abandon orphan/superseded in_progress listening rows."""
+    repo.abandon_stale_listening_attempts(
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        mock_attempt_id=mock_attempt_id,
+        part=part,
+    )
+
+
 def start_attempt(
     *,
     mock_test_id: UUID,
@@ -190,18 +200,24 @@ def start_attempt(
     part: int = 1,
     mock_attempt_id: UUID | None = None,
     include_questions: bool = False,
+    timing: ListeningStartTiming | None = None,
 ) -> StartListeningResponse:
     """Create a new listening attempt, or resume the user's existing in-progress one."""
-    repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    t_request = perf_counter()
+    t0 = perf_counter()
+    test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
     if mock_attempt_id is not None:
         from app.services import mock_orchestrator
 
-        repo.abandon_stale_listening_attempts(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=mock_attempt_id,
-            part=part,
-        )
+        if timing is not None:
+            timing.unlock_source = (
+                "cache"
+                if read_unlock_snapshot(
+                    mock_attempt_id=mock_attempt_id, user_id=user_id
+                )
+                else "db"
+            )
+        t_unlock = perf_counter()
         mock_orchestrator.assert_module_unlocked(
             mock_attempt_id=mock_attempt_id,
             user_id=user_id,
@@ -209,6 +225,9 @@ def start_attempt(
             module="listening",
             part=part,
         )
+        if timing is not None:
+            timing.unlock_ms = round((perf_counter() - t_unlock) * 1000)
+    t_attempt = perf_counter()
     existing = repo.find_in_progress_listening_attempt(
         user_id=user_id,
         mock_test_id=mock_test_id,
@@ -245,21 +264,22 @@ def start_attempt(
             ),
             resumed=True,
         )
-        if mock_attempt_id is not None:
-            invalidate_mock_progress_caches(
-                user_id=user_id,
-                mock_test_id=mock_test_id,
-                mock_attempt_id=mock_attempt_id,
-            )
+        if timing is not None:
+            timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
         if include_questions:
             q = get_session_questions(
                 mock_test_id=mock_test_id,
                 user_id=user_id,
                 part=part,
+                test_row=test_row,
+                attempt=existing,
+                timing=timing,
             )
             response.test = q.test
             response.parts = q.parts
             response.duration_seconds = q.duration_seconds
+        if timing is not None:
+            timing.duration_ms = round((perf_counter() - t_request) * 1000)
         return response
 
     row = repo.insert_listening_attempt(
@@ -288,54 +308,78 @@ def start_attempt(
         ),
         resumed=False,
     )
-    if mock_attempt_id is not None:
-        invalidate_mock_progress_caches(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=mock_attempt_id,
-        )
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
     if include_questions:
         q = get_session_questions(
             mock_test_id=mock_test_id,
             user_id=user_id,
             part=part,
+            test_row=test_row,
+            attempt=row,
+            timing=timing,
         )
         response.test = q.test
         response.parts = q.parts
         response.duration_seconds = q.duration_seconds
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
     return response
 
 
 def get_session_questions(
-    *, mock_test_id: UUID, user_id: UUID, part: int | None = None
+    *,
+    mock_test_id: UUID,
+    user_id: UUID,
+    part: int | None = None,
+    test_row: dict[str, Any] | None = None,
+    attempt: dict[str, Any] | None = None,
+    timing: ListeningStartTiming | None = None,
 ) -> ListeningQuestionsResponse:
     cache_key = f"listening_questions:{mock_test_id}:{part or 0}"
+    t_questions = perf_counter()
     cached = get_json(cache_key)
     if isinstance(cached, dict):
         try:
             payload = ListeningQuestionsResponse.model_validate(cached)
+            if timing is not None:
+                timing.questions_source = "cache"
+                timing.questions_ms = round((perf_counter() - t_questions) * 1000)
             return payload
         except Exception:
             pass
 
-    test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    if timing is not None:
+        timing.questions_source = "db"
+    presign_timer = _PhaseTimer()
+
+    if test_row is None:
+        test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    t0 = perf_counter()
     rows = repo.list_questions_public(mock_test_id, part=part)
+    fetch_ms = round((perf_counter() - t0) * 1000)
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No listening questions found for this mock test.",
         )
 
-    in_progress = repo.find_in_progress_listening_attempt(
-        user_id=user_id,
-        mock_test_id=mock_test_id,
-        part=part,
-    )
-    if not in_progress:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Start a listening attempt before loading questions and audio.",
+    if attempt is None:
+        in_progress = repo.find_in_progress_listening_attempt(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            part=part,
         )
+        if not in_progress:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Start a listening attempt before loading questions and audio.",
+            )
+        attempt = in_progress
+
+    t0 = perf_counter()
+    display_offsets = repo.part_display_offsets(mock_test_id=mock_test_id)
+    offsets_ms = round((perf_counter() - t0) * 1000)
 
     # Presign each distinct audio key once. A part shares one clip across ~10
     # questions, so this avoids ~10x R2 HEAD + presign round trips per request.
@@ -343,8 +387,11 @@ def get_session_questions(
     for row in rows:
         raw_audio = row.get("audio_url")
         if raw_audio and raw_audio not in presigned_by_key:
+            t_presign = perf_counter()
             presigned_by_key[raw_audio] = _presign_audio(raw_audio)
+            presign_timer.add(t_presign)
 
+    t_build = perf_counter()
     grouped: dict[int, list[ListeningQuestion]] = {1: [], 2: [], 3: [], 4: []}
     for row in rows:
         part_raw = row.get("part")
@@ -362,9 +409,7 @@ def get_session_questions(
                 id=UUID(str(row["id"])),
                 part=part,  # type: ignore[arg-type]
                 question_number=qn,
-                display_number=_listening_display_number(
-                    mock_test_id=mock_test_id, part=part, question_number=qn
-                ),
+                display_number=display_offsets.get(part, 0) + qn,
                 question_type=str(row["question_type"]),
                 prompt=str(row["prompt"]),
                 instructions=instructions,
@@ -390,7 +435,7 @@ def get_session_questions(
             )
         )
 
-    mock_attempt_raw = in_progress.get("mock_attempt_id")
+    mock_attempt_raw = attempt.get("mock_attempt_id")
     mock_attempt_id = UUID(str(mock_attempt_raw)) if mock_attempt_raw else None
 
     response = ListeningQuestionsResponse(
@@ -405,6 +450,10 @@ def get_session_questions(
         ),
     )
     set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=600)
+    build_ms = round((perf_counter() - t_build) * 1000)
+    if timing is not None:
+        timing.audio_presign_ms = presign_timer.total_ms
+        timing.questions_ms = fetch_ms + offsets_ms + build_ms
     return response
 
 
@@ -462,9 +511,14 @@ def submit_attempt(
     attempt_id: UUID,
     user_id: UUID,
     answers: list[dict[str, str]],
+    timing: ListeningSubmitTiming | None = None,
 ) -> SubmitListeningResponse:
+    t_request = perf_counter()
+    t0 = perf_counter()
     attempt = repo.get_attempt(attempt_id)
     _ensure_owner(attempt, user_id)
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t0) * 1000)
     if attempt.get("module") != "listening":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -479,7 +533,10 @@ def submit_attempt(
     mock_test_id = UUID(str(attempt["mock_test_id"]))
     attempt_part = attempt.get("part")
     part = int(attempt_part) if attempt_part is not None else None
+    t0 = perf_counter()
     questions = repo.list_questions_for_scoring(mock_test_id, part=part)
+    if timing is not None:
+        timing.scoring_query_ms = round((perf_counter() - t0) * 1000)
     if not questions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -501,10 +558,13 @@ def submit_attempt(
             detail="One or more question_ids are invalid for this attempt.",
         )
 
+    t0 = perf_counter()
     raw_score, total, scored_rows = score_answers(
         questions=questions,
         answers_by_qid=answers_by_qid,
     )
+    if timing is not None:
+        timing.scoring_compute_ms = round((perf_counter() - t0) * 1000)
 
     now = datetime.now(UTC)
     mock_attempt_raw = attempt.get("mock_attempt_id")
@@ -528,6 +588,7 @@ def submit_attempt(
     band = calculate_band(raw_score, total=total)
     breakdown = build_skill_breakdown(questions=questions, rows=scored_rows)
 
+    t0 = perf_counter()
     completed = persist_module_submit_bundle(
         attempt_id=attempt_id,
         user_id=user_id,
@@ -539,6 +600,8 @@ def submit_attempt(
         band=band,
         skill_breakdown=breakdown,
     )
+    if timing is not None:
+        timing.rpc_bundle_ms = round((perf_counter() - t0) * 1000)
 
     completed_raw = completed.get("completed_at") or now.isoformat()
     submitted_at = (
@@ -552,11 +615,17 @@ def submit_attempt(
     if attempt.get("mock_attempt_id"):
         from app.services import mock_orchestrator
 
+        progress_timing = MockProgressTiming() if timing is not None else None
+        if timing is not None:
+            timing.progress_timing = progress_timing
         progress = mock_orchestrator.on_module_attempt_completed(
             test_attempt_id=attempt_id,
             user_id=user_id,
             attempt=completed,
+            timing=progress_timing,
         )
+        if timing is not None and progress_timing is not None:
+            timing.progress_ms = progress_timing.progress_ms
         if progress is not None:
             if progress.status == "completed" or progress.next_module != "listening":
                 mock_listening_complete = True
@@ -575,13 +644,8 @@ def submit_attempt(
         mock_next_part=mock_next_part,
         mock_listening_complete=mock_listening_complete,
     )
-    mock_attempt_raw = attempt.get("mock_attempt_id")
-    if mock_attempt_raw is not None:
-        invalidate_mock_progress_caches(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=UUID(str(mock_attempt_raw)),
-        )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
     return response
 
 

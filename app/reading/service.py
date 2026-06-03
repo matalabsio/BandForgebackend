@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 
 from app.cache.hybrid_cache import get_json, set_json
-from app.cache.mock_cache import invalidate_mock_progress_caches
+from app.cache.mock_cache import read_unlock_snapshot
 from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
 from app.reading import repository as repo
@@ -31,7 +32,9 @@ from app.reading.schemas import (
     StartReadingResponse,
     SubmitReadingResponse,
 )
+from app.reading.timing import ReadingStartTiming, ReadingSubmitTiming
 from app.schemas.test_engine import TestSummary
+from app.services.mock_progress_timing import MockProgressTiming
 
 
 def _is_dev() -> bool:
@@ -128,7 +131,9 @@ def _rows_to_reading_questions(
     mock_test_id: UUID,
     rows: list[dict],
     part: int | None,
+    timing: ReadingStartTiming | None = None,
 ) -> tuple[str | None, list[ReadingQuestion]]:
+    t_passage = perf_counter()
     passage_text: str | None = None
     questions: list[ReadingQuestion] = []
     offset = repo.display_offset_before_part(
@@ -149,31 +154,127 @@ def _rows_to_reading_questions(
                 skill_tag=row.get("skill_tag"),
             )
         )
+    if timing is not None:
+        timing.passage_ms = round((perf_counter() - t_passage) * 1000)
     return passage_text, questions
 
 
-def _pack_session_content(
-    *, mock_test_id: UUID, include_questions: bool, part: int | None = None
-) -> tuple[TestSummary | None, str | None, list[ReadingQuestion]]:
-    if not include_questions:
-        return None, None, []
-    test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+def _reading_questions_cache_key(*, mock_test_id: UUID, part: int | None) -> str:
+    return f"reading_questions:{mock_test_id}:{part or 0}"
+
+
+def _load_reading_questions_cached(
+    *,
+    mock_test_id: UUID,
+    part: int | None,
+    timing: ReadingStartTiming | None = None,
+) -> ReadingQuestionsResponse | None:
+    t0 = perf_counter()
+    cached = get_json(_reading_questions_cache_key(mock_test_id=mock_test_id, part=part))
+    if not isinstance(cached, dict):
+        return None
+    try:
+        payload = ReadingQuestionsResponse.model_validate(cached)
+    except Exception:
+        return None
+    if timing is not None:
+        timing.questions_source = "cache"
+        timing.questions_ms = round((perf_counter() - t0) * 1000)
+        timing.passage_ms = 0
+    return payload
+
+
+def _build_reading_questions_response(
+    *,
+    mock_test_id: UUID,
+    part: int | None,
+    test_row: dict[str, Any],
+    mock_attempt_id: UUID | None,
+    timing: ReadingStartTiming | None = None,
+) -> ReadingQuestionsResponse:
     content_part = _content_part(mock_test_id=mock_test_id, live_part=part)
+    t0 = perf_counter()
     rows = repo.list_questions_public(mock_test_id, part=content_part)
+    list_ms = round((perf_counter() - t0) * 1000)
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No reading questions found for this mock test.",
         )
     passage_text, questions = _rows_to_reading_questions(
-        mock_test_id=mock_test_id, rows=rows, part=part
+        mock_test_id=mock_test_id, rows=rows, part=part, timing=timing
     )
-    test = TestSummary(
-        id=UUID(str(test_row["id"])),
-        title=str(test_row["title"]),
-        description=test_row.get("description"),
+    response = ReadingQuestionsResponse(
+        test=TestSummary(
+            id=UUID(str(test_row["id"])),
+            title=str(test_row["title"]),
+            description=test_row.get("description"),
+        ),
+        passage_text=passage_text,
+        questions=questions,
+        duration_seconds=_reading_duration_seconds(
+            mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
+        ),
     )
-    return test, passage_text, questions
+    if timing is not None:
+        timing.questions_source = "db"
+        timing.questions_ms = list_ms + (timing.passage_ms or 0)
+    set_json(
+        _reading_questions_cache_key(mock_test_id=mock_test_id, part=part),
+        response.model_dump(mode="json"),
+        ttl_seconds=600,
+    )
+    return response
+
+
+def _pack_session_content(
+    *,
+    mock_test_id: UUID,
+    include_questions: bool,
+    part: int | None = None,
+    test_row: dict[str, Any] | None = None,
+    mock_attempt_id: UUID | None = None,
+    timing: ReadingStartTiming | None = None,
+) -> tuple[TestSummary | None, str | None, list[ReadingQuestion]]:
+    if not include_questions:
+        return None, None, []
+    cached = _load_reading_questions_cached(
+        mock_test_id=mock_test_id, part=part, timing=timing
+    )
+    if cached is not None:
+        test = TestSummary(
+            id=cached.test.id,
+            title=cached.test.title,
+            description=cached.test.description,
+        )
+        return test, cached.passage_text, cached.questions
+
+    if test_row is None:
+        test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    payload = _build_reading_questions_response(
+        mock_test_id=mock_test_id,
+        part=part,
+        test_row=test_row,
+        mock_attempt_id=mock_attempt_id,
+        timing=timing,
+    )
+    return payload.test, payload.passage_text, payload.questions
+
+
+def schedule_stale_reading_cleanup(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    mock_attempt_id: UUID,
+    part: int,
+) -> None:
+    """Fire-and-forget hygiene: abandon orphan/superseded in_progress reading rows."""
+    repo.abandon_stale_reading_attempts(
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        mock_attempt_id=mock_attempt_id,
+        part=part,
+    )
 
 
 def start_attempt(
@@ -184,17 +285,23 @@ def start_attempt(
     include_questions: bool = True,
     part: int = 1,
     mock_attempt_id: UUID | None = None,
+    timing: ReadingStartTiming | None = None,
 ) -> StartReadingResponse:
-    repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    t_request = perf_counter()
+    t0 = perf_counter()
+    test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
     if mock_attempt_id is not None:
         from app.services import mock_orchestrator
 
-        repo.abandon_stale_reading_attempts(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=mock_attempt_id,
-            part=part,
-        )
+        if timing is not None:
+            timing.unlock_source = (
+                "cache"
+                if read_unlock_snapshot(
+                    mock_attempt_id=mock_attempt_id, user_id=user_id
+                )
+                else "db"
+            )
+        t_unlock = perf_counter()
         mock_orchestrator.assert_module_unlocked(
             mock_attempt_id=mock_attempt_id,
             user_id=user_id,
@@ -202,6 +309,9 @@ def start_attempt(
             module="reading",
             part=part,
         )
+        if timing is not None:
+            timing.unlock_ms = round((perf_counter() - t_unlock) * 1000)
+    t_attempt = perf_counter()
     existing = repo.find_in_progress_reading_attempt(
         user_id=user_id,
         mock_test_id=mock_test_id,
@@ -228,10 +338,15 @@ def start_attempt(
             if mock_attempt_id is not None
             else _parse_started_at(existing)
         )
+        if timing is not None:
+            timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
         test, passage_text, questions = _pack_session_content(
             mock_test_id=mock_test_id,
             include_questions=include_questions,
             part=part,
+            test_row=test_row,
+            mock_attempt_id=mock_attempt_id,
+            timing=timing,
         )
         response = StartReadingResponse(
             attempt_id=UUID(str(existing["id"])),
@@ -246,12 +361,8 @@ def start_attempt(
             passage_text=passage_text,
             questions=questions,
         )
-        if mock_attempt_id is not None:
-            invalidate_mock_progress_caches(
-                user_id=user_id,
-                mock_test_id=mock_test_id,
-                mock_attempt_id=mock_attempt_id,
-            )
+        if timing is not None:
+            timing.duration_ms = round((perf_counter() - t_request) * 1000)
         return response
 
     row = repo.insert_reading_attempt(
@@ -270,10 +381,15 @@ def start_attempt(
         if mock_attempt_id is not None
         else _parse_started_at(row)
     )
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
     test, passage_text, questions = _pack_session_content(
         mock_test_id=mock_test_id,
         include_questions=include_questions,
         part=part,
+        test_row=test_row,
+        mock_attempt_id=mock_attempt_id,
+        timing=timing,
     )
     response = StartReadingResponse(
         attempt_id=UUID(str(row["id"])),
@@ -288,35 +404,19 @@ def start_attempt(
         passage_text=passage_text,
         questions=questions,
     )
-    if mock_attempt_id is not None:
-        invalidate_mock_progress_caches(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=mock_attempt_id,
-        )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
     return response
 
 
 def get_session_questions(
     *, mock_test_id: UUID, user_id: UUID, part: int | None = None
 ) -> ReadingQuestionsResponse:
-    cache_key = f"reading_questions:{mock_test_id}:{part or 0}"
-    cached = get_json(cache_key)
-    if isinstance(cached, dict):
-        try:
-            return ReadingQuestionsResponse.model_validate(cached)
-        except Exception:
-            pass
+    cached = _load_reading_questions_cached(mock_test_id=mock_test_id, part=part)
+    if cached is not None:
+        return cached
 
     test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
-    content_part = _content_part(mock_test_id=mock_test_id, live_part=part)
-    rows = repo.list_questions_public(mock_test_id, part=content_part)
-    if not rows:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No reading questions found for this mock test.",
-        )
-
     in_progress = repo.find_in_progress_reading_attempt(
         user_id=user_id, mock_test_id=mock_test_id, part=part
     )
@@ -325,29 +425,16 @@ def get_session_questions(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Start a reading attempt before loading questions.",
         )
-
-    passage_text, questions = _rows_to_reading_questions(
-        mock_test_id=mock_test_id, rows=rows, part=part
-    )
     mock_attempt_raw = in_progress.get("mock_attempt_id")
     mock_attempt_id = (
         UUID(str(mock_attempt_raw)) if mock_attempt_raw else None
     )
-
-    response = ReadingQuestionsResponse(
-        test=TestSummary(
-            id=UUID(str(test_row["id"])),
-            title=str(test_row["title"]),
-            description=test_row.get("description"),
-        ),
-        passage_text=passage_text,
-        questions=questions,
-        duration_seconds=_reading_duration_seconds(
-            mock_test_id=mock_test_id, mock_attempt_id=mock_attempt_id
-        ),
+    return _build_reading_questions_response(
+        mock_test_id=mock_test_id,
+        part=part,
+        test_row=test_row,
+        mock_attempt_id=mock_attempt_id,
     )
-    set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=600)
-    return response
 
 
 def autosave_answer(
@@ -384,9 +471,14 @@ def submit_attempt(
     attempt_id: UUID,
     user_id: UUID,
     answers: list[dict[str, str]],
+    timing: ReadingSubmitTiming | None = None,
 ) -> SubmitReadingResponse:
+    t_request = perf_counter()
+    t0 = perf_counter()
     attempt = repo.get_attempt(attempt_id)
     _ensure_owner(attempt, user_id)
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t0) * 1000)
     if attempt.get("module") != "reading":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a reading attempt.")
     if attempt.get("status") != "in_progress":
@@ -411,7 +503,10 @@ def submit_attempt(
     attempt_part = attempt.get("part")
     live_part = int(attempt_part) if attempt_part is not None else None
     content_part = _content_part(mock_test_id=mock_test_id, live_part=live_part)
+    t0 = perf_counter()
     questions = repo.list_questions_for_scoring(mock_test_id, part=content_part)
+    if timing is not None:
+        timing.scoring_query_ms = round((perf_counter() - t0) * 1000)
     if not questions:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -432,10 +527,13 @@ def submit_attempt(
             detail="One or more question_ids are invalid for this attempt.",
         )
 
+    t0 = perf_counter()
     raw_score, total, scored_rows = score_answers(
         questions=questions,
         answers_by_qid=answers_by_qid,
     )
+    if timing is not None:
+        timing.scoring_compute_ms = round((perf_counter() - t0) * 1000)
 
     now = datetime.now(UTC)
     started_at = _parse_started_at(attempt)
@@ -451,6 +549,7 @@ def submit_attempt(
     band = calculate_reading_band(raw_score, total=total)
     breakdown = build_skill_breakdown(questions=questions, rows=scored_rows)
 
+    t0 = perf_counter()
     completed = persist_module_submit_bundle(
         attempt_id=attempt_id,
         user_id=user_id,
@@ -462,6 +561,8 @@ def submit_attempt(
         band=band,
         skill_breakdown=breakdown,
     )
+    if timing is not None:
+        timing.rpc_bundle_ms = round((perf_counter() - t0) * 1000)
 
     completed_raw = completed.get("completed_at") or now.isoformat()
     submitted_at = (
@@ -476,11 +577,17 @@ def submit_attempt(
     if attempt.get("mock_attempt_id"):
         from app.services import mock_orchestrator
 
+        progress_timing = MockProgressTiming() if timing is not None else None
+        if timing is not None:
+            timing.progress_timing = progress_timing
         progress = mock_orchestrator.on_module_attempt_completed(
             test_attempt_id=attempt_id,
             user_id=user_id,
             attempt=completed,
+            timing=progress_timing,
         )
+        if timing is not None and progress_timing is not None:
+            timing.progress_ms = progress_timing.progress_ms
         if progress is not None:
             mock_next_module = progress.next_module
             mock_next_part = progress.next_part
@@ -500,12 +607,8 @@ def submit_attempt(
         mock_next_part=mock_next_part,
         mock_reading_complete=mock_reading_complete,
     )
-    if mock_attempt_id is not None:
-        invalidate_mock_progress_caches(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=mock_attempt_id,
-        )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
     return response
 
 
