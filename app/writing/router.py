@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
@@ -18,8 +20,30 @@ from app.writing.schemas import (
     SubmitWritingResponse,
     WritingReviewResponse,
 )
+from app.writing.timing import (
+    WritingAutosaveTiming,
+    WritingStartTiming,
+    WritingSubmitTiming,
+)
 
 router = APIRouter(prefix="/api/writing", tags=["writing"])
+
+
+def _timing_log(
+    route: str,
+    started: float,
+    status_code: int,
+    *,
+    extra: dict | None = None,
+) -> None:
+    payload: dict = {
+        "route": route,
+        "duration_ms": round((perf_counter() - started) * 1000, 2),
+        "status": status_code,
+    }
+    if extra:
+        payload.update(extra)
+    print(json.dumps(payload))
 
 
 @router.post("/{mock_test_id}/start", response_model=StartWritingResponse)
@@ -33,13 +57,32 @@ def start_writing(
         Query(description="Parent full-mock attempt for orchestration."),
     ] = None,
 ) -> StartWritingResponse:
-    return service.start_attempt(
-        mock_test_id=mock_test_id,
-        user_id=current_user.id,
-        part=part,
-        force_new=force_new,
-        mock_attempt_id=mock_attempt_id,
-    )
+    started = perf_counter()
+    timing = WritingStartTiming()
+    try:
+        response = service.start_attempt(
+            mock_test_id=mock_test_id,
+            user_id=current_user.id,
+            part=part,
+            force_new=force_new,
+            mock_attempt_id=mock_attempt_id,
+            timing=timing,
+        )
+        _timing_log(
+            "/api/writing/{mock_test_id}/start",
+            started,
+            200,
+            extra=timing.to_log_fields(),
+        )
+        return response
+    except Exception:
+        _timing_log(
+            "/api/writing/{mock_test_id}/start",
+            started,
+            500,
+            extra=timing.to_log_fields(),
+        )
+        raise
 
 
 @router.post("/attempts/{attempt_id}/autosave", response_model=AutosaveResponse)
@@ -48,12 +91,31 @@ def autosave_writing(
     body: AutosaveRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> AutosaveResponse:
-    return service.autosave_answer(
-        attempt_id=attempt_id,
-        user_id=current_user.id,
-        question_id=body.question_id,
-        user_answer=body.user_answer,
-    )
+    started = perf_counter()
+    timing = WritingAutosaveTiming()
+    try:
+        response = service.autosave_answer(
+            attempt_id=attempt_id,
+            user_id=current_user.id,
+            question_id=body.question_id,
+            user_answer=body.user_answer,
+            timing=timing,
+        )
+        _timing_log(
+            "/api/writing/attempts/{attempt_id}/autosave",
+            started,
+            200,
+            extra=timing.to_log_fields(),
+        )
+        return response
+    except Exception:
+        _timing_log(
+            "/api/writing/attempts/{attempt_id}/autosave",
+            started,
+            500,
+            extra=timing.to_log_fields(),
+        )
+        raise
 
 
 @router.post("/attempts/{attempt_id}/submit", response_model=SubmitWritingResponse)
@@ -62,15 +124,34 @@ def submit_writing(
     body: SubmitWritingRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> SubmitWritingResponse:
+    started = perf_counter()
+    timing = WritingSubmitTiming()
     payload = [
         {"question_id": str(a.question_id), "user_answer": a.user_answer}
         for a in body.answers
     ]
-    return service.submit_attempt(
-        attempt_id=attempt_id,
-        user_id=current_user.id,
-        answers=payload,
-    )
+    try:
+        response = service.submit_attempt(
+            attempt_id=attempt_id,
+            user_id=current_user.id,
+            answers=payload,
+            timing=timing,
+        )
+        _timing_log(
+            "/api/writing/attempts/{attempt_id}/submit",
+            started,
+            200,
+            extra=timing.to_log_fields(),
+        )
+        return response
+    except Exception:
+        _timing_log(
+            "/api/writing/attempts/{attempt_id}/submit",
+            started,
+            500,
+            extra=timing.to_log_fields(),
+        )
+        raise
 
 
 @router.get("/attempts/{attempt_id}/review", response_model=WritingReviewResponse)

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 
-from app.cache.mock_cache import invalidate_mock_progress_caches
 from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
 from app.schemas.test_engine import TestSummary
+from app.services.mock_progress_timing import MockProgressTiming
 from app.writing import repository as repo
 from app.writing.constants import (
     TASK1_DURATION_MINUTES,
@@ -25,6 +26,11 @@ from app.writing.schemas import (
     SubmitWritingResponse,
     WritingReviewResponse,
     WritingTaskQuestion,
+)
+from app.writing.timing import (
+    WritingAutosaveTiming,
+    WritingStartTiming,
+    WritingSubmitTiming,
 )
 
 
@@ -71,8 +77,17 @@ def _row_to_task(row: dict[str, Any]) -> WritingTaskQuestion:
     )
 
 
-def _pack_task(*, mock_test_id: UUID, part: int) -> tuple[TestSummary, WritingTaskQuestion]:
+def _pack_task(
+    *,
+    mock_test_id: UUID,
+    part: int,
+    timing: WritingStartTiming | None = None,
+) -> tuple[TestSummary, WritingTaskQuestion]:
+    t_prompt = perf_counter()
     test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    if timing is not None:
+        timing.prompt_ms = round((perf_counter() - t_prompt) * 1000)
+    t_task = perf_counter()
     rows = repo.list_questions_for_part(mock_test_id=mock_test_id, part=part)
     if not rows:
         raise HTTPException(
@@ -84,7 +99,11 @@ def _pack_task(*, mock_test_id: UUID, part: int) -> tuple[TestSummary, WritingTa
         title=str(test_row["title"]),
         description=test_row.get("description"),
     )
-    return test, _row_to_task(rows[0])
+    task = _row_to_task(rows[0])
+    if timing is not None:
+        timing.task_source = "db"
+        timing.task_ms = round((perf_counter() - t_task) * 1000)
+    return test, task
 
 
 def start_attempt(
@@ -94,13 +113,25 @@ def start_attempt(
     part: int,
     force_new: bool = False,
     mock_attempt_id: UUID | None = None,
+    timing: WritingStartTiming | None = None,
 ) -> StartWritingResponse:
+    t_request = perf_counter()
     if part not in (1, 2):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Writing part must be 1 or 2.")
 
     if mock_attempt_id is not None:
+        from app.cache.mock_cache import read_unlock_snapshot
         from app.services.mock_orchestrator import assert_module_unlocked
 
+        if timing is not None:
+            timing.unlock_source = (
+                "cache"
+                if read_unlock_snapshot(
+                    mock_attempt_id=mock_attempt_id, user_id=user_id
+                )
+                else "db"
+            )
+        t_unlock = perf_counter()
         assert_module_unlocked(
             mock_attempt_id=mock_attempt_id,
             user_id=user_id,
@@ -108,7 +139,10 @@ def start_attempt(
             module="writing",
             part=part,
         )
+        if timing is not None:
+            timing.unlock_ms = round((perf_counter() - t_unlock) * 1000)
 
+    t_attempt = perf_counter()
     existing = repo.find_in_progress_writing_attempt(
         user_id=user_id,
         mock_test_id=mock_test_id,
@@ -125,12 +159,19 @@ def start_attempt(
         existing = None
 
     if existing:
-        test, task = _pack_task(mock_test_id=mock_test_id, part=part)
+        if timing is not None:
+            timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
+        test, task = _pack_task(
+            mock_test_id=mock_test_id, part=part, timing=timing
+        )
         aid = UUID(str(existing["id"]))
+        t_saved = perf_counter()
         saved_row = repo.get_answer_for_attempt(
             attempt_id=aid, question_id=task.id
         )
-        return StartWritingResponse(
+        if timing is not None:
+            timing.task_ms += round((perf_counter() - t_saved) * 1000)
+        response = StartWritingResponse(
             attempt_id=aid,
             started_at=_parse_started_at(existing),
             server_time=datetime.now(UTC),
@@ -142,6 +183,9 @@ def start_attempt(
             task=task,
             saved_answer=str((saved_row or {}).get("user_answer") or "") or None,
         )
+        if timing is not None:
+            timing.duration_ms = round((perf_counter() - t_request) * 1000)
+        return response
 
     row = repo.insert_writing_attempt(
         user_id=user_id,
@@ -149,8 +193,10 @@ def start_attempt(
         mock_attempt_id=mock_attempt_id,
         part=part,
     )
-    test, task = _pack_task(mock_test_id=mock_test_id, part=part)
-    return StartWritingResponse(
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
+    test, task = _pack_task(mock_test_id=mock_test_id, part=part, timing=timing)
+    response = StartWritingResponse(
         attempt_id=UUID(str(row["id"])),
         started_at=_parse_started_at(row),
         server_time=datetime.now(UTC),
@@ -161,6 +207,9 @@ def start_attempt(
         test=test,
         task=task,
     )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
+    return response
 
 
 def autosave_answer(
@@ -169,9 +218,14 @@ def autosave_answer(
     user_id: UUID,
     question_id: UUID,
     user_answer: str,
+    timing: WritingAutosaveTiming | None = None,
 ) -> AutosaveResponse:
+    t_request = perf_counter()
+    t0 = perf_counter()
     attempt = repo.get_attempt(attempt_id)
     _ensure_owner(attempt, user_id)
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t0) * 1000)
     if attempt.get("module") != "writing":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a writing attempt.")
     if attempt.get("status") != "in_progress":
@@ -179,18 +233,27 @@ def autosave_answer(
 
     mock_test_id = UUID(str(attempt["mock_test_id"]))
     part = int(attempt.get("part") or 1)
+    t0 = perf_counter()
     if not repo.question_belongs_to(mock_test_id, question_id, part=part):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid question_id.")
+    if timing is not None:
+        timing.validate_ms = round((perf_counter() - t0) * 1000)
 
+    t0 = perf_counter()
     repo.upsert_answer(
         attempt_id=attempt_id,
         question_id=question_id,
         user_answer=user_answer,
     )
-    return AutosaveResponse(
+    if timing is not None:
+        timing.autosave_ms = round((perf_counter() - t0) * 1000)
+    response = AutosaveResponse(
         question_id=question_id,
         saved_at=datetime.now(UTC),
     )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
+    return response
 
 
 def submit_attempt(
@@ -198,9 +261,14 @@ def submit_attempt(
     attempt_id: UUID,
     user_id: UUID,
     answers: list[dict[str, str]],
+    timing: WritingSubmitTiming | None = None,
 ) -> SubmitWritingResponse:
+    t_request = perf_counter()
+    t0 = perf_counter()
     attempt = repo.get_attempt(attempt_id)
     _ensure_owner(attempt, user_id)
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t0) * 1000)
     if attempt.get("module") != "writing":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a writing attempt.")
     if attempt.get("status") != "in_progress":
@@ -211,7 +279,10 @@ def submit_attempt(
 
     mock_test_id = UUID(str(attempt["mock_test_id"]))
     part = int(attempt.get("part") or 1)
+    t0 = perf_counter()
     rows = repo.list_questions_for_part(mock_test_id=mock_test_id, part=part)
+    if timing is not None:
+        timing.task_ms = round((perf_counter() - t0) * 1000)
     if not rows:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -233,10 +304,14 @@ def submit_attempt(
             detail="Essay cannot be empty.",
         )
 
+    t0 = perf_counter()
     words = _word_count(essay)
     band = calculate_writing_band(words=words, part=part)
+    if timing is not None:
+        timing.scoring_compute_ms = round((perf_counter() - t0) * 1000)
 
     now = datetime.now(UTC)
+    t0 = perf_counter()
     completed = persist_module_submit_bundle(
         attempt_id=attempt_id,
         user_id=user_id,
@@ -256,6 +331,8 @@ def submit_attempt(
         },
         correct_count=words,
     )
+    if timing is not None:
+        timing.rpc_bundle_ms = round((perf_counter() - t0) * 1000)
     completed_raw = completed.get("completed_at") or now.isoformat()
     submitted_at = (
         datetime.fromisoformat(completed_raw.replace("Z", "+00:00"))
@@ -272,11 +349,17 @@ def submit_attempt(
     if mock_attempt_raw:
         from app.services import mock_orchestrator
 
+        progress_timing = MockProgressTiming() if timing is not None else None
+        if timing is not None:
+            timing.progress_timing = progress_timing
         progress = mock_orchestrator.on_module_attempt_completed(
             test_attempt_id=attempt_id,
             user_id=user_id,
             attempt=completed,
+            timing=progress_timing,
         )
+        if timing is not None and progress_timing is not None:
+            timing.progress_ms = progress_timing.progress_ms
         if progress is not None:
             mock_next_module = progress.next_module
             mock_next_part = progress.next_part
@@ -285,15 +368,7 @@ def submit_attempt(
             elif progress.next_module == "writing" and progress.next_part:
                 next_part = progress.next_part
 
-        mock_attempt_id = UUID(str(mock_attempt_raw))
-        mock_test_id = UUID(str(attempt["mock_test_id"]))
-        invalidate_mock_progress_caches(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            mock_attempt_id=mock_attempt_id,
-        )
-
-    return SubmitWritingResponse(
+    response = SubmitWritingResponse(
         attempt_id=attempt_id,
         status="completed",
         submitted_at=submitted_at,
@@ -307,6 +382,9 @@ def submit_attempt(
         mock_next_part=mock_next_part,
         mock_writing_complete=mock_writing_complete,
     )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
+    return response
 
 
 def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:

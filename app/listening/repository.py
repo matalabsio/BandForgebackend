@@ -62,14 +62,19 @@ def count_questions_by_part(*, mock_test_id: UUID) -> dict[int, int]:
     return counts
 
 
-def display_offset_before_part(*, mock_test_id: UUID, part: int) -> int:
+def part_display_offsets(*, mock_test_id: UUID) -> dict[int, int]:
+    """Part number → global display offset (one count query for all parts)."""
     counts = count_questions_by_part(mock_test_id=mock_test_id)
-    offset = 0
+    offsets: dict[int, int] = {}
+    running = 0
     for p in sorted(counts.keys()):
-        if p >= part:
-            break
-        offset += counts[p]
-    return offset
+        offsets[p] = running
+        running += counts[p]
+    return offsets
+
+
+def display_offset_before_part(*, mock_test_id: UUID, part: int) -> int:
+    return part_display_offsets(mock_test_id=mock_test_id).get(part, 0)
 
 
 def list_questions_public(

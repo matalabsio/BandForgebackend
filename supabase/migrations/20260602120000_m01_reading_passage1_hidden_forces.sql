@@ -1,5 +1,5 @@
--- BandForge reading seed: The Hidden Forces Behind Everyday Choices
--- mock_test_id = a0000000-0000-4000-8000-000000000001 (M01 passage 1 only)
+-- M01 Reading Passage 1: The Hidden Forces Behind Everyday Choices (examiner pack, word-for-word)
+-- Source: test/reading/source/Reading Task 2.pages
 
 DELETE FROM answers WHERE question_id IN (
   SELECT id FROM questions
@@ -7,6 +7,7 @@ DELETE FROM answers WHERE question_id IN (
     AND module = 'reading'
     AND part = 1
 );
+
 DELETE FROM questions
 WHERE mock_test_id = 'a0000000-0000-4000-8000-000000000001'
   AND module = 'reading'

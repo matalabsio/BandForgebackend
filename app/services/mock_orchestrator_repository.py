@@ -336,11 +336,11 @@ def live_question_parts(*, mock_test_id: UUID, module: str) -> list[int]:
     from app.mock_catalog.constants import MODULE_LIVE_PARTS
 
     configured = MODULE_LIVE_PARTS.get(str(mock_test_id), {}).get(module)
+    if configured:
+        return list(configured)
+
     all_parts = distinct_question_parts(mock_test_id=mock_test_id, module=module)
-    if not configured:
-        return all_parts
-    live = [p for p in all_parts if p in configured]
-    return live if live else all_parts[:1]
+    return all_parts if all_parts else [1]
 
 
 def list_module_scores_by_attempt_ids(

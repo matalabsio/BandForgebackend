@@ -11,12 +11,12 @@ PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (M01_MOCK_TEST_ID,)
 MODULE_ORDER = ("listening", "reading", "writing", "speaking")
 
 # Parts that count toward full-test progression (subset of questions in DB).
-# Test 1 quick flow: 1 listening part → 1 reading passage → 1 writing task → results.
+# Test 1 flow: Listening parts 1-4 → Reading passages 1-2 → writing tasks 1-2 → results.
 MODULE_LIVE_PARTS: dict[str, dict[str, tuple[int, ...]]] = {
     M01_MOCK_TEST_ID: {
-        "listening": (1,),
-        "reading": (1,),
-        "writing": (1,),
+        "listening": (1, 2, 3, 4),
+        "reading": (1, 2),
+        "writing": (1, 2),
     },
 }
 

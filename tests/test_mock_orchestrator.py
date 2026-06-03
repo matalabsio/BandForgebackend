@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from app.services.mock_orchestrator import (
+    _apply_mock_attempt_patch,
     _compute_module_statuses,
     _module_parts_complete,
 )
@@ -194,10 +195,23 @@ def test_assert_module_unlocked_allows_next_reading_passage_after_partial():
     mock_attempt_id = UUID("33333333-3333-4333-8333-333333333333")
     modules = _modules_config()
 
+    listening_done = [
+        {
+            "id": f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa{i}",
+            "module": "listening",
+            "status": "completed",
+            "part": i,
+        }
+        for i in (1, 2, 3, 4)
+    ]
     with (
         patch(
             "app.services.mock_orchestrator._assert_mock_attempt_owner",
             return_value={"id": str(mock_attempt_id)},
+        ),
+        patch(
+            "app.services.mock_orchestrator.read_unlock_snapshot",
+            return_value=None,
         ),
         patch(
             "app.services.mock_orchestrator.repo.list_mock_modules",
@@ -206,6 +220,7 @@ def test_assert_module_unlocked_allows_next_reading_passage_after_partial():
         patch(
             "app.services.mock_orchestrator.repo.list_module_attempts",
             return_value=[
+                *listening_done,
                 {
                     "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
                     "module": "reading",
@@ -216,7 +231,7 @@ def test_assert_module_unlocked_allows_next_reading_passage_after_partial():
         ),
         patch(
             "app.services.mock_orchestrator.repo.live_question_parts",
-            return_value=[1, 2, 3, 4],
+            return_value=[1, 2],
         ),
     ):
         assert_module_unlocked(
@@ -373,9 +388,9 @@ def test_start_mock_targets_listening_first():
 def test_m01_live_parts():
     from app.mock_catalog.constants import M01_MOCK_TEST_ID, MODULE_LIVE_PARTS
 
-    assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["listening"] == (1,)
-    assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["reading"] == (1,)
-    assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["writing"] == (1,)
+    assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["listening"] == (1, 2, 3, 4)
+    assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["reading"] == (1, 2)
+    assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["writing"] == (1, 2)
 
 
 def test_assert_module_unlocked_rejects_completed_listening_part():
@@ -394,6 +409,10 @@ def test_assert_module_unlocked_rejects_completed_listening_part():
         patch(
             "app.services.mock_orchestrator._assert_mock_attempt_owner",
             return_value={"id": str(mock_attempt_id)},
+        ),
+        patch(
+            "app.services.mock_orchestrator.read_unlock_snapshot",
+            return_value=None,
         ),
         patch(
             "app.services.mock_orchestrator.repo.list_mock_modules",
@@ -451,6 +470,10 @@ def test_assert_module_unlocked_allows_next_listening_part():
             return_value={"id": str(mock_attempt_id)},
         ),
         patch(
+            "app.services.mock_orchestrator.read_unlock_snapshot",
+            return_value=None,
+        ),
+        patch(
             "app.services.mock_orchestrator.repo.list_mock_modules",
             return_value=modules,
         ),
@@ -476,7 +499,7 @@ def test_assert_module_unlocked_allows_next_listening_part():
         listening = type(
             "MP",
             (),
-            {"module": "listening", "status": "available"},
+            {"module": "listening", "status": "in_progress"},
         )()
         mock_statuses.return_value = [listening]
 
@@ -523,3 +546,14 @@ def test_get_mock_session_prefers_in_progress():
         mock_attempt_id=attempt_id,
         user_id=user_id,
     )
+
+
+def test_apply_mock_attempt_patch_merges_fields_in_memory():
+    bundle = {
+        "mock_attempt": {"id": "ma-1", "current_module": "listening", "status": "in_progress"},
+        "modules": [],
+        "module_attempts": [],
+    }
+    patched = _apply_mock_attempt_patch(bundle, {"current_module": "reading"})
+    assert patched["mock_attempt"]["current_module"] == "reading"
+    assert bundle["mock_attempt"]["current_module"] == "listening"

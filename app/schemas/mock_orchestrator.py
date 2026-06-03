@@ -30,6 +30,19 @@ class StartMockRequest(BaseModel):
     force_new: bool = False
 
 
+class MockUnlockSnapshot(BaseModel):
+    """Minimal progress for assert_module_unlocked (no scores or answers)."""
+
+    done_parts: dict[str, list[int]] = Field(default_factory=dict)
+    current_module: ModuleName | None = None
+    module_status: dict[str, ModuleProgressStatus] = Field(default_factory=dict)
+
+
+class MockProgressCachePayload(BaseModel):
+    progress: MockAttemptProgress
+    unlock: MockUnlockSnapshot
+
+
 class MockAttemptProgress(BaseModel):
     mock_attempt_id: UUID
     mock_test_id: UUID
