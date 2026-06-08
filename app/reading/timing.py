@@ -25,6 +25,18 @@ class ReadingStartTiming:
 
 
 @dataclass
+class ReadingAutosaveTiming:
+    duration_ms: int = 0
+    attempt_ms: int = 0
+    validate_ms: int = 0
+    upsert_ms: int = 0
+
+    def to_log_fields(self) -> dict[str, Any]:
+        out = asdict(self)
+        return {k: v for k, v in out.items() if v != 0 and v is not None}
+
+
+@dataclass
 class ReadingSubmitTiming:
     duration_ms: int = 0
     attempt_ms: int = 0

@@ -3,7 +3,7 @@
 Place the founder file here before upload:
 
 ```text
-full.mp3   ← copy from test/listening/audio/Listening_S2_Audio.mp3
+full.mp3   ← copy from test/MT1/LT/audio/Listening_S2_Audio.mp3
 ```
 
 Upload:

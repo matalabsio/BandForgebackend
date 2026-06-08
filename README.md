@@ -168,12 +168,12 @@ Map founder JSON → DB rows + SQL seed. **Answers and transcripts are server-on
 
 - Spec: [`docs/listening_ingestion_mapping.md`](docs/listening_ingestion_mapping.md)
 - Normalizer: `python -m scripts.normalize_listening_mock`
-- **S2** — mock `e0000000-0000-4000-8000-000000000002`, audio `test/listening/audio/Listening_S2_Audio.mp3` → `--preset bandforge-s2`
-- **S3** — mock `e0000000-0000-4000-8000-000000000003`, audio `test/listening/audio/Listening_S3_Audio.mp3` → `--preset bandforge-s3`
-- **S4** — mock `e0000000-0000-4000-8000-000000000004`, audio `test/listening/audio/Listening_S4_Audio.mp3` → `--preset bandforge-s4` (RTF: `test/listening/transcripts/Listening_S4_Elevenlabs_Transcript.rtf`)
+- **S2** — mock `e0000000-0000-4000-8000-000000000002`, audio `test/MT1/LT/audio/Listening_S2_Audio.mp3` → `--preset bandforge-s2`
+- **S3** — mock `e0000000-0000-4000-8000-000000000003`, audio `test/MT1/LT/audio/Listening_S3_Audio.mp3` → `--preset bandforge-s3`
+- **S4** — mock `e0000000-0000-4000-8000-000000000004`, audio `test/MT1/LT/audio/Listening_S4_Audio.mp3` → `--preset bandforge-s4` (RTF: `test/MT1/LT/transcripts/Listening_S4_Elevenlabs_Transcript.rtf`)
 - **M01** — full mock; upload: `python -m scripts.upload_m01_listening_audio`
 - Verify: `python -m scripts.verify_listening_mock --mock-id <uuid>`
-- R2 bucket must have **no public access**; do not commit MP3s (`test/listening/audio/*.mp3`, `audio_seed/**/full.mp3` are gitignored)
+- R2 bucket must have **no public access**; do not commit MP3s (`test/MT1/LT/audio/*.mp3`, `test/MT2/LT/audio/*.mp3`, `audio_seed/**/full.mp3` are gitignored)
 
 Frontend: `/test/listening?part=2` (Leisure Centre), `?part=3` (Tutorial), `?part=4` (Transit lecture)
 

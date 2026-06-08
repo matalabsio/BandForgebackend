@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.cache.hybrid_cache import get_json, set_json
 from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
 from app.schemas.test_engine import TestSummary
@@ -65,6 +66,13 @@ def _parse_started_at(attempt: dict[str, Any]) -> datetime:
     return datetime.now(UTC)
 
 
+WRITING_TASK_CACHE_TTL_SEC = 1800
+
+
+def _writing_task_cache_key(mock_test_id: UUID, part: int) -> str:
+    return f"writing_task:{mock_test_id}:{part}"
+
+
 def _row_to_task(row: dict[str, Any]) -> WritingTaskQuestion:
     opts = row.get("options")
     return WritingTaskQuestion(
@@ -83,6 +91,21 @@ def _pack_task(
     part: int,
     timing: WritingStartTiming | None = None,
 ) -> tuple[TestSummary, WritingTaskQuestion]:
+    cache_key = _writing_task_cache_key(mock_test_id, part)
+    cached = get_json(cache_key)
+    if isinstance(cached, dict) and cached.get("task_row"):
+        t_task = perf_counter()
+        test = TestSummary(
+            id=UUID(str(cached["test_id"])),
+            title=str(cached.get("test_title") or ""),
+            description=cached.get("test_description"),
+        )
+        task = _row_to_task(cached["task_row"])
+        if timing is not None:
+            timing.task_source = "cache"
+            timing.task_ms = round((perf_counter() - t_task) * 1000)
+        return test, task
+
     t_prompt = perf_counter()
     test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
     if timing is not None:
@@ -100,6 +123,16 @@ def _pack_task(
         description=test_row.get("description"),
     )
     task = _row_to_task(rows[0])
+    set_json(
+        cache_key,
+        {
+            "test_id": str(test_row["id"]),
+            "test_title": test_row.get("title"),
+            "test_description": test_row.get("description"),
+            "task_row": rows[0],
+        },
+        ttl_seconds=WRITING_TASK_CACHE_TTL_SEC,
+    )
     if timing is not None:
         timing.task_source = "db"
         timing.task_ms = round((perf_counter() - t_task) * 1000)

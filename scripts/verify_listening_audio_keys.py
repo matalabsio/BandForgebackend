@@ -16,6 +16,7 @@ from app.storage.r2 import object_exists, parse_r2_object_url
 
 PRESET_IDS = {
     "m01": "a0000000-0000-4000-8000-000000000001",
+    "m02": "a0000000-0000-4000-8000-000000000002",
 }
 
 

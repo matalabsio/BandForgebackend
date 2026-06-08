@@ -12,7 +12,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.reading import service
-from app.reading.timing import ReadingStartTiming, ReadingSubmitTiming
+from app.reading.timing import (
+    ReadingAutosaveTiming,
+    ReadingStartTiming,
+    ReadingSubmitTiming,
+)
 from app.reading.schemas import (
     AutosaveRequest,
     AutosaveResponse,
@@ -133,12 +137,31 @@ def autosave_reading_answer(
     body: AutosaveRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> AutosaveResponse:
-    return service.autosave_answer(
-        attempt_id=attempt_id,
-        user_id=current_user.id,
-        question_id=body.question_id,
-        user_answer=body.user_answer,
-    )
+    started = perf_counter()
+    timing = ReadingAutosaveTiming()
+    try:
+        response = service.autosave_answer(
+            attempt_id=attempt_id,
+            user_id=current_user.id,
+            question_id=body.question_id,
+            user_answer=body.user_answer,
+            timing=timing,
+        )
+        _timing_log(
+            f"/api/reading/attempts/{attempt_id}/autosave",
+            started,
+            200,
+            extra=timing.to_log_fields(),
+        )
+        return response
+    except Exception:
+        _timing_log(
+            f"/api/reading/attempts/{attempt_id}/autosave",
+            started,
+            500,
+            extra=timing.to_log_fields(),
+        )
+        raise
 
 
 @router.post("/attempts/{attempt_id}/submit", response_model=SubmitReadingResponse)

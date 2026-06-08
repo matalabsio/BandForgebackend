@@ -2,8 +2,8 @@
 
 Usage:
     cd backend && source .venv/bin/activate
-    python -m scripts.apply_reading_seed ../test/reading/interface/BandForge_Reading_T2_Interface_Data.json
-    python -m scripts.apply_reading_seed ../test/reading/interface/BandForge_Reading_T3_Interface_Data.json
+    python -m scripts.apply_reading_seed ../test/MT1/RT/interface/BandForge_Reading_T2_Interface_Data.json
+    python -m scripts.apply_reading_seed ../test/MT1/RT/interface/BandForge_Reading_T3_Interface_Data.json
 """
 
 from __future__ import annotations

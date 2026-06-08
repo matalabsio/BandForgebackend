@@ -4,7 +4,7 @@ Usage::
 
     cd backend && source .venv/bin/activate
     python -m scripts.normalize_reading_mock \\
-      --input ../test/reading/interface/BandForge_Reading_T2_Interface_Data.json \\
+      --input ../test/MT1/RT/interface/BandForge_Reading_T2_Interface_Data.json \\
       --sql seed/bandforge_reading_t2_seed.sql
 """
 
@@ -39,7 +39,10 @@ def _sql_json(value: Any | None) -> str:
 
 def _correct_answer(q: dict[str, Any], qtype: str) -> str:
     if qtype == "tfng":
-        return str(q["answer"]).upper()
+        ans = str(q["answer"]).upper()
+        if ans in {"YES", "NO"}:
+            return ans
+        return ans
     if qtype == "matching_headings":
         return str(q["answer"]).strip().lower()
     accepted = q.get("accepted_answers") or [q.get("answer")]
@@ -55,7 +58,25 @@ def _prompt(q: dict[str, Any], qtype: str, group: dict[str, Any]) -> str:
     return str(q.get("sentence") or q.get("prompt") or "")
 
 
-def flatten_questions(data: dict[str, Any]) -> list[dict[str, Any]]:
+YNG_OPTIONS = [
+    {"label": "YES", "text": "YES"},
+    {"label": "NO", "text": "NO"},
+    {"label": "NOT GIVEN", "text": "NOT GIVEN"},
+]
+
+
+def _group_options(group: dict[str, Any], qtype: str) -> list[dict[str, str]] | None:
+    if qtype == "matching_headings":
+        return group.get("headings")
+    if qtype == "tfng":
+        variant = str(group.get("options_variant") or "tfng").lower()
+        if variant in {"yes_no", "ynng", "yes"}:
+            return YNG_OPTIONS
+        return TFNG_OPTIONS
+    return None
+
+
+def flatten_questions(data: dict[str, Any], *, part: int = 1) -> list[dict[str, Any]]:
     passage = str(data["passage_text"])
     mock_id = str(data["mock_test_id"])
     title = str(data["title"])
@@ -64,23 +85,20 @@ def flatten_questions(data: dict[str, Any]) -> list[dict[str, Any]]:
 
     for group in data.get("question_groups") or []:
         qtype = str(group["question_type"])
-        headings = group.get("headings")
-        heading_options = headings if qtype == "matching_headings" else None
+        group_options = _group_options(group, qtype)
         for q in group.get("questions") or []:
             num = int(q["number"])
-            options = heading_options if qtype == "matching_headings" else (
-                TFNG_OPTIONS if qtype == "tfng" else None
-            )
             rows.append(
                 {
                     "mock_test_id": mock_id,
                     "title": title,
                     "description": description,
+                    "part": part,
                     "question_number": num,
                     "question_type": qtype,
                     "prompt": _prompt(q, qtype, group),
                     "passage_text": passage if num == 1 else None,
-                    "options": options,
+                    "options": group_options,
                     "correct_answer": _correct_answer(q, qtype),
                     "skill_tag": q.get("skill_tag") or qtype,
                 }
@@ -88,46 +106,67 @@ def flatten_questions(data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def render_sql(rows: list[dict[str, Any]]) -> str:
+def render_sql(
+    rows: list[dict[str, Any]],
+    *,
+    skip_mock_upsert: bool = False,
+    scoped_part: int | None = None,
+) -> str:
     if not rows:
         raise ValueError("No questions produced")
     mock_id = rows[0]["mock_test_id"]
     title = rows[0]["title"]
     description = rows[0].get("description")
+    part = scoped_part if scoped_part is not None else int(rows[0]["part"])
+    scope_clause = (
+        f"mock_test_id = '{mock_id}' AND module = 'reading' AND part = {part}"
+    )
 
     lines = [
         f"-- BandForge reading seed: {title}",
-        f"-- mock_test_id = {mock_id}",
+        f"-- mock_test_id = {mock_id} part = {part}",
         "",
         "DELETE FROM answers WHERE question_id IN (",
-        f"  SELECT id FROM questions WHERE mock_test_id = '{mock_id}'",
+        f"  SELECT id FROM questions WHERE {scope_clause}",
         ");",
-        f"DELETE FROM questions WHERE mock_test_id = '{mock_id}';",
-        f"DELETE FROM test_attempts WHERE mock_test_id = '{mock_id}';",
-        "",
-        "INSERT INTO mock_tests (id, title, description, is_published)",
-        "VALUES (",
-        f"  '{mock_id}',",
-        f"  {_sql_str(title)},",
-        f"  {_sql_str(description)},",
-        "  true",
-        ")",
-        "ON CONFLICT (id) DO UPDATE SET",
-        "  title = EXCLUDED.title,",
-        "  description = EXCLUDED.description,",
-        "  is_published = true;",
-        "",
-        "INSERT INTO questions (",
-        "  mock_test_id, module, question_type, question_number, prompt,",
-        "  passage_text, options, correct_answer, skill_tag",
-        ") VALUES",
+        f"DELETE FROM questions WHERE {scope_clause};",
     ]
+
+    if not skip_mock_upsert:
+        lines.extend(
+            [
+                f"DELETE FROM test_attempts WHERE mock_test_id = '{mock_id}';",
+                "",
+                "INSERT INTO mock_tests (id, title, description, is_published)",
+                "VALUES (",
+                f"  '{mock_id}',",
+                f"  {_sql_str(title)},",
+                f"  {_sql_str(description)},",
+                "  true",
+                ")",
+                "ON CONFLICT (id) DO UPDATE SET",
+                "  title = EXCLUDED.title,",
+                "  description = EXCLUDED.description,",
+                "  is_published = true;",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "INSERT INTO questions (",
+            "  mock_test_id, module, question_type, question_number, part, prompt,",
+            "  passage_text, options, correct_answer, skill_tag",
+            ") VALUES",
+        ]
+    )
 
     value_lines = []
     for r in rows:
         value_lines.append(
             "("
             f"'{r['mock_test_id']}', 'reading', '{r['question_type']}', {r['question_number']}, "
+            f"{r['part']}, "
             f"{_sql_str(r['prompt'])}, "
             f"{_sql_str(r['passage_text'])}, "
             f"{_sql_json(r['options'])}, "
@@ -143,10 +182,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--sql", required=True, type=Path)
+    parser.add_argument("--part", type=int, default=1)
+    parser.add_argument(
+        "--skip-mock-upsert",
+        action="store_true",
+        help="Omit INSERT INTO mock_tests (full-mock catalog already exists)",
+    )
     args = parser.parse_args()
     data = json.loads(args.input.read_text(encoding="utf-8"))
-    rows = flatten_questions(data)
-    sql = render_sql(rows)
+    rows = flatten_questions(data, part=args.part)
+    sql = render_sql(
+        rows,
+        skip_mock_upsert=args.skip_mock_upsert,
+        scoped_part=args.part,
+    )
     args.sql.parent.mkdir(parents=True, exist_ok=True)
     args.sql.write_text(sql, encoding="utf-8")
     print(f"Wrote {len(rows)} questions -> {args.sql}")

@@ -393,6 +393,14 @@ def test_m01_live_parts():
     assert MODULE_LIVE_PARTS[M01_MOCK_TEST_ID]["writing"] == (1, 2)
 
 
+def test_m02_live_parts():
+    from app.mock_catalog.constants import M02_MOCK_TEST_ID, MODULE_LIVE_PARTS
+
+    assert MODULE_LIVE_PARTS[M02_MOCK_TEST_ID]["listening"] == (1, 2, 3, 4)
+    assert MODULE_LIVE_PARTS[M02_MOCK_TEST_ID]["reading"] == (1, 2, 3)
+    assert MODULE_LIVE_PARTS[M02_MOCK_TEST_ID]["writing"] == (1, 2)
+
+
 def test_assert_module_unlocked_rejects_completed_listening_part():
     from unittest.mock import patch
 
@@ -515,7 +523,7 @@ def test_assert_module_unlocked_allows_next_listening_part():
 def test_get_mock_session_prefers_in_progress():
     from unittest.mock import MagicMock, patch
 
-    from app.services.mock_orchestrator import get_mock_session
+    from app.services.mock_orchestrator import get_mock_session_timed
 
     user_id = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
     attempt_id = UUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
@@ -538,9 +546,12 @@ def test_get_mock_session_prefers_in_progress():
             return_value=progress,
         ) as mock_progress,
     ):
-        result = get_mock_session(mock_test_id=M01, user_id=user_id)
+        result, timing = get_mock_session_timed(mock_test_id=M01, user_id=user_id)
 
     assert result is progress
+    assert timing["cache_hit"] is False
+    assert "find_mock_ms" in timing
+    assert "progress_bundle_ms" in timing
     mock_history.assert_not_called()
     mock_progress.assert_called_once_with(
         mock_attempt_id=attempt_id,

@@ -1,6 +1,6 @@
 # Reading ingestion mapping
 
-Founder content lives in `test/reading/interface/BandForge_Reading_T2_Interface_Data.json` and `test/reading/interface/BandForge_Reading_T3_Interface_Data.json`, sourced from `test/reading/source/Reading Task 2.pages` and `Reading Task 3.pages`.
+Founder content lives in `test/MT1/RT/interface/BandForge_Reading_T2_Interface_Data.json` and `test/MT1/RT/interface/BandForge_Reading_T3_Interface_Data.json`, sourced from `test/MT1/RT/source/Reading Task 2.pages` and `Reading Task 3.pages`.
 
 ## Stable mock IDs
 
@@ -16,9 +16,9 @@ Legacy Deferral mock `b0000000-...0001` is unpublished.
 ```bash
 cd backend && source .venv/bin/activate
 python -m scripts.normalize_reading_mock \
-  --input ../test/reading/interface/BandForge_Reading_T2_Interface_Data.json \
+  --input ../test/MT1/RT/interface/BandForge_Reading_T2_Interface_Data.json \
   --sql seed/bandforge_reading_t2_seed.sql
-python -m scripts.apply_reading_seed ../test/reading/interface/BandForge_Reading_T2_Interface_Data.json
+python -m scripts.apply_reading_seed ../test/MT1/RT/interface/BandForge_Reading_T2_Interface_Data.json
 python -m scripts.verify_reading_mock --mock-id b0000000-0000-4000-8000-000000000002
 ```
 

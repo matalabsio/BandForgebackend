@@ -7,9 +7,9 @@ from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, get_current_user_timed
 from app.auth.schemas import UserPublic
 from app.config import get_settings
 from app.schemas.mock_orchestrator import (
@@ -28,18 +28,24 @@ from app.services import mock_orchestrator
 router = APIRouter(prefix="/api/mock-attempts", tags=["mock-attempts"])
 
 
-def _timing_log(route: str, started: float, status_code: int) -> None:
-    print(
-        json.dumps(
-            {
-                "route": route,
-                "duration_ms": round((perf_counter() - started) * 1000, 2),
-                "cache_hit": False,
-                "cache_layer": "none",
-                "status": status_code,
-            }
-        )
-    )
+def _timing_log(
+    route: str,
+    started: float,
+    status_code: int,
+    *,
+    extra: dict | None = None,
+) -> None:
+    payload: dict = {
+        "route": route,
+        "duration_ms": round((perf_counter() - started) * 1000, 2),
+        "status": status_code,
+    }
+    if extra:
+        payload.update(extra)
+    else:
+        payload["cache_hit"] = False
+        payload["cache_layer"] = "none"
+    print(json.dumps(payload))
 
 
 @router.get("/catalog", response_model=list[MockCatalogItem])
@@ -65,13 +71,41 @@ def start_mock_attempt(
 
 @router.get("/session", response_model=MockAttemptProgress | None)
 def get_mock_session_state(
+    request: Request,
     mock_test_id: UUID,
-    current_user: Annotated[UserPublic, Depends(get_current_user)],
+    current_user: Annotated[UserPublic, Depends(get_current_user_timed)],
 ) -> MockAttemptProgress | None:
-    return mock_orchestrator.get_mock_session(
-        mock_test_id=mock_test_id,
-        user_id=current_user.id,
-    )
+    started = perf_counter()
+    try:
+        progress, timing = mock_orchestrator.get_mock_session_timed(
+            mock_test_id=mock_test_id,
+            user_id=current_user.id,
+        )
+        _timing_log(
+            "/api/mock-attempts/session",
+            started,
+            200,
+            extra={
+                "cache_hit": timing["cache_hit"],
+                "auth_ms": getattr(request.state, "auth_ms", None),
+                "find_mock_ms": timing["find_mock_ms"],
+                "progress_bundle_ms": timing["progress_bundle_ms"],
+            },
+        )
+        return progress
+    except Exception:
+        _timing_log(
+            "/api/mock-attempts/session",
+            started,
+            500,
+            extra={
+                "cache_hit": False,
+                "auth_ms": getattr(request.state, "auth_ms", None),
+                "find_mock_ms": 0,
+                "progress_bundle_ms": 0,
+            },
+        )
+        raise
 
 
 @router.get("/in-progress", response_model=InProgressMockAttempt | None)
