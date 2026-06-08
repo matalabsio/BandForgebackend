@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
@@ -37,6 +38,17 @@ async def get_current_user(
     except (JWTError, ValueError) as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token.") from exc
     return await service.get_user_by_id(user_id)
+
+
+async def get_current_user_timed(
+    request: Request,
+    bf_access: Annotated[str | None, Cookie(alias=ACCESS_TOKEN_COOKIE)] = None,
+) -> UserPublic:
+    """Like get_current_user; stores auth_ms on request.state for route timing logs."""
+    t0 = perf_counter()
+    user = await get_current_user(request, bf_access)
+    request.state.auth_ms = round((perf_counter() - t0) * 1000, 2)
+    return user
 
 
 async def get_optional_user(

@@ -3,7 +3,7 @@
 Place the founder MP3 here before uploading to R2:
 
 ```bash
-cp ../../../../test/listening/audio/Listening_S3_Audio.mp3 full.mp3
+cp ../../../../test/MT1/LT/audio/Listening_S3_Audio.mp3 full.mp3
 cd ../.. && python -m scripts.upload_listening_audio --preset bandforge-s3
 ```
 

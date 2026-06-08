@@ -1,6 +1,6 @@
 # Listening mock ingestion — founder JSON → Supabase
 
-Canonical transform spec for BandForge founder listening assets in `test/listening/` (see `test/README.md`).
+Canonical transform spec for BandForge founder listening assets in `test/MT1/LT/` and `test/MT2/LT/` (see `test/README.md`).
 Normalizer: `backend/scripts/normalize_listening_mock.py`.
 
 ## Conventions (v1)
@@ -26,7 +26,7 @@ Normalizer: `backend/scripts/normalize_listening_mock.py`.
 - `correct_answer` is stored in Supabase but **never** returned by `GET /api/listening/{mock_id}/questions` (see `QUESTION_PUBLIC_COLUMNS`).
 - Full transcripts live only in `seed/generated/*.meta.json` — not in the API.
 - `audio_url` in DB is an **R2 object key**; the API returns a **presigned GET** only after `POST /api/listening/{mock_id}/start` (in-progress attempt required).
-- R2 bucket must stay **private** (no public bucket policy). MP3s under `test/listening/audio/*.mp3` and `backend/audio_seed/**/full.mp3` are gitignored; upload via `upload_listening_audio` or `upload_m01_listening_audio` for M01.
+- R2 bucket must stay **private** (no public bucket policy). MP3s under `test/MT1/LT/audio/*.mp3`, `test/MT2/LT/audio/*.mp3`, and `backend/audio_seed/**/full.mp3` are gitignored; upload via `upload_listening_audio` or `upload_m01_listening_audio` for M01.
 
 ## Founder JSON (S2)
 
@@ -39,7 +39,7 @@ Types: `multiple_choice` → `mcq`; `matching` → `matching`.
 
 ## Founder JSON (S4)
 
-Note completion (10 gaps) → `sentence_completion` rows from `text_before` / `text_after`. Source: [`test/listening/interface/BandForge_Listening_S4_Interface_Data.json`](../../test/listening/interface/BandForge_Listening_S4_Interface_Data.json) (derived from `test/listening/transcripts/Listening_S4_Elevenlabs_Transcript.rtf`). Accepts alternate spellings via `accepted_answers` joined with `/` (e.g. `traveller/traveler`, `transit-oriented/transit oriented`).
+Note completion (10 gaps) → `sentence_completion` rows from `text_before` / `text_after`. Source: [`test/MT1/LT/interface/BandForge_Listening_S4_Interface_Data.json`](../../test/MT1/LT/interface/BandForge_Listening_S4_Interface_Data.json) (derived from `test/MT1/LT/transcripts/Listening_S4_Elevenlabs_Transcript.rtf`). Accepts alternate spellings via `accepted_answers` joined with `/` (e.g. `traveller/traveler`, `transit-oriented/transit oriented`).
 
 ## Founder JSON (S3)
 
@@ -57,9 +57,9 @@ Example: group `s3_mc_multi_1_2` with answers `["A","E"]` → Q1 correct `A`, Q2
 **S2**
 
 ```bash
-cp ../test/listening/audio/Listening_S2_Audio.mp3 audio_seed/bandforge-s2/part-1/full.mp3
+cp ../test/MT1/LT/audio/Listening_S2_Audio.mp3 audio_seed/bandforge-s2/part-1/full.mp3
 python -m scripts.normalize_listening_mock \
-  --input ../test/listening/interface/BandForge_Listening_S2_Interface_Data.json \
+  --input ../test/MT1/LT/interface/BandForge_Listening_S2_Interface_Data.json \
   --mock-id e0000000-0000-4000-8000-000000000002 \
   --audio-key listening/bandforge-s2/part-1/full.mp3 \
   --sql seed/bandforge_listening_s2_seed.sql
@@ -70,9 +70,9 @@ python -m scripts.verify_listening_mock --mock-id e0000000-0000-4000-8000-000000
 **S3**
 
 ```bash
-cp ../test/listening/audio/Listening_S3_Audio.mp3 audio_seed/bandforge-s3/part-1/full.mp3
+cp ../test/MT1/LT/audio/Listening_S3_Audio.mp3 audio_seed/bandforge-s3/part-1/full.mp3
 python -m scripts.normalize_listening_mock \
-  --input ../test/listening/interface/BandForge_Listening_S3_Interface_Data.json \
+  --input ../test/MT1/LT/interface/BandForge_Listening_S3_Interface_Data.json \
   --mock-id e0000000-0000-4000-8000-000000000003 \
   --audio-key listening/bandforge-s3/part-1/full.mp3 \
   --meta-out seed/generated/bandforge_s3.meta.json \
@@ -84,9 +84,9 @@ python -m scripts.verify_listening_mock --mock-id e0000000-0000-4000-8000-000000
 **S4**
 
 ```bash
-cp ../test/listening/audio/Listening_S4_Audio.mp3 audio_seed/bandforge-s4/part-1/full.mp3
+cp ../test/MT1/LT/audio/Listening_S4_Audio.mp3 audio_seed/bandforge-s4/part-1/full.mp3
 python -m scripts.normalize_listening_mock \
-  --input ../test/listening/interface/BandForge_Listening_S4_Interface_Data.json \
+  --input ../test/MT1/LT/interface/BandForge_Listening_S4_Interface_Data.json \
   --mock-id e0000000-0000-4000-8000-000000000004 \
   --audio-key listening/bandforge-s4/part-1/full.mp3 \
   --meta-out seed/generated/bandforge_s4.meta.json \

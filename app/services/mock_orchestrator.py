@@ -854,18 +854,25 @@ def get_in_progress(
     return in_progress
 
 
-def get_mock_session(
+def get_mock_session_timed(
     *, mock_test_id: UUID, user_id: UUID
-) -> MockAttemptProgress | None:
-    """Return progress for the active or most recent mock attempt in one round trip."""
+) -> tuple[MockAttemptProgress | None, dict[str, float | bool]]:
+    """Return progress and timing metadata for GET /api/mock-attempts/session."""
+    timing: dict[str, float | bool] = {
+        "cache_hit": False,
+        "find_mock_ms": 0.0,
+        "progress_bundle_ms": 0.0,
+    }
     cache_key = f"mock_session:{user_id}:{mock_test_id}"
     cached = get_json(cache_key)
     if isinstance(cached, dict):
         try:
-            return MockAttemptProgress.model_validate(cached)
+            timing["cache_hit"] = True
+            return MockAttemptProgress.model_validate(cached), timing
         except Exception:
             pass
 
+    t_find = perf_counter()
     row = repo.find_in_progress_mock_attempt(
         user_id=user_id, mock_test_id=mock_test_id
     )
@@ -874,15 +881,26 @@ def get_mock_session(
             user_id=user_id, mock_test_id=mock_test_id, limit=1
         )
         row = rows[0] if rows else None
+    timing["find_mock_ms"] = round((perf_counter() - t_find) * 1000, 2)
 
     if not row:
         delete_many([cache_key])
-        return None
+        return None, timing
 
+    t_progress = perf_counter()
     progress = get_progress(
         mock_attempt_id=UUID(str(row["id"])), user_id=user_id
     )
+    timing["progress_bundle_ms"] = round((perf_counter() - t_progress) * 1000, 2)
     set_json(cache_key, progress.model_dump(mode="json"), ttl_seconds=30)
+    return progress, timing
+
+
+def get_mock_session(
+    *, mock_test_id: UUID, user_id: UUID
+) -> MockAttemptProgress | None:
+    """Return progress for the active or most recent mock attempt in one round trip."""
+    progress, _ = get_mock_session_timed(mock_test_id=mock_test_id, user_id=user_id)
     return progress
 
 

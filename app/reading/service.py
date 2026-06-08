@@ -32,7 +32,11 @@ from app.reading.schemas import (
     StartReadingResponse,
     SubmitReadingResponse,
 )
-from app.reading.timing import ReadingStartTiming, ReadingSubmitTiming
+from app.reading.timing import (
+    ReadingAutosaveTiming,
+    ReadingStartTiming,
+    ReadingSubmitTiming,
+)
 from app.schemas.test_engine import TestSummary
 from app.services.mock_progress_timing import MockProgressTiming
 
@@ -443,27 +447,42 @@ def autosave_answer(
     user_id: UUID,
     question_id: UUID,
     user_answer: str,
+    timing: ReadingAutosaveTiming | None = None,
 ) -> AutosaveResponse:
+    t_request = perf_counter()
+    t0 = perf_counter()
     attempt = repo.get_attempt(attempt_id)
     _ensure_owner(attempt, user_id)
     if attempt.get("module") != "reading":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a reading attempt.")
     if attempt.get("status") != "in_progress":
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Attempt is not in progress.")
+    if timing is not None:
+        timing.attempt_ms = round((perf_counter() - t0) * 1000)
 
     mock_test_id = UUID(str(attempt["mock_test_id"]))
+    t0 = perf_counter()
     if not repo.question_belongs_to(mock_test_id, question_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid question_id.")
+    if timing is not None:
+        timing.validate_ms = round((perf_counter() - t0) * 1000)
 
+    t0 = perf_counter()
     repo.upsert_answer(
         attempt_id=attempt_id,
         question_id=question_id,
         user_answer=user_answer.strip(),
     )
-    return AutosaveResponse(
+    if timing is not None:
+        timing.upsert_ms = round((perf_counter() - t0) * 1000)
+
+    response = AutosaveResponse(
         question_id=question_id,
         saved_at=datetime.now(UTC),
     )
+    if timing is not None:
+        timing.duration_ms = round((perf_counter() - t_request) * 1000)
+    return response
 
 
 def submit_attempt(

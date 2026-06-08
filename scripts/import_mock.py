@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Import a full IELTS mock from test/mocks/M01/ into Supabase + optional R2 upload hints.
+"""Import a full IELTS mock from test/MT1/ or test/MT2/ into Supabase + optional R2 upload hints.
 
 Usage::
 
     cd backend && source .venv/bin/activate
-    python -m scripts.import_mock --mock-dir ../test/mocks/M01 --dry-run
-    python -m scripts.import_mock --mock-dir ../test/mocks/M01 --apply
+    python -m scripts.import_mock --mock-dir ../test/MT1 --dry-run
+    python -m scripts.import_mock --mock-dir ../test/MT1 --apply
 
 Expects manifest.json::
 
@@ -36,7 +36,7 @@ def main() -> int:
     parser.add_argument(
         "--mock-dir",
         type=Path,
-        default=REPO_ROOT / "test" / "mocks" / "M01",
+        default=REPO_ROOT / "test" / "MT1",
         help="Directory with manifest.json and module subfolders",
     )
     parser.add_argument("--dry-run", action="store_true")
@@ -79,7 +79,7 @@ def main() -> int:
 
     print("\nNext steps (manual):")
     print(
-        "  1. Normalize test/listening/interface/*.json and test/reading/interface/*.json"
+        "  1. Normalize test/MT1/LT/interface/*.json and test/MT1/RT/interface/*.json"
     )
     print("  2. python -m scripts.upload_m01_listening_audio")
     print("  3. Apply supabase/migrations/*_m01*.sql")

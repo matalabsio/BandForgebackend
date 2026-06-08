@@ -57,6 +57,11 @@ PRESETS: dict[str, dict[str, Path | str]] = {
         "key_prefix": "listening/m01",
         "mode": "full_part",
     },
+    "m02": {
+        "source": REPO_ROOT / "audio_seed" / "m02",
+        "key_prefix": "listening/m02",
+        "mode": "full_part",
+    },
 }
 
 

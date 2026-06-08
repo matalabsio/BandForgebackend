@@ -1,4 +1,4 @@
-"""Upload M01 listening MP3s from test/listening/audio/ to R2.
+"""Upload M01 listening MP3s from test/MT1/LT/audio/ to R2.
 
 Uses legacy object keys ``test/Listening_S{N}_Audio.mp3`` expected by Supabase.
 

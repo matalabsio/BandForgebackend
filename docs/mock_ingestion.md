@@ -12,18 +12,16 @@ M01_Full_Academic_Mock/
 ## Repo layout
 
 ```text
-test/listening/
-  audio/              # Listening_S1–S4_Audio.mp3
-  interface/          # BandForge_Listening_S*_Interface_Data.json
-  transcripts/ source/ screenshots/
-test/reading/
-  interface/          # BandForge_Reading_T*_Interface_Data.json
-  source/             # Reading Task *.pages
-test/writing/         # WRITING TASK *.pdf
-test/mocks/M01/
+test/MT1/                         # Mock Test 1 (m01)
   manifest.json
-  listening -> ../../listening
-  reading -> ../../reading
+  LT/  audio/ interface/ transcripts/ source/ screenshots/
+  RT/  interface/ source/
+  WT/  WRITING TASK *.pdf
+test/MT2/                         # Mock Test 2 (m02)
+  manifest.json
+  LT/  audio/ interface/ pdf/ transcripts/
+  RT/  interface/ source/
+  WT/  WT Task *.docx
 ```
 
 Paths are centralized in `backend/scripts/test_content_paths.py`.
@@ -48,7 +46,7 @@ Paths are centralized in `backend/scripts/test_content_paths.py`.
 
 ```bash
 cd backend && source .venv/bin/activate
-python -m scripts.import_mock --mock-dir ../test/mocks/M01 --dry-run
+python -m scripts.import_mock --mock-dir ../test/MT1 --dry-run
 ```
 
 Apply DB: run migrations `20260526100000_mock_attempts_orchestration.sql`, `20260526100100_m01_consolidation.sql`, `20260526100200_test_attempts_part.sql`.
@@ -56,7 +54,7 @@ Apply DB: run migrations `20260526100000_mock_attempts_orchestration.sql`, `2026
 Audio:
 
 ```bash
-# M01: upload from test/listening/audio/ (keys test/Listening_S*_Audio.mp3 in R2)
+# M01: upload from test/MT1/LT/audio/ (keys test/Listening_S*_Audio.mp3 in R2)
 python -m scripts.upload_m01_listening_audio --dry-run
 python -m scripts.upload_m01_listening_audio
 ```

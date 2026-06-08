@@ -1,4 +1,4 @@
-"""Published full-mock catalog IDs (M01 = Test 1)."""
+"""Published full-mock catalog IDs (M01 = Test 1, M02 = Test 2)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,13 @@ from __future__ import annotations
 # Valid UUID (hex only). Prefix a000 = Academic Mock 1 (plan mnemonic m000 is not valid in Postgres).
 M01_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000001"
 
-PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (M01_MOCK_TEST_ID,)
+# Academic Mock 2 — Test 2 (content seeded separately).
+M02_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000002"
+
+PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (
+    M01_MOCK_TEST_ID,
+    M02_MOCK_TEST_ID,
+)
 
 MODULE_ORDER = ("listening", "reading", "writing", "speaking")
 
@@ -16,6 +22,11 @@ MODULE_LIVE_PARTS: dict[str, dict[str, tuple[int, ...]]] = {
     M01_MOCK_TEST_ID: {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2),
+        "writing": (1, 2),
+    },
+    M02_MOCK_TEST_ID: {
+        "listening": (1, 2, 3, 4),
+        "reading": (1, 2, 3),
         "writing": (1, 2),
     },
 }
