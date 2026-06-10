@@ -1,3 +1,5 @@
+-- MT2 Reading P3 alignment — founder source (6-para passage, YNNG, headings C-F, completion 10-13).
+
 -- BandForge reading seed: The Psychology of Leadership in Times of Crisis
 -- mock_test_id = a0000000-0000-4000-8000-000000000002 part = 3
 
