@@ -1,3 +1,5 @@
+-- MT2 Reading P1 alignment — founder source (paragraph F, TFNG, headings C-F, completion 10-13).
+
 -- BandForge reading seed: How Animals Make Sense of Their World
 -- mock_test_id = a0000000-0000-4000-8000-000000000002 part = 1
 

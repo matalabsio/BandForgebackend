@@ -1,3 +1,5 @@
+-- MT2 Reading P2 alignment — founder source (paragraphs E-F, completion 10-13).
+
 -- BandForge reading seed: The Unfulfilled Promise of Educational Technology
 -- mock_test_id = a0000000-0000-4000-8000-000000000002 part = 2
 
