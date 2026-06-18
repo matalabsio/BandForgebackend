@@ -96,6 +96,12 @@ class Settings(BaseSettings):
         validation_alias="AUTH_SKIP_EMAIL_VERIFY",
     )
 
+    admin_allowed_email: str = Field(
+        default="",
+        validation_alias="ADMIN_ALLOWED_EMAIL",
+        description="Only this email may access /admin (fail-closed if unset).",
+    )
+
     google_client_id: str = Field(
         default="",
         validation_alias=AliasChoices("GOOGLE_CLIENT_ID", "google_client_id"),
@@ -144,6 +150,10 @@ class Settings(BaseSettings):
     @property
     def supabase_url_normalized(self) -> str:
         return self.supabase_url.rstrip("/")
+
+    def admin_allowed_email_normalized(self) -> str | None:
+        email = self.admin_allowed_email.strip().lower()
+        return email or None
 
     def cors_allow_origins(self) -> list[str]:
         """Origins for CORSMiddleware (frontend + optional CORS_ORIGINS + localhost in dev)."""

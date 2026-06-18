@@ -9,11 +9,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException, status
 
-from app.cache.hybrid_cache import get_json, set_json
+from app.cache.hybrid_cache import delete_many, get_json, invalidate_prefix, set_json
 from app.cache.mock_cache import read_unlock_snapshot
 from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
@@ -46,7 +47,7 @@ from app.schemas.test_engine import TestSummary
 from app.listening.instructions import extract_listening_instructions
 from app.listening.timing import ListeningStartTiming, ListeningSubmitTiming, _PhaseTimer
 from app.services.mock_progress_timing import MockProgressTiming
-from app.storage.r2 import generate_signed_url, object_exists, parse_r2_object_url
+from app.storage.r2 import generate_signed_url, get_object_stream, object_exists, object_head, parse_r2_object_url
 
 
 PART_META: dict[int, dict[str, str]] = {
@@ -89,6 +90,72 @@ def _audio_key_candidates(stored: str) -> list[str]:
     return deduped
 
 
+def invalidate_listening_audio_caches(*, mock_test_id: UUID | str) -> None:
+    """Drop cached question payloads and presigned URLs after admin audio upload."""
+    mid = str(mock_test_id)
+    delete_many([f"listening_questions:{mid}:{p}" for p in range(0, 5)])
+    invalidate_prefix(f"r2_presign:listening/{mid}/")
+
+
+def _audio_storage_key(stored: str | None) -> str | None:
+    if not stored or not stored.strip():
+        return None
+    return _audio_key_candidates(stored)[0]
+
+
+def _listening_playback_url(
+    *,
+    mock_test_id: UUID,
+    part: int,
+    attempt_id: UUID,
+) -> str:
+    """Same-origin URL for HTML5 audio (proxied via Next.js with auth cookies)."""
+    params = urlencode({"part": str(part), "attempt_id": str(attempt_id)})
+    return f"/api/listening/{mock_test_id}/part-audio?{params}"
+
+
+def _apply_playback_urls(
+    response: ListeningQuestionsResponse,
+    *,
+    mock_test_id: UUID,
+    attempt_id: UUID,
+) -> ListeningQuestionsResponse:
+    parts: list[ListeningPart] = []
+    for part in response.parts:
+        playback = _listening_playback_url(
+            mock_test_id=mock_test_id,
+            part=int(part.part),
+            attempt_id=attempt_id,
+        )
+        questions = [
+            question.model_copy(update={"audio_url": playback})
+            for question in part.questions
+        ]
+        parts.append(part.model_copy(update={"questions": questions}))
+    return response.model_copy(update={"parts": parts})
+
+
+def _presign_questions_response(
+    response: ListeningQuestionsResponse,
+) -> ListeningQuestionsResponse:
+    """Always mint fresh presigned URLs (never serve stale signed URLs from cache)."""
+    presigned_by_key: dict[str, str | None] = {}
+    parts: list[ListeningPart] = []
+    for part in response.parts:
+        questions: list[ListeningQuestion] = []
+        for question in part.questions:
+            storage_key = _audio_storage_key(question.audio_url)
+            if storage_key:
+                if storage_key not in presigned_by_key:
+                    presigned_by_key[storage_key] = _presign_audio(storage_key)
+                signed = presigned_by_key[storage_key]
+            else:
+                signed = None
+            questions.append(question.model_copy(update={"audio_url": signed}))
+        parts.append(part.model_copy(update={"questions": questions}))
+    return response.model_copy(update={"parts": parts})
+
+
 def _presign_audio(stored: str | None) -> str | None:
     if not stored or not stored.strip():
         return None
@@ -120,11 +187,9 @@ def _presign_audio(stored: str | None) -> str | None:
 
 
 def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
-    if str(attempt.get("user_id")) != str(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this attempt.",
-        )
+    from app.security.ownership import ensure_owner_or_not_found
+
+    ensure_owner_or_not_found(attempt, user_id)
 
 
 def _listening_duration_seconds(
@@ -327,6 +392,65 @@ def start_attempt(
     return response
 
 
+def stream_part_audio(
+    *,
+    mock_test_id: UUID,
+    user_id: UUID,
+    attempt_id: UUID,
+    part: int,
+    range_header: str | None,
+) -> tuple[Any, dict[str, str], int]:
+    """Authenticated R2 audio stream for an in-progress listening attempt."""
+    attempt = repo.get_attempt(attempt_id)
+    _ensure_owner(attempt, user_id)
+    if str(attempt.get("mock_test_id")) != str(mock_test_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Attempt does not belong to this mock test.",
+        )
+    if str(attempt.get("module")) != "listening":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Attempt is not a listening attempt.",
+        )
+    if str(attempt.get("status")) not in {"in_progress", "started"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Listening audio is only available during an active attempt.",
+        )
+    attempt_part = attempt.get("part")
+    if attempt_part is not None and int(attempt_part) != part:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Part does not match this listening attempt.",
+        )
+
+    rows = repo.list_questions_public(mock_test_id, part=part)
+    storage_key: str | None = None
+    for row in rows:
+        raw = row.get("audio_url")
+        if raw:
+            storage_key = _audio_storage_key(str(raw))
+            break
+    if not storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No listening audio configured for this part.",
+        )
+    if not object_head(storage_key):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Audio not found in R2 at key: {storage_key}",
+        )
+    try:
+        return get_object_stream(storage_key, range_header=range_header)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
 def get_session_questions(
     *,
     mock_test_id: UUID,
@@ -336,6 +460,20 @@ def get_session_questions(
     attempt: dict[str, Any] | None = None,
     timing: ListeningStartTiming | None = None,
 ) -> ListeningQuestionsResponse:
+    if attempt is None:
+        in_progress = repo.find_in_progress_listening_attempt(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            part=part,
+        )
+        if not in_progress:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Start a listening attempt before loading questions and audio.",
+            )
+        attempt = in_progress
+
+    attempt_id = UUID(str(attempt["id"]))
     cache_key = f"listening_questions:{mock_test_id}:{part or 0}"
     t_questions = perf_counter()
     cached = get_json(cache_key)
@@ -345,7 +483,11 @@ def get_session_questions(
             if timing is not None:
                 timing.questions_source = "cache"
                 timing.questions_ms = round((perf_counter() - t_questions) * 1000)
-            return payload
+            return _apply_playback_urls(
+                payload,
+                mock_test_id=mock_test_id,
+                attempt_id=attempt_id,
+            )
         except Exception:
             pass
 
@@ -364,32 +506,9 @@ def get_session_questions(
             detail="No listening questions found for this mock test.",
         )
 
-    if attempt is None:
-        in_progress = repo.find_in_progress_listening_attempt(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            part=part,
-        )
-        if not in_progress:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Start a listening attempt before loading questions and audio.",
-            )
-        attempt = in_progress
-
     t0 = perf_counter()
     display_offsets = repo.part_display_offsets(mock_test_id=mock_test_id)
     offsets_ms = round((perf_counter() - t0) * 1000)
-
-    # Presign each distinct audio key once. A part shares one clip across ~10
-    # questions, so this avoids ~10x R2 HEAD + presign round trips per request.
-    presigned_by_key: dict[str, str | None] = {}
-    for row in rows:
-        raw_audio = row.get("audio_url")
-        if raw_audio and raw_audio not in presigned_by_key:
-            t_presign = perf_counter()
-            presigned_by_key[raw_audio] = _presign_audio(raw_audio)
-            presign_timer.add(t_presign)
 
     t_build = perf_counter()
     grouped: dict[int, list[ListeningQuestion]] = {1: [], 2: [], 3: [], 4: []}
@@ -399,7 +518,6 @@ def get_session_questions(
         if part not in grouped:
             grouped[part] = []
         raw_audio = row.get("audio_url")
-        signed_audio = presigned_by_key.get(raw_audio) if raw_audio else None
         qn = int(row["question_number"])
         instructions: str | None = None
         if qn == 1 or row.get("passage_text"):
@@ -415,7 +533,7 @@ def get_session_questions(
                 instructions=instructions,
                 options=row.get("options"),
                 skill_tag=row.get("skill_tag"),
-                audio_url=signed_audio,
+                audio_url=str(raw_audio).strip() if raw_audio else None,
             )
         )
 
@@ -450,11 +568,18 @@ def get_session_questions(
         ),
     )
     set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=600)
+    t_presign = perf_counter()
+    signed_response = _apply_playback_urls(
+        response,
+        mock_test_id=mock_test_id,
+        attempt_id=attempt_id,
+    )
+    presign_timer.add(t_presign)
     build_ms = round((perf_counter() - t_build) * 1000)
     if timing is not None:
         timing.audio_presign_ms = presign_timer.total_ms
         timing.questions_ms = fetch_ms + offsets_ms + build_ms
-    return response
+    return signed_response
 
 
 def autosave_answer(

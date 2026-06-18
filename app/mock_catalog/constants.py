@@ -14,6 +14,16 @@ PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (
     M02_MOCK_TEST_ID,
 )
 
+# Candidate app: only Tests 1–2 are startable; 3+ stay "coming soon" in the UI.
+MAX_CANDIDATE_CATALOG_NUMBER = 2
+
+
+def is_candidate_live_catalog_number(catalog_number: int | None) -> bool:
+    return (
+        catalog_number is not None
+        and 1 <= int(catalog_number) <= MAX_CANDIDATE_CATALOG_NUMBER
+    )
+
 MODULE_ORDER = ("listening", "reading", "writing", "speaking")
 
 # Parts that count toward full-test progression (subset of questions in DB).

@@ -65,6 +65,10 @@ def main() -> None:
     elif args.mock_id == LISTENING_TEST_ID:
         print("Greenfield listening mock is ready. Use:")
         print("  http://localhost:3000/test/listening?part=1")
+    elif args.mock_id == "eb5d9416-da1f-411d-8bf9-07ae4dbc5014":
+        print("Test 3 listening mock is ready. Use:")
+        print("  http://localhost:3000/test/3")
+        print("  (Set listening_parts=1 on mock if only section 1 is ingested.)")
 
 
 if __name__ == "__main__":

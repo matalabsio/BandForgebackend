@@ -2,6 +2,7 @@ from functools import lru_cache
 import time
 from typing import Callable, TypeVar
 
+import httpx
 from supabase import Client, create_client
 
 from app.config import get_settings
@@ -33,10 +34,16 @@ def get_supabase() -> Client:
         settings.supabase_url_normalized,
         settings.supabase_secret_key,
     )
-    # Prefer HTTP/1.1 transport path; this reduces sporadic HTTP/2 stream errors.
+    # Force HTTP/1.1 — Supabase HTTP/2 streams can drop under burst traffic.
     try:
-        if hasattr(client, "postgrest") and hasattr(client.postgrest, "session"):
-            client.postgrest.session.http2 = False
+        postgrest = client.postgrest
+        if hasattr(postgrest, "session"):
+            old = postgrest.session
+            postgrest.session = httpx.Client(
+                http2=False,
+                headers=dict(old.headers),
+                timeout=old.timeout,
+            )
     except Exception:
         pass
     return client

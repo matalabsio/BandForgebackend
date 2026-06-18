@@ -13,6 +13,7 @@ from app.cache.hybrid_cache import get_json, set_json
 from app.cache.mock_cache import read_unlock_snapshot
 from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
+from app.perf.timing import get_query_count
 from app.reading import repository as repo
 from app.mock_catalog.constants import live_content_part
 from app.reading.constants import READING_DURATION_MINUTES, READING_GRACE_SECONDS
@@ -68,11 +69,9 @@ def _reading_duration_minutes(
 
 
 def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
-    if str(attempt.get("user_id")) != str(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this attempt.",
-        )
+    from app.security.ownership import ensure_owner_or_not_found
+
+    ensure_owner_or_not_found(attempt, user_id)
 
 
 def _content_part(*, mock_test_id: UUID, live_part: int | None) -> int | None:
@@ -448,8 +447,15 @@ def autosave_answer(
     question_id: UUID,
     user_answer: str,
     timing: ReadingAutosaveTiming | None = None,
+    auth_ms: int = 0,
+    request_id: str | None = None,
 ) -> AutosaveResponse:
     t_request = perf_counter()
+    if timing is not None and request_id:
+        timing.request_id = request_id
+    if timing is not None:
+        timing.auth_ms = auth_ms
+
     t0 = perf_counter()
     attempt = repo.get_attempt(attempt_id)
     _ensure_owner(attempt, user_id)
@@ -459,6 +465,7 @@ def autosave_answer(
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Attempt is not in progress.")
     if timing is not None:
         timing.attempt_ms = round((perf_counter() - t0) * 1000)
+        timing.attempt_fetch_ms = timing.attempt_ms
 
     mock_test_id = UUID(str(attempt["mock_test_id"]))
     t0 = perf_counter()
@@ -466,6 +473,7 @@ def autosave_answer(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid question_id.")
     if timing is not None:
         timing.validate_ms = round((perf_counter() - t0) * 1000)
+        timing.question_validate_ms = timing.validate_ms
 
     t0 = perf_counter()
     repo.upsert_answer(
@@ -475,6 +483,8 @@ def autosave_answer(
     )
     if timing is not None:
         timing.upsert_ms = round((perf_counter() - t0) * 1000)
+        timing.answer_upsert_ms = timing.upsert_ms
+        timing.db_query_count = get_query_count()
 
     response = AutosaveResponse(
         question_id=question_id,

@@ -18,7 +18,7 @@ from app.auth.schemas import UserPublic
 from app.cache.hybrid_cache import get_json, set_json
 from app.db.supabase_client import execute_with_retry
 from app.db.supabase_client import get_supabase
-from app.mock_catalog.constants import PUBLISHED_FULL_MOCK_IDS
+from app.mock_catalog.catalog import is_full_mock_id
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -221,7 +221,7 @@ def dashboard_summary(
 
         module = str(a.get("module") or "")
         mock_id = str(a.get("mock_test_id") or "")
-        if mock_id not in PUBLISHED_FULL_MOCK_IDS:
+        if not is_full_mock_id(mock_id):
             continue
 
         if status_lc == "in_progress" and attempt_started:

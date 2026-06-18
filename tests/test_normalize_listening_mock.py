@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from scripts.normalize_listening_mock import normalize
-from scripts.test_content_paths import LISTENING_S2_JSON, LISTENING_S3_JSON, LISTENING_S4_JSON
+from scripts.test_content_paths import (
+    LISTENING_MT2_S1_JSON,
+    LISTENING_S2_JSON,
+    LISTENING_S3_JSON,
+    LISTENING_S4_JSON,
+)
 
 S2_JSON = LISTENING_S2_JSON
 S3_JSON = LISTENING_S3_JSON
@@ -109,3 +115,44 @@ def test_normalize_s4_produces_ten_note_completion_questions() -> None:
     assert answers[1] == "traveller/traveler"
     assert answers[3] == "Curitiba"
     assert answers[9] == "transit-oriented/transit oriented"
+
+
+TEST3_MOCK_ID = "eb5d9416-da1f-411d-8bf9-07ae4dbc5014"
+TEST3_MINI_JSON = (
+    Path(__file__).resolve().parents[1] / "seed" / "admin_samples" / "listening_mini_test3.json"
+)
+
+
+def test_normalize_test3_mini_produces_four_questions() -> None:
+    data = json.loads(TEST3_MINI_JSON.read_text(encoding="utf-8"))
+    audio_key = f"listening/{TEST3_MOCK_ID}/part-1/full.mp3"
+    payload = normalize(
+        data,
+        mock_id=TEST3_MOCK_ID,
+        audio_key=audio_key,
+        allow_unsupported=False,
+        part=1,
+    )
+    assert len(payload["questions"]) == 4
+    assert data["mock_test_id"] == TEST3_MOCK_ID
+    assert all(q["audio_url"] == audio_key for q in payload["questions"])
+    assert payload["questions"][0]["correct_answer"] == "B"
+    assert payload["questions"][2]["correct_answer"] == "Patel"
+    assert payload["questions"][3]["correct_answer"] == "three/3"
+
+
+def test_normalize_mt2_s1_form_completion_produces_ten_questions() -> None:
+    data = json.loads(LISTENING_MT2_S1_JSON.read_text(encoding="utf-8"))
+    payload = normalize(
+        data,
+        mock_id="a0000000-0000-4000-8000-000000000002",
+        audio_key="listening/m02/part-1/full.mp3",
+        allow_unsupported=False,
+    )
+    assert len(payload["questions"]) == 10
+    assert all(q["question_type"] == "form_completion" for q in payload["questions"])
+    first = payload["questions"][0]
+    assert first["passage_text"] is not None
+    assert "BROOKSIDE LETTINGS" in first["passage_text"]
+    assert first["correct_answer"] == "Whitfield"
+    assert payload["questions"][1]["passage_text"] is None

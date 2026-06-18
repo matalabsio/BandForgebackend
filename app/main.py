@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from app.config import get_settings, reload_settings, settings_diagnostics
 from app.cache.hybrid_cache import redis_status
 from app.middleware.timing import ApiTimingMiddleware
+from app.admin import router as admin_router
 from app.auth import router as auth_router
 from app.listening import router as listening_router
 from app.reading import router as reading_router
@@ -50,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(tests.router)
 app.include_router(attempts.router)
 app.include_router(dashboard.router)

@@ -13,7 +13,8 @@ from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
@@ -136,6 +137,30 @@ def get_listening_questions(
     except Exception:
         _timing_log("/api/listening/{mock_test_id}/questions", started, 500)
         raise
+
+
+@router.get("/{mock_test_id}/part-audio")
+def stream_part_audio_route(
+    mock_test_id: UUID,
+    request: Request,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+    attempt_id: Annotated[UUID, Query(description="In-progress listening attempt id.")],
+    part: Annotated[int, Query(ge=1, le=4, description="Listening part 1–4")] = 1,
+):
+    """Stream part audio through the API (same-origin for browser playback)."""
+    body, headers, status_code = service.stream_part_audio(
+        mock_test_id=mock_test_id,
+        user_id=current_user.id,
+        attempt_id=attempt_id,
+        part=part,
+        range_header=request.headers.get("range"),
+    )
+    return StreamingResponse(
+        body,
+        status_code=status_code,
+        media_type=headers.get("Content-Type", "audio/mpeg"),
+        headers=headers,
+    )
 
 
 @router.post(

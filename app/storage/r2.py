@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Any
 from urllib.parse import urlparse
 
 import boto3
@@ -46,15 +47,23 @@ def _s3_client():
 
 def object_exists(key: str) -> bool:
     """Return True if the object key exists in the configured R2 bucket."""
+    return object_head(key) is not None
+
+
+def object_head(key: str) -> dict[str, int | str] | None:
+    """Return object size and content type, or None if missing / not configured."""
     settings = get_settings()
     if not settings.r2_access_key_id or not settings.r2_secret_access_key:
-        return False
+        return None
     client = _s3_client()
     try:
-        client.head_object(Bucket=settings.r2_bucket_name, Key=key)
-        return True
+        meta = client.head_object(Bucket=settings.r2_bucket_name, Key=key)
+        return {
+            "size": int(meta.get("ContentLength") or 0),
+            "content_type": str(meta.get("ContentType") or ""),
+        }
     except Exception:
-        return False
+        return None
 
 
 def generate_signed_url(key: str, expiry: int = 10800) -> str:
@@ -67,6 +76,35 @@ def generate_signed_url(key: str, expiry: int = 10800) -> str:
         Params={"Bucket": settings.r2_bucket_name, "Key": key},
         ExpiresIn=expiry,
     )
+
+
+def get_object_stream(
+    key: str,
+    *,
+    range_header: str | None = None,
+) -> tuple[Any, dict[str, str], int]:
+    """Stream an object from R2. Returns (body, response_headers, http_status)."""
+    settings = get_settings()
+    client = _s3_client()
+    kwargs: dict[str, Any] = {"Bucket": settings.r2_bucket_name, "Key": key}
+    if range_header:
+        kwargs["Range"] = range_header
+    try:
+        obj = client.get_object(**kwargs)
+    except Exception as exc:
+        raise RuntimeError(f"R2 get_object failed for {key}: {exc}") from exc
+
+    headers: dict[str, str] = {
+        "Content-Type": str(obj.get("ContentType") or "audio/mpeg"),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
+    }
+    if obj.get("ContentLength") is not None:
+        headers["Content-Length"] = str(obj["ContentLength"])
+    if obj.get("ContentRange"):
+        headers["Content-Range"] = str(obj["ContentRange"])
+    status = 206 if range_header and obj.get("ContentRange") else 200
+    return obj["Body"], headers, status
 
 
 def upload_object(*, key: str, body: bytes, content_type: str) -> None:

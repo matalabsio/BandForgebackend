@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 
 from app.db.supabase_client import get_supabase
+from app.perf.timing import timed_supabase
 
 QUESTION_PUBLIC_COLUMNS = (
     "id, mock_test_id, module, question_type, question_number, "
@@ -261,47 +262,56 @@ def insert_reading_attempt(
 
 
 def get_attempt(attempt_id: UUID) -> dict[str, Any]:
-    client = get_supabase()
-    result = (
-        client.table("test_attempts")
-        .select(
-            "id, user_id, mock_test_id, module, status, started_at, completed_at, "
-            "part, mock_attempt_id"
+    def _run() -> dict[str, Any]:
+        client = get_supabase()
+        result = (
+            client.table("test_attempts")
+            .select(
+                "id, user_id, mock_test_id, module, status, started_at, completed_at, "
+                "part, mock_attempt_id"
+            )
+            .eq("id", str(attempt_id))
+            .limit(1)
+            .execute()
         )
-        .eq("id", str(attempt_id))
-        .limit(1)
-        .execute()
-    )
-    rows = result.data or []
-    if not rows:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Test attempt not found.")
-    return rows[0]
+        rows = result.data or []
+        if not rows:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Test attempt not found.")
+        return rows[0]
+
+    return timed_supabase("supabase.test_attempts.select", _run)
 
 
 def question_belongs_to(mock_test_id: UUID, question_id: UUID) -> bool:
-    client = get_supabase()
-    result = (
-        client.table("questions")
-        .select("id")
-        .eq("id", str(question_id))
-        .eq("mock_test_id", str(mock_test_id))
-        .eq("module", "reading")
-        .limit(1)
-        .execute()
-    )
-    return bool(result.data)
+    def _run() -> bool:
+        client = get_supabase()
+        result = (
+            client.table("questions")
+            .select("id")
+            .eq("id", str(question_id))
+            .eq("mock_test_id", str(mock_test_id))
+            .eq("module", "reading")
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data)
+
+    return timed_supabase("supabase.questions.select", _run)
 
 
 def upsert_answer(*, attempt_id: UUID, question_id: UUID, user_answer: str) -> None:
-    client = get_supabase()
-    client.table("answers").upsert(
-        {
-            "attempt_id": str(attempt_id),
-            "question_id": str(question_id),
-            "user_answer": user_answer,
-        },
-        on_conflict="attempt_id,question_id",
-    ).execute()
+    def _run() -> None:
+        client = get_supabase()
+        client.table("answers").upsert(
+            {
+                "attempt_id": str(attempt_id),
+                "question_id": str(question_id),
+                "user_answer": user_answer,
+            },
+            on_conflict="attempt_id,question_id",
+        ).execute()
+
+    timed_supabase("supabase.answers.upsert", _run)
 
 
 def upsert_scored_answers(*, attempt_id: UUID, rows: list[dict[str, Any]]) -> None:

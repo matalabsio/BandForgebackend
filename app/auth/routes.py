@@ -96,10 +96,18 @@ async def collect_lead(body: CollectLeadRequest) -> MessageResponse:
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest, response: Response) -> AuthResponse:
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=AUTH_TEMP_BLOCK_MSG,
+    # Email/password is enabled for admin accounts only (admin panel sign-in).
+    auth, new_refresh, _ = await service.login_user(
+        email=str(body.email),
+        password=body.password,
+        admin_only=True,
     )
+    _set_auth_cookies(
+        response,
+        access_token=auth.access_token,
+        refresh_token=new_refresh,
+    )
+    return auth.model_copy(update={"refresh_token": new_refresh})
 
 
 @router.post("/send-otp", response_model=MessageResponse)
