@@ -24,13 +24,26 @@ async def lifespan(_app: FastAPI):
         and settings.google_client_secret
         and settings.google_redirect_uri
     )
+    cors = settings.cors_allow_origins()
     print(
         f"[bandforge-api] Supabase project_ref={diag['project_ref']} "
         f"url={diag['supabase_url']} "
         f"env_local_active={diag['env_local_active']} "
         f"google_oauth={'on' if google_ok else 'off'} "
+        f"frontend_url={settings.frontend_url} "
+        f"cors_origins={','.join(cors) or '(none)'} "
         f"redis={redis_status()}"
     )
+    if settings.app_env.strip().lower() == "production":
+        for label, value in (
+            ("FRONTEND_URL", settings.frontend_url),
+            ("GOOGLE_REDIRECT_URI", settings.google_redirect_uri),
+        ):
+            if "localhost" in value or "127.0.0.1" in value:
+                print(
+                    f"[bandforge-api] WARNING: {label}={value!r} — "
+                    "set production Vercel URL (see docs/vercel-production.md)"
+                )
     yield
 
 

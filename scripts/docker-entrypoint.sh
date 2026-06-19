@@ -2,7 +2,8 @@
 set -eu
 
 HOST="${API_HOST:-0.0.0.0}"
-PORT="${API_PORT:-8000}"
+# Empty API_PORT is ignored; Railway injects PORT at runtime.
+BIND_PORT="${API_PORT:-${PORT:-8000}}"
 WORKERS="${WEB_CONCURRENCY:-2}"
 TIMEOUT="${GUNICORN_TIMEOUT:-120}"
 GRACEFUL="${GUNICORN_GRACEFUL_TIMEOUT:-30}"
@@ -12,7 +13,7 @@ KEEPALIVE="${GUNICORN_KEEPALIVE:-5}"
 if [ "${APP_ENV:-production}" = "development" ] && [ "${UVICORN_RELOAD:-0}" = "1" ]; then
   exec uvicorn app.main:app \
     --host "$HOST" \
-    --port "$PORT" \
+    --port "$BIND_PORT" \
     --reload \
     --proxy-headers \
     --forwarded-allow-ips='*'
@@ -21,7 +22,7 @@ fi
 exec gunicorn app.main:app \
   --worker-class uvicorn.workers.UvicornWorker \
   --workers "$WORKERS" \
-  --bind "${HOST}:${PORT}" \
+  --bind "${HOST}:${BIND_PORT}" \
   --timeout "$TIMEOUT" \
   --graceful-timeout "$GRACEFUL" \
   --keep-alive "$KEEPALIVE" \

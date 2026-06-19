@@ -13,6 +13,15 @@ def _env_bool(v: object) -> bool:
         return False
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
+
+def _resolve_bind_port(default: int = 8000) -> int:
+    """API_PORT (explicit) → Railway PORT → default. Empty strings are ignored."""
+    for key in ("API_PORT", "PORT"):
+        raw = os.environ.get(key, "").strip()
+        if raw:
+            return int(raw)
+    return default
+
 # Always load backend/.env regardless of shell cwd (e.g. uvicorn started from repo root).
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _ENV_FILE = _BACKEND_DIR / ".env"
@@ -144,8 +153,24 @@ class Settings(BaseSettings):
     r2_bucket_name: str = "bandforge-speaking-audio"
     r2_endpoint_url: str = ""
 
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
+    api_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("API_HOST", "api_host"),
+    )
+    api_port: int = Field(
+        default=8000,
+        validation_alias=AliasChoices("API_PORT", "PORT", "api_port"),
+    )
+
+    @field_validator("api_port", mode="before")
+    @classmethod
+    def parse_api_port(cls, v: object) -> object:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return _resolve_bind_port()
+        if isinstance(v, str):
+            stripped = v.strip()
+            return int(stripped) if stripped else _resolve_bind_port()
+        return v
 
     @property
     def supabase_url_normalized(self) -> str:
