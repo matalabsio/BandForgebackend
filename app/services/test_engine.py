@@ -77,19 +77,13 @@ def _get_mock_test_row(mock_test_id: UUID) -> dict[str, Any]:
 
 
 def list_published_tests(*, include_unpublished: bool = False) -> list[TestSummary]:
-    """Return dashboard-visible full mocks."""
-    published_ids = list(PUBLISHED_FULL_MOCK_IDS)
-    client = get_supabase()
-    query = (
-        client.table("mock_tests")
-        .select("id, title, description")
-        .in_("id", published_ids)
-        .order("created_at")
+    """Return dashboard-visible full mocks (catalog_number slots)."""
+    from app.mock_catalog.catalog import list_catalog_mock_rows
+
+    rows: list[dict[str, Any]] = list_catalog_mock_rows(
+        include_unpublished=include_unpublished
     )
-    if not include_unpublished:
-        query = query.eq("is_published", True)
-    result = query.execute()
-    rows: list[dict[str, Any]] = result.data or []
+    client = get_supabase()
 
     listening_counts: dict[str, int] = {}
     reading_counts: dict[str, int] = {}
@@ -142,12 +136,32 @@ def list_published_tests(*, include_unpublished: bool = False) -> list[TestSumma
     return summaries
 
 
+def _assert_active_mock_attempt(*, mock_test_id: UUID, user_id: UUID) -> None:
+    """Require an in-progress mock attempt before serving exam content."""
+    client = get_supabase()
+    result = (
+        client.table("mock_attempts")
+        .select("id")
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("user_id", str(user_id))
+        .eq("status", "in_progress")
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found.",
+        )
+
+
 def get_questions(
     mock_test_id: UUID,
     module: TestModule,
     *,
-    user_id: UUID,  # noqa: ARG001 — reserved for future per-user gates
+    user_id: UUID,
 ) -> QuestionsResponse:
+    _assert_active_mock_attempt(mock_test_id=mock_test_id, user_id=user_id)
     test_row = _get_mock_test_row(mock_test_id)
     client = get_supabase()
     result = (

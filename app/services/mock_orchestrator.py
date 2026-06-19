@@ -241,16 +241,9 @@ def _compute_module_statuses(
 
 
 def list_catalog(*, include_unpublished: bool = False) -> list[MockCatalogItem]:
-    from app.db.supabase_client import get_supabase
+    from app.mock_catalog.catalog import list_catalog_mock_rows
 
-    sb = get_supabase()
-    ids = list(PUBLISHED_FULL_MOCK_IDS)
-    query = sb.table("mock_tests").select("id, title, description, is_published").in_(
-        "id", ids
-    )
-    if not include_unpublished:
-        query = query.eq("is_published", True)
-    rows = list((query.execute()).data or [])
+    rows = list_catalog_mock_rows(include_unpublished=include_unpublished)
 
     items: list[MockCatalogItem] = []
     for row in rows:
@@ -264,9 +257,15 @@ def list_catalog(*, include_unpublished: bool = False) -> list[MockCatalogItem]:
                 id=mock_id,
                 title=str(row["title"]),
                 description=row.get("description"),
+                catalog_number=(
+                    int(row["catalog_number"])
+                    if row.get("catalog_number") is not None
+                    else None
+                ),
                 modules_enabled=enabled_mods,  # type: ignore[arg-type]
                 listening_parts=l_parts,
                 reading_passages=r_parts,
+                writing_tasks=int(row.get("writing_tasks") or 2),
             )
         )
     return items
@@ -467,7 +466,7 @@ def _assert_mock_attempt_owner(*, mock_attempt_id: UUID, user_id: UUID) -> dict[
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock attempt not found.")
     row = rows[0]
     if str(row["user_id"]) != str(user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock attempt not found.")
     return row
 
 
@@ -920,6 +919,13 @@ def start_mock(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
 
     test_row = start_ctx["mock_test"]
+    catalog_number = test_row.get("catalog_number")
+    if catalog_number is not None:
+        from app.mock_catalog.constants import is_candidate_live_catalog_number
+
+        if not is_candidate_live_catalog_number(int(catalog_number)):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+
     modules = list(start_ctx.get("modules") or [])
     if not modules:
         raise HTTPException(

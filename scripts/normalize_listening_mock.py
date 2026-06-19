@@ -27,6 +27,7 @@ SUPPORTED_GROUP_TYPES = frozenset(
         "multiple_choice_multiple",
         "matching",
         "sentence_completion",
+        "form_completion",
     }
 )
 
@@ -42,6 +43,7 @@ TYPE_MAP = {
     "multiple_choice_single": "mcq",
     "matching": "matching",
     "sentence_completion": "sentence_completion",
+    "form_completion": "form_completion",
     "map_labeling": "map_labeling",
     "note_completion": "note_completion",
 }
@@ -76,11 +78,20 @@ def _normalize_options(raw: list[dict[str, Any]] | None) -> list[dict[str, str]]
 def _skill_tag(question_type: str, question_number: int) -> str:
     if question_type == "matching":
         return "matching"
-    if question_type == "sentence_completion":
+    if question_type in {"sentence_completion", "form_completion"}:
         return "completion"
     if question_type == "mcq":
         return "detail"
     return "detail"
+
+
+def _group_passage_text(group: dict[str, Any], *, gtype: str, instruction: str | None) -> str | None:
+    """Instruction / form header shown on the first question of a group."""
+    if gtype == "form_completion":
+        form_title = str(group.get("form_title") or "").strip()
+        parts = [p for p in (form_title, instruction or "") if p]
+        return "\n\n".join(parts) if parts else instruction
+    return instruction
 
 
 def _flatten_groups(
@@ -175,7 +186,11 @@ def _flatten_groups(
                 answer = str(answer)
             correct = str(answer).strip() if answer is not None else ""
 
-            passage_text = instruction if number == first_number else None
+            passage_text = (
+                _group_passage_text(group, gtype=gtype, instruction=instruction)
+                if number == first_number
+                else None
+            )
 
             rows.append(
                 {

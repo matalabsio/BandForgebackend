@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from app.config import get_settings, reload_settings, settings_diagnostics
 from app.cache.hybrid_cache import redis_status
 from app.middleware.timing import ApiTimingMiddleware
+from app.admin import router as admin_router
 from app.auth import router as auth_router
 from app.listening import router as listening_router
 from app.reading import router as reading_router
@@ -23,13 +24,26 @@ async def lifespan(_app: FastAPI):
         and settings.google_client_secret
         and settings.google_redirect_uri
     )
+    cors = settings.cors_allow_origins()
     print(
         f"[bandforge-api] Supabase project_ref={diag['project_ref']} "
         f"url={diag['supabase_url']} "
         f"env_local_active={diag['env_local_active']} "
         f"google_oauth={'on' if google_ok else 'off'} "
+        f"frontend_url={settings.frontend_url} "
+        f"cors_origins={','.join(cors) or '(none)'} "
         f"redis={redis_status()}"
     )
+    if settings.app_env.strip().lower() == "production":
+        for label, value in (
+            ("FRONTEND_URL", settings.frontend_url),
+            ("GOOGLE_REDIRECT_URI", settings.google_redirect_uri),
+        ):
+            if "localhost" in value or "127.0.0.1" in value:
+                print(
+                    f"[bandforge-api] WARNING: {label}={value!r} — "
+                    "set production Vercel URL (see docs/vercel-production.md)"
+                )
     yield
 
 
@@ -50,6 +64,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(tests.router)
 app.include_router(attempts.router)
 app.include_router(dashboard.router)

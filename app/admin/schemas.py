@@ -1,0 +1,294 @@
+"""Pydantic models for admin API."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+MockStatus = Literal["draft", "published", "archived"]
+UserRole = Literal["student", "admin", "super_admin"]
+
+
+class DashboardMetrics(BaseModel):
+    total_users: int = 0
+    active_users_7d: int = 0
+    new_signups_7d: int = 0
+    mock_attempts_7d: int = 0
+    speaking_pending: int = 0
+    total_mocks: int = 0
+    published_mocks: int = 0
+    users_trend_pct: int | None = None
+    signups_trend_pct: int | None = None
+    mocks_trend_pct: int | None = None
+
+
+class DailyActivityPoint(BaseModel):
+    label: str
+    date: str
+    active_users: int = 0
+    signups: int = 0
+    mock_attempts: int = 0
+
+
+class RecentActivityItem(BaseModel):
+    id: str
+    message: str
+    created_at: datetime
+    kind: str = "event"
+
+
+class DashboardOverview(BaseModel):
+    metrics: DashboardMetrics
+    weekly_activity: list[DailyActivityPoint] = Field(default_factory=list)
+    recent_activity: list[RecentActivityItem] = Field(default_factory=list)
+
+
+class AdminUserListItem(BaseModel):
+    id: UUID
+    email: str | None = None
+    full_name: str | None = None
+    role: UserRole = "student"
+    is_active: bool = True
+    created_at: datetime
+    mock_attempt_count: int = 0
+
+
+class AdminUserListResponse(BaseModel):
+    items: list[AdminUserListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class AdminUserDetail(BaseModel):
+    id: UUID
+    email: str | None = None
+    full_name: str | None = None
+    phone: str | None = None
+    role: UserRole = "student"
+    is_active: bool = True
+    email_verified: bool = False
+    created_at: datetime
+    mock_attempt_count: int = 0
+    completed_mock_count: int = 0
+
+
+class AdminUserAttemptItem(BaseModel):
+    id: UUID
+    kind: Literal["mock", "module"]
+    mock_test_id: UUID | None = None
+    mock_title: str | None = None
+    module: str | None = None
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    band: float | None = None
+
+
+class PatchAdminUserRequest(BaseModel):
+    is_active: bool | None = None
+    role: UserRole | None = None
+
+
+class MockModuleSummary(BaseModel):
+    module: str
+    sequence_order: int
+    duration_minutes: int
+    is_enabled: bool
+    question_count: int = 0
+    parts: list[int] = Field(default_factory=list)
+
+
+class AdminMockListItem(BaseModel):
+    id: UUID
+    title: str
+    description: str | None = None
+    status: MockStatus
+    is_published: bool
+    catalog_number: int | None = None
+    created_at: datetime
+    total_questions: int = 0
+    modules: list[MockModuleSummary] = Field(default_factory=list)
+
+
+class SectionStatus(BaseModel):
+    part: int
+    question_count: int = 0
+    has_audio: bool = False
+
+
+class ModuleSectionStatus(BaseModel):
+    module: str
+    sections: list[SectionStatus] = Field(default_factory=list)
+
+
+class AdminMockDetail(AdminMockListItem):
+    configured_listening_parts: int = 4
+    configured_reading_passages: int = 3
+    configured_writing_tasks: int = 2
+    section_status: list[ModuleSectionStatus] = Field(default_factory=list)
+    publish_blockers: list[str] = Field(default_factory=list)
+
+
+class CreateMockRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    catalog_number: int | None = Field(default=None, ge=1, le=20)
+    listening_parts: int = Field(default=4, ge=1, le=4)
+    reading_passages: int = Field(default=3, ge=1, le=4)
+    writing_tasks: int = Field(default=2, ge=1, le=2)
+
+
+class PatchMockRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    catalog_number: int | None = Field(default=None, ge=1, le=20)
+    listening_parts: int | None = Field(default=None, ge=1, le=4)
+    reading_passages: int | None = Field(default=None, ge=1, le=4)
+    writing_tasks: int | None = Field(default=None, ge=1, le=2)
+
+
+class PatchMockStatusRequest(BaseModel):
+    status: MockStatus
+
+
+class QuestionTreePart(BaseModel):
+    part: int
+    question_count: int
+    questions: list[QuestionTreeItem] = Field(default_factory=list)
+
+
+class QuestionTreeItem(BaseModel):
+    id: UUID
+    question_number: int
+    question_type: str
+    prompt: str
+    part: int | None = None
+
+
+class QuestionTreeModule(BaseModel):
+    module: str
+    parts: list[QuestionTreePart] = Field(default_factory=list)
+
+
+class QuestionTreeResponse(BaseModel):
+    mock_test_id: UUID
+    modules: list[QuestionTreeModule] = Field(default_factory=list)
+
+
+class QuestionVersionItem(BaseModel):
+    id: UUID
+    version: int
+    content: dict[str, Any]
+    created_at: datetime
+    created_by: UUID | None = None
+
+
+class AdminQuestionDetail(BaseModel):
+    id: UUID
+    mock_test_id: UUID
+    module: str
+    part: int | None = None
+    question_type: str
+    question_number: int
+    prompt: str
+    passage_text: str | None = None
+    options: list[dict[str, Any]] | None = None
+    correct_answer: str | None = None
+    explanation: str | None = None
+    skill_tag: str | None = None
+    versions: list[QuestionVersionItem] = Field(default_factory=list)
+
+
+class PatchQuestionRequest(BaseModel):
+    prompt: str | None = None
+    options: list[dict[str, Any]] | None = None
+    correct_answer: str | None = None
+    explanation: str | None = None
+
+
+class IngestValidateRequest(BaseModel):
+    module: Literal["listening", "reading"]
+    part: int = Field(ge=1, le=4)
+    data: dict[str, Any]
+    audio_key: str | None = None
+
+
+class IngestValidateResponse(BaseModel):
+    ok: bool
+    question_count: int = 0
+    preview: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class IngestPublishRequest(BaseModel):
+    module: Literal["listening", "reading"]
+    part: int = Field(ge=1, le=4)
+    data: dict[str, Any]
+    audio_key: str | None = None
+
+
+class IngestPublishResponse(BaseModel):
+    ok: bool
+    questions_written: int
+    module: str
+    part: int
+
+
+class SpeakingQueueItem(BaseModel):
+    id: UUID
+    attempt_id: UUID
+    student_name: str | None = None
+    student_email: str | None = None
+    status: str
+    human_band: float | None = None
+    created_at: datetime
+
+
+class SpeakingQueueResponse(BaseModel):
+    items: list[SpeakingQueueItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class SpeakingReviewDetail(BaseModel):
+    id: UUID
+    attempt_id: UUID
+    status: str
+    human_band: float | None = None
+    reviewer_notes: str | None = None
+    transcript: str | None = None
+    audio_url: str | None = None
+    audio_play_url: str | None = None
+    ai_scores: dict[str, Any] | None = None
+    student_name: str | None = None
+    student_email: str | None = None
+    created_at: datetime
+    reviewed_at: datetime | None = None
+
+
+class ApproveSpeakingRequest(BaseModel):
+    human_band: float = Field(ge=0, le=9)
+    reviewer_notes: str | None = None
+
+
+class AuditLogItem(BaseModel):
+    id: UUID
+    admin_id: UUID
+    admin_email: str | None = None
+    action: str
+    resource_type: str
+    resource_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class AuditLogResponse(BaseModel):
+    items: list[AuditLogItem]
+    total: int
+    page: int
+    page_size: int

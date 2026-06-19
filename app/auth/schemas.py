@@ -78,6 +78,8 @@ class UserPublic(BaseModel):
     avatar_url: str | None = None
     avatar_display_url: str | None = None
     target_band: float | None = None
+    role: str = "student"
+    is_active: bool = True
 
 
 class UpdateProfileRequest(BaseModel):

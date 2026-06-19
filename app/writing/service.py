@@ -50,11 +50,9 @@ def _word_count(text: str) -> int:
 
 
 def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
-    if str(attempt.get("user_id")) != str(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this attempt.",
-        )
+    from app.security.ownership import ensure_owner_or_not_found
+
+    ensure_owner_or_not_found(attempt, user_id)
 
 
 def _parse_started_at(attempt: dict[str, Any]) -> datetime:

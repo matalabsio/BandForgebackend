@@ -27,13 +27,51 @@ class ReadingStartTiming:
 @dataclass
 class ReadingAutosaveTiming:
     duration_ms: int = 0
+    request_id: str | None = None
+    auth_ms: int = 0
     attempt_ms: int = 0
     validate_ms: int = 0
     upsert_ms: int = 0
+    attempt_fetch_ms: int = 0
+    question_validate_ms: int = 0
+    answer_upsert_ms: int = 0
+    db_query_count: int = 0
 
     def to_log_fields(self) -> dict[str, Any]:
-        out = asdict(self)
-        return {k: v for k, v in out.items() if v != 0 and v is not None}
+        out: dict[str, Any] = {}
+        if self.request_id:
+            out["request_id"] = self.request_id
+            out["endpoint"] = "reading-autosave"
+        if self.auth_ms:
+            out["auth_ms"] = self.auth_ms
+        if self.attempt_fetch_ms or self.attempt_ms:
+            out["attempt_fetch_ms"] = self.attempt_fetch_ms or self.attempt_ms
+        if self.question_validate_ms or self.validate_ms:
+            out["question_validate_ms"] = (
+                self.question_validate_ms or self.validate_ms
+            )
+        if self.answer_upsert_ms or self.upsert_ms:
+            out["answer_upsert_ms"] = self.answer_upsert_ms or self.upsert_ms
+        if self.db_query_count:
+            out["db_query_count"] = self.db_query_count
+        if self.duration_ms:
+            out["total_ms"] = self.duration_ms
+            out["duration_ms"] = self.duration_ms
+        # Legacy field names for existing log parsers
+        if self.attempt_ms:
+            out["attempt_ms"] = self.attempt_ms
+        if self.validate_ms:
+            out["validate_ms"] = self.validate_ms
+        if self.upsert_ms:
+            out["upsert_ms"] = self.upsert_ms
+        db_ms = (
+            (self.attempt_fetch_ms or self.attempt_ms)
+            + (self.question_validate_ms or self.validate_ms)
+            + (self.answer_upsert_ms or self.upsert_ms)
+        )
+        if db_ms:
+            out["db_ms"] = db_ms
+        return out
 
 
 @dataclass

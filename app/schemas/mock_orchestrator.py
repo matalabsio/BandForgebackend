@@ -70,9 +70,11 @@ class MockCatalogItem(BaseModel):
     id: UUID
     title: str
     description: str | None = None
+    catalog_number: int | None = None
     modules_enabled: list[ModuleName] = Field(default_factory=list)
     listening_parts: int = 0
     reading_passages: int = 0
+    writing_tasks: int = 2
 
 
 class SectionScore(BaseModel):

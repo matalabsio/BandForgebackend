@@ -20,6 +20,11 @@ PHASE2_TABLES = (
     "speaking_reviews",
 )
 
+ADMIN_TABLES = (
+    "question_versions",
+    "admin_audit_logs",
+)
+
 
 PLACEHOLDER_HOSTS = ("your-project.supabase.co",)
 
@@ -50,14 +55,42 @@ def main() -> int:
                 print(f"MISSING or inaccessible: {table} ({exc})")
             missing.append(table)
 
+    for table in ADMIN_TABLES:
+        try:
+            client.table(table).select("id").limit(1).execute()
+            print(f"OK  {table}")
+        except Exception as exc:  # noqa: BLE001 — CLI diagnostic
+            print(f"MISSING or inaccessible: {table} ({exc})")
+            missing.append(table)
+
+    try:
+        row = (
+            client.table("users")
+            .select("id, role, is_active")
+            .limit(1)
+            .execute()
+        ).data
+        if row is not None:
+            print("OK  users.role + users.is_active")
+    except Exception as exc:  # noqa: BLE001 — CLI diagnostic
+        print(f"MISSING or inaccessible: users.role/is_active ({exc})")
+        missing.append("users.role")
+
+    try:
+        client.table("mock_tests").select("id, status").limit(1).execute()
+        print("OK  mock_tests.status")
+    except Exception as exc:  # noqa: BLE001 — CLI diagnostic
+        print(f"MISSING or inaccessible: mock_tests.status ({exc})")
+        missing.append("mock_tests.status")
+
     if missing:
         print(
-            "\nRun supabase/migrations/20260518120000_phase2_new_tables.sql "
-            "in the Supabase SQL Editor if tables are missing."
+            "\nRun pending supabase/migrations (phase2 + admin foundation) "
+            "in the Supabase SQL Editor if tables or columns are missing."
         )
         return 1
 
-    print("\nAll Phase 2 tables reachable.")
+    print("\nAll Phase 2 + admin foundation schema checks passed.")
     return 0
 
 

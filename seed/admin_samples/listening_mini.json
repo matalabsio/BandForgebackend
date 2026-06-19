@@ -1,0 +1,63 @@
+{
+  "resource_id": "admin_sample_listening_s1",
+  "skill": "listening",
+  "section": 1,
+  "title": "Admin Sample — Library Membership Call",
+  "section_type": "social_dialogue",
+  "speakers": ["STAFF", "CALLER"],
+  "total_questions": 4,
+  "mock_test_id": "a0000000-0000-4000-8000-000000000002",
+  "transcript": "STAFF: Riverside Library, good morning.\nCALLER: Hello, I'd like to register for membership please.\nSTAFF: Certainly. May I take your surname?\nCALLER: It's Patel.\nSTAFF: And your address?\nCALLER: 14 Oak Lane.\nSTAFF: Membership is free for local residents. You'll receive your card in about three days.\nCALLER: Perfect, thank you.",
+  "question_groups": [
+    {
+      "group_id": "admin_sample_mcq_1_2",
+      "range": "1-2",
+      "question_type": "multiple_choice",
+      "instruction": "Choose the correct letter, A, B or C.",
+      "options": [
+        { "label": "A", "text": "To pay a late fee" },
+        { "label": "B", "text": "To register for membership" },
+        { "label": "C", "text": "To reserve a study room" }
+      ],
+      "questions": [
+        {
+          "number": 1,
+          "prompt": "Why does the caller phone the library?",
+          "answer": "B"
+        },
+        {
+          "number": 2,
+          "prompt": "How much does membership cost for local residents?",
+          "answer": "A",
+          "options": [
+            { "label": "A", "text": "Nothing" },
+            { "label": "B", "text": "Five pounds" },
+            { "label": "C", "text": "Ten pounds" }
+          ]
+        }
+      ]
+    },
+    {
+      "group_id": "admin_sample_completion_3_4",
+      "range": "3-4",
+      "question_type": "sentence_completion",
+      "instruction": "Complete the notes below. Write NO MORE THAN TWO WORDS AND/OR A NUMBER.",
+      "questions": [
+        {
+          "number": 3,
+          "text_before": "Caller surname:",
+          "text_after": "",
+          "answer": "Patel",
+          "accepted_answers": ["Patel"]
+        },
+        {
+          "number": 4,
+          "text_before": "Card ready in",
+          "text_after": "days",
+          "answer": "three",
+          "accepted_answers": ["three", "3"]
+        }
+      ]
+    }
+  ]
+}

@@ -97,6 +97,8 @@ def _row_to_user(row: dict[str, Any]) -> UserPublic:
         avatar_url=row.get("avatar_url"),
         avatar_display_url=_avatar_display_url(row.get("avatar_url")),
         target_band=float(target) if target is not None else None,
+        role=str(row.get("role") or "student"),
+        is_active=bool(row.get("is_active", True)),
     )
 
 
@@ -220,7 +222,15 @@ async def register_user(
     )
 
 
-async def login_user(*, email: str, password: str) -> tuple[AuthResponse, str, str]:
+ADMIN_ROLES = frozenset({"admin", "super_admin"})
+
+
+async def login_user(
+    *,
+    email: str,
+    password: str,
+    admin_only: bool = False,
+) -> tuple[AuthResponse, str, str]:
     sb = get_supabase()
     result = (
         sb.table("users")
@@ -235,10 +245,32 @@ async def login_user(*, email: str, password: str) -> tuple[AuthResponse, str, s
     if not verify_password(password, row.get("password_hash")):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.")
 
+    role = str(row.get("role") or "student")
+    if admin_only and role not in ADMIN_ROLES:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Temporarily disabled. Continue with Google sign-in.",
+        )
+
+    if admin_only:
+        from app.admin.dependencies import is_admin_email_allowed
+
+        if not is_admin_email_allowed(email):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This account is not authorized for admin access.",
+            )
+
     if _email_verification_required() and row.get("email_verified_at") is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Verify your email before signing in.",
+        )
+
+    if row.get("is_active") is False:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Account is deactivated.",
         )
 
     user_id = UUID(str(row["id"]))
@@ -615,6 +647,11 @@ async def get_user_by_id(user_id: UUID) -> UserPublic:
     if not result.data:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
     user = _row_to_user(result.data[0])
+    if not user.is_active:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Account is deactivated.",
+        )
     if (
         _email_verification_required()
         and user.email

@@ -331,16 +331,44 @@ def distinct_question_parts(*, mock_test_id: UUID, module: str) -> list[int]:
     return sorted(parts) if parts else [1]
 
 
+def _question_parts_in_db(*, mock_test_id: UUID, module: str) -> list[int]:
+    """Distinct parts with at least one question row (empty when none)."""
+    client = get_supabase()
+    result = _exec(
+        client.table("questions")
+        .select("part")
+        .eq("mock_test_id", str(mock_test_id))
+        .eq("module", module)
+    )
+    parts: set[int] = set()
+    for row in result.data or []:
+        p = row.get("part")
+        if p is not None:
+            parts.add(int(p))
+    return sorted(parts)
+
+
 def live_question_parts(*, mock_test_id: UUID, module: str) -> list[int]:
     """Parts required to complete a module for orchestrated test progression."""
+    from app.mock_catalog.catalog import live_parts_tuple
     from app.mock_catalog.constants import MODULE_LIVE_PARTS
 
-    configured = MODULE_LIVE_PARTS.get(str(mock_test_id), {}).get(module)
-    if configured:
-        return list(configured)
+    mock_id_str = str(mock_test_id)
 
-    all_parts = distinct_question_parts(mock_test_id=mock_test_id, module=module)
-    return all_parts if all_parts else [1]
+    legacy = MODULE_LIVE_PARTS.get(mock_id_str, {}).get(module)
+    if legacy:
+        return list(legacy)
+
+    configured = live_parts_tuple(mock_test_id=mock_id_str, module=module)
+    db_parts = _question_parts_in_db(mock_test_id=mock_test_id, module=module)
+
+    if configured:
+        if not db_parts:
+            return []
+        db_set = set(db_parts)
+        return [p for p in configured if p in db_set]
+
+    return db_parts if db_parts else [1]
 
 
 def list_module_scores_by_attempt_ids(
