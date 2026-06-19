@@ -12,7 +12,7 @@ from app.auth import router as auth_router
 from app.listening import router as listening_router
 from app.reading import router as reading_router
 from app.writing import router as writing_router
-from app.routers import attempts, dashboard, mock_attempts, tests
+from app.routers import attempts, dashboard, mock_attempts, status, tests
 
 
 @asynccontextmanager
@@ -63,6 +63,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(status.router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(tests.router)
@@ -99,7 +100,9 @@ def root() -> str:
   <ul>
     <li><a href="/docs">Swagger UI</a> — <code>/docs</code></li>
     <li><a href="/health">Health</a> — <code>/health</code></li>
-    <li><a href="/api/tests/health">Tests router</a> — <code>/api/tests/health</code></li>
+    <li><a href="/api/status">Status</a> — <code>/api/status</code></li>
+    <li><a href="/api/status/ping">Ping</a> — <code>/api/status/ping</code></li>
+    <li><a href="/api/status/ready">Ready</a> — <code>/api/status/ready</code></li>
     <li><a href="/api/tests/db-check">DB check</a> — <code>/api/tests/db-check</code></li>
     <li><a href="/api/tests/r2-check">R2 check</a> — <code>/api/tests/r2-check</code></li>
   </ul>
