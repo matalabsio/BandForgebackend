@@ -1,0 +1,1 @@
+"""Diagnostic product (free funnel)."""

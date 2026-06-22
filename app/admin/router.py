@@ -17,6 +17,7 @@ from app.admin.schemas import (
     AdminQuestionDetail,
     AdminUserDetail,
     AdminUserListResponse,
+    AdminUserOverview,
     ApproveSpeakingRequest,
     AuditLogResponse,
     DashboardMetrics,
@@ -71,6 +72,14 @@ def get_user_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
 ) -> AdminUserDetail:
     return users.get_user_detail(user_id)
+
+
+@router.get("/users/{user_id}/overview", response_model=AdminUserOverview)
+def get_user_overview_route(
+    user_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> AdminUserOverview:
+    return users.get_user_overview(user_id)
 
 
 @router.get("/users/{user_id}/attempts")

@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Respons
 
 from app.auth.dependencies import get_current_user, get_current_user_timed
 from app.auth.schemas import UserPublic
+from app.diagnostic.access import assert_mock_access
 from app.perf.timing import (
     PerfTimer,
     is_perf_enabled,
@@ -86,6 +87,7 @@ def start_reading(
         Query(description="Parent full-mock attempt for orchestration."),
     ] = None,
 ) -> StartReadingResponse:
+    assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     started = perf_counter()
     timing = ReadingStartTiming()
     try:

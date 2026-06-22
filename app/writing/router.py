@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
+from app.diagnostic.access import assert_mock_access
 from app.writing import service
 from app.writing.schemas import (
     AutosaveRequest,
@@ -57,6 +58,7 @@ def start_writing(
         Query(description="Parent full-mock attempt for orchestration."),
     ] = None,
 ) -> StartWritingResponse:
+    assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     started = perf_counter()
     timing = WritingStartTiming()
     try:

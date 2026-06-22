@@ -11,18 +11,34 @@ from fastapi import HTTPException, status
 from app.admin.audit import log_admin_action
 from app.admin.schemas import (
     AdminUserAttemptItem,
+    AdminUserActivityStats,
     AdminUserDetail,
+    AdminUserDiagnosticItem,
+    AdminUserInProgressItem,
     AdminUserListItem,
     AdminUserListResponse,
+    AdminUserMockSessionItem,
+    AdminUserModuleAttemptItem,
+    AdminUserOverview,
+    AdminUserSpeakingReviewItem,
     PatchAdminUserRequest,
 )
 from app.db.supabase_client import get_supabase
+from app.services import user_activity
 
 
 def _parse_dt(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _admin_role(raw: str | None) -> str:
+    """Map DB role to an admin-safe label (guest accounts are diagnostic-only)."""
+    role = raw or "student"
+    if role in ("student", "admin", "super_admin", "guest"):
+        return role
+    return "student"
 
 
 def list_users(
@@ -43,6 +59,9 @@ def list_users(
         query = query.or_(f"email.ilike.{pattern},full_name.ilike.{pattern}")
     if role:
         query = query.eq("role", role)
+    else:
+        # Diagnostic guest JWT accounts are not real students — hide from default list.
+        query = query.neq("role", "guest")
     if active is not None:
         query = query.eq("is_active", active)
 
@@ -55,24 +74,25 @@ def list_users(
     rows = result.data or []
     total = result.count or len(rows)
 
+    user_ids = [str(row["id"]) for row in rows]
+    aggregates = user_activity.batch_user_list_aggregates(user_ids)
+
     items: list[AdminUserListItem] = []
     for row in rows:
         uid = str(row["id"])
-        attempts = (
-            sb.table("mock_attempts")
-            .select("id", count="exact")
-            .eq("user_id", uid)
-            .execute()
-        )
+        agg = aggregates.get(uid, {})
         items.append(
             AdminUserListItem(
                 id=UUID(uid),
                 email=row.get("email"),
                 full_name=row.get("full_name"),
-                role=row.get("role") or "student",
+                role=_admin_role(row.get("role")),
                 is_active=bool(row.get("is_active", True)),
                 created_at=_parse_dt(row["created_at"]),
-                mock_attempt_count=attempts.count or 0,
+                mock_attempt_count=int(agg.get("mock_attempt_count") or 0),
+                completed_mock_count=int(agg.get("completed_mock_count") or 0),
+                last_activity_at=agg.get("last_activity_at"),
+                best_band=agg.get("best_band"),
             )
         )
 
@@ -120,7 +140,7 @@ def get_user_detail(user_id: UUID) -> AdminUserDetail:
         email=row.get("email"),
         full_name=row.get("full_name"),
         phone=row.get("phone"),
-        role=row.get("role") or "student",
+        role=_admin_role(row.get("role")),
         is_active=bool(row.get("is_active", True)),
         email_verified=row.get("email_verified_at") is not None,
         created_at=_parse_dt(row["created_at"]),
@@ -261,3 +281,50 @@ def patch_user(
     )
 
     return get_user_detail(user_id)
+
+
+def get_user_overview(user_id: UUID) -> AdminUserOverview:
+    profile = get_user_detail(user_id)
+    activity = user_activity.build_user_activity_stats(user_id)
+
+    stats = AdminUserActivityStats(
+        total_attempts=activity["total_attempts"],
+        completed_attempts=activity["completed_attempts"],
+        in_progress_attempts=activity["in_progress_attempts"],
+        average_band=activity["average_band"],
+        best_band=activity["best_band"],
+        last_activity_at=activity["last_activity_at"],
+        current_streak=activity["current_streak"],
+        longest_streak=activity["longest_streak"],
+    )
+
+    in_progress = [
+        AdminUserInProgressItem.model_validate(row)
+        for row in activity["in_progress"]
+    ]
+    recent_modules = [
+        AdminUserModuleAttemptItem.model_validate(row)
+        for row in activity["recent_modules"]
+    ]
+    mock_sessions = [
+        AdminUserMockSessionItem.model_validate(row)
+        for row in user_activity.build_user_mock_sessions(user_id)
+    ]
+    diagnostics = [
+        AdminUserDiagnosticItem.model_validate(row)
+        for row in user_activity.list_user_diagnostics(user_id)
+    ]
+    speaking_reviews = [
+        AdminUserSpeakingReviewItem.model_validate(row)
+        for row in user_activity.list_user_speaking_reviews(user_id)
+    ]
+
+    return AdminUserOverview(
+        profile=profile,
+        stats=stats,
+        in_progress=in_progress,
+        recent_modules=recent_modules,
+        mock_sessions=mock_sessions,
+        diagnostics=diagnostics,
+        speaking_reviews=speaking_reviews,
+    )

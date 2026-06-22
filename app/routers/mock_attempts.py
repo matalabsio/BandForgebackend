@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.auth.dependencies import get_current_user, get_current_user_timed
 from app.auth.schemas import UserPublic
 from app.config import get_settings
+from app.diagnostic.access import assert_mock_access
 from app.schemas.mock_orchestrator import (
     InProgressMockAttempt,
     MockAttemptHistoryItem,
@@ -62,6 +63,7 @@ def start_mock_attempt(
     body: StartMockRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> StartMockResponse:
+    assert_mock_access(user=current_user, mock_test_id=body.mock_test_id)
     return mock_orchestrator.start_mock(
         mock_test_id=body.mock_test_id,
         user_id=current_user.id,
@@ -75,6 +77,7 @@ def get_mock_session_state(
     mock_test_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user_timed)],
 ) -> MockAttemptProgress | None:
+    assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     started = perf_counter()
     try:
         progress, timing = mock_orchestrator.get_mock_session_timed(
