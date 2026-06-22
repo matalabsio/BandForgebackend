@@ -12,6 +12,10 @@ from app.admin.schemas import (
     RecentActivityItem,
 )
 from app.db.supabase_client import get_supabase
+from app.mock_catalog.constants import (
+    MAX_CANDIDATE_CATALOG_NUMBER,
+    is_candidate_live_catalog_number,
+)
 
 
 def _parse_dt(value: Any) -> datetime:
@@ -124,8 +128,15 @@ def get_dashboard_overview() -> DashboardOverview:
         .not_.is_("catalog_number", "null")
         .execute()
     ).data or []
-    total_mocks = len(mock_rows)
-    published_mocks = sum(1 for r in mock_rows if r.get("status") == "published")
+    live_catalog_rows = [
+        r
+        for r in mock_rows
+        if is_candidate_live_catalog_number(r.get("catalog_number"))
+    ]
+    published_mocks = sum(
+        1 for r in live_catalog_rows if r.get("status") == "published"
+    )
+    total_mocks = MAX_CANDIDATE_CATALOG_NUMBER
 
     active_user_ids: set[str] = set()
     prev_active_user_ids: set[str] = set()

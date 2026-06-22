@@ -110,6 +110,27 @@ def _auth_response(user: UserPublic, access_token: str) -> AuthResponse:
     )
 
 
+def build_auth_response(user: UserPublic, access_token: str) -> AuthResponse:
+    return _auth_response(user, access_token)
+
+
+async def issue_session_tokens(
+    *,
+    user_id: UUID,
+    email: str | None,
+    phone: str | None,
+    user_agent: str | None = None,
+    ip_address: str | None = None,
+) -> tuple[str, str, str]:
+    return await _issue_tokens(
+        user_id=user_id,
+        email=email,
+        phone=phone,
+        user_agent=user_agent,
+        ip_address=ip_address,
+    )
+
+
 async def collect_signup_lead(
     *,
     phone: str | None,

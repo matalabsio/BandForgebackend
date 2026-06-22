@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
+from app.diagnostic.access import assert_mock_access
 from app.listening import service
 from app.listening.timing import ListeningStartTiming, ListeningSubmitTiming
 from app.listening.schemas import (
@@ -75,6 +76,7 @@ def start_listening(
     ] = True,
 ) -> StartListeningResponse:
     """Start or resume a listening attempt for the current user."""
+    assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     started = perf_counter()
     timing = ListeningStartTiming()
     try:

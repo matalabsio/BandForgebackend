@@ -23,6 +23,7 @@ PHASE2_TABLES = (
 ADMIN_TABLES = (
     "question_versions",
     "admin_audit_logs",
+    "diagnostic_attempts",
 )
 
 

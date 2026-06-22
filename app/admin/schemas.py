@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 MockStatus = Literal["draft", "published", "archived"]
 UserRole = Literal["student", "admin", "super_admin"]
+AdminUserRole = Literal["student", "admin", "super_admin", "guest"]
 
 
 class DashboardMetrics(BaseModel):
@@ -50,10 +51,13 @@ class AdminUserListItem(BaseModel):
     id: UUID
     email: str | None = None
     full_name: str | None = None
-    role: UserRole = "student"
+    role: AdminUserRole = "student"
     is_active: bool = True
     created_at: datetime
     mock_attempt_count: int = 0
+    completed_mock_count: int = 0
+    last_activity_at: datetime | None = None
+    best_band: float | None = None
 
 
 class AdminUserListResponse(BaseModel):
@@ -68,7 +72,7 @@ class AdminUserDetail(BaseModel):
     email: str | None = None
     full_name: str | None = None
     phone: str | None = None
-    role: UserRole = "student"
+    role: AdminUserRole = "student"
     is_active: bool = True
     email_verified: bool = False
     created_at: datetime
@@ -91,6 +95,89 @@ class AdminUserAttemptItem(BaseModel):
 class PatchAdminUserRequest(BaseModel):
     is_active: bool | None = None
     role: UserRole | None = None
+
+
+class AdminUserActivityStats(BaseModel):
+    total_attempts: int = 0
+    completed_attempts: int = 0
+    in_progress_attempts: int = 0
+    average_band: float | None = None
+    best_band: float | None = None
+    last_activity_at: datetime | None = None
+    current_streak: int = 0
+    longest_streak: int = 0
+
+
+class AdminUserInProgressItem(BaseModel):
+    id: str
+    module: str
+    started_at: datetime
+    mock_test_id: str
+    mock_title: str
+    catalog_number: int | None = None
+
+
+class AdminUserModuleAttemptItem(BaseModel):
+    id: str
+    module: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    status: str
+    band: float | None = None
+    raw_score: int | None = None
+    total_count: int | None = None
+    mock_test_id: str
+    mock_title: str
+    catalog_number: int | None = None
+
+
+class AdminUserMockSessionItem(BaseModel):
+    mock_attempt_id: str
+    mock_test_id: str
+    mock_title: str | None = None
+    catalog_number: int | None = None
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    listening_band: float | None = None
+    reading_band: float | None = None
+    writing_band: float | None = None
+    speaking_band: float | None = None
+    aggregate_band: float | None = None
+
+
+class AdminUserDiagnosticItem(BaseModel):
+    id: str
+    client_attempt_id: str
+    status: str
+    listening_band: float | None = None
+    reading_band: float | None = None
+    writing_band: float | None = None
+    speaking_band: float | None = None
+    aggregate_band: float | None = None
+    review: dict[str, Any] | None = None
+    pack_version: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class AdminUserSpeakingReviewItem(BaseModel):
+    id: str
+    attempt_id: str
+    status: str
+    human_band: float | None = None
+    created_at: datetime
+    mock_title: str | None = None
+
+
+class AdminUserOverview(BaseModel):
+    profile: AdminUserDetail
+    stats: AdminUserActivityStats
+    in_progress: list[AdminUserInProgressItem] = Field(default_factory=list)
+    recent_modules: list[AdminUserModuleAttemptItem] = Field(default_factory=list)
+    mock_sessions: list[AdminUserMockSessionItem] = Field(default_factory=list)
+    diagnostics: list[AdminUserDiagnosticItem] = Field(default_factory=list)
+    speaking_reviews: list[AdminUserSpeakingReviewItem] = Field(default_factory=list)
 
 
 class MockModuleSummary(BaseModel):

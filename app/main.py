@@ -12,7 +12,7 @@ from app.auth import router as auth_router
 from app.listening import router as listening_router
 from app.reading import router as reading_router
 from app.writing import router as writing_router
-from app.routers import attempts, dashboard, mock_attempts, status, tests
+from app.routers import attempts, dashboard, diagnostic, mock_attempts, status, tests
 
 
 @asynccontextmanager
@@ -70,6 +70,7 @@ app.include_router(tests.router)
 app.include_router(attempts.router)
 app.include_router(dashboard.router)
 app.include_router(mock_attempts.router)
+app.include_router(diagnostic.router)
 app.include_router(listening_router)
 app.include_router(reading_router)
 app.include_router(writing_router)
