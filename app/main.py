@@ -11,6 +11,7 @@ from app.admin import router as admin_router
 from app.auth import router as auth_router
 from app.listening import router as listening_router
 from app.reading import router as reading_router
+from app.speaking import router as speaking_router
 from app.writing import router as writing_router
 from app.routers import attempts, dashboard, diagnostic, mock_attempts, status, tests
 
@@ -74,6 +75,7 @@ app.include_router(diagnostic.router)
 app.include_router(listening_router)
 app.include_router(reading_router)
 app.include_router(writing_router)
+app.include_router(speaking_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=True)
