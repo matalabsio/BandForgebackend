@@ -91,6 +91,7 @@ class MockAttemptSummary(MockAttemptProgress):
     reading_band: float | None = None
     listening_band: float | None = None
     writing_band: float | None = None
+    speaking_band: float | None = None
 
 
 class InProgressMockAttempt(BaseModel):
@@ -108,6 +109,8 @@ class MockAttemptHistoryItem(BaseModel):
     aggregate_band: float | None = None
     reading_band: float | None = None
     listening_band: float | None = None
+    writing_band: float | None = None
+    speaking_band: float | None = None
 
 
 class MockAttemptHistoryLiteItem(BaseModel):

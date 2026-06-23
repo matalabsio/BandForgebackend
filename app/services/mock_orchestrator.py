@@ -613,6 +613,12 @@ def get_summary(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptSummary:
         module_attempts=module_attempts,
         scores_by_attempt=scores,
     )
+    speaking_band = _module_rollup_band_from_scores(
+        module="speaking",
+        mock_test_id=mock_test_id,
+        module_attempts=module_attempts,
+        scores_by_attempt=scores,
+    )
 
     return MockAttemptSummary(
         **progress.model_dump(),
@@ -620,6 +626,7 @@ def get_summary(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptSummary:
         reading_band=reading_band,
         listening_band=listening_band,
         writing_band=writing_band,
+        speaking_band=speaking_band,
     )
 
 
@@ -785,9 +792,15 @@ def list_attempt_history(
             module_attempts=module_attempts,
             scores_by_attempt=scores,
         )
+        speaking_band = _module_rollup_band_from_scores(
+            module="speaking",
+            mock_test_id=mock_test_id,
+            module_attempts=module_attempts,
+            scores_by_attempt=scores,
+        )
         bands = [
             b
-            for b in (listening_band, reading_band, writing_band)
+            for b in (listening_band, reading_band, writing_band, speaking_band)
             if b is not None
         ]
         aggregate = round(sum(bands) / len(bands), 1) if bands else None
@@ -816,6 +829,8 @@ def list_attempt_history(
                 aggregate_band=aggregate,
                 reading_band=reading_band,
                 listening_band=listening_band,
+                writing_band=writing_band,
+                speaking_band=speaking_band,
             )
         )
     set_json(
@@ -1124,6 +1139,28 @@ def _start_module_attempt(
         if existing:
             return UUID(str(existing["id"])), part
         row = writing_repo.insert_writing_attempt(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=mock_attempt_id,
+            part=part,
+        )
+        return UUID(str(row["id"])), part
+
+    if module == "speaking":
+        from app.speaking import repository as speaking_repo
+
+        existing = speaking_repo.find_in_progress_speaking_attempt(
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            part=part,
+            mock_attempt_id=mock_attempt_id,
+        )
+        if existing and force_new:
+            speaking_repo.abandon_speaking_attempt(attempt_id=UUID(str(existing["id"])))
+            existing = None
+        if existing:
+            return UUID(str(existing["id"])), part
+        row = speaking_repo.insert_speaking_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             mock_attempt_id=mock_attempt_id,

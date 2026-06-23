@@ -19,6 +19,7 @@ from app.admin.schemas import (
     AdminUserListResponse,
     AdminUserOverview,
     ApproveSpeakingRequest,
+    PatchSpeakingReviewRequest,
     AuditLogResponse,
     DashboardMetrics,
     DashboardOverview,
@@ -269,6 +270,17 @@ def get_speaking_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
 ) -> SpeakingReviewDetail:
     return speaking.get_speaking_detail(review_id)
+
+
+@router.patch("/speaking/{review_id}", response_model=SpeakingReviewDetail)
+def patch_speaking_route(
+    review_id: UUID,
+    body: PatchSpeakingReviewRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> SpeakingReviewDetail:
+    return speaking.patch_speaking_review(
+        review_id=review_id, body=body, admin_id=admin.id
+    )
 
 
 @router.patch("/speaking/{review_id}/approve", response_model=SpeakingReviewDetail)

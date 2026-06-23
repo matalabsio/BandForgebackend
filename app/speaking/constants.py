@@ -1,0 +1,4 @@
+"""Speaking module constants."""
+
+SPEAKING_DURATION_MINUTES = 14
+SPEAKING_PART1_RECORD_SECONDS = 120

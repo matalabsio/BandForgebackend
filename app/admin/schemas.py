@@ -325,6 +325,20 @@ class IngestPublishResponse(BaseModel):
     part: int
 
 
+class HumanCriteriaScores(BaseModel):
+    fluency: float = Field(ge=0, le=9)
+    lexical: float = Field(ge=0, le=9)
+    grammar: float = Field(ge=0, le=9)
+    pronunciation: float = Field(ge=0, le=9)
+
+
+class SpeakingSubmissionMeta(BaseModel):
+    part: int | None = None
+    part_label: str | None = None
+    cue_card: str | None = None
+    prompt_title: str | None = None
+
+
 class SpeakingQueueItem(BaseModel):
     id: UUID
     attempt_id: UUID
@@ -332,6 +346,7 @@ class SpeakingQueueItem(BaseModel):
     student_email: str | None = None
     status: str
     human_band: float | None = None
+    ai_overall_band: float | None = None
     created_at: datetime
 
 
@@ -340,6 +355,7 @@ class SpeakingQueueResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    pending_count: int = 0
 
 
 class SpeakingReviewDetail(BaseModel):
@@ -347,6 +363,8 @@ class SpeakingReviewDetail(BaseModel):
     attempt_id: UUID
     status: str
     human_band: float | None = None
+    human_criteria_scores: HumanCriteriaScores | None = None
+    submission_meta: SpeakingSubmissionMeta | None = None
     reviewer_notes: str | None = None
     transcript: str | None = None
     audio_url: str | None = None
@@ -354,12 +372,21 @@ class SpeakingReviewDetail(BaseModel):
     ai_scores: dict[str, Any] | None = None
     student_name: str | None = None
     student_email: str | None = None
+    student_target_band: float | None = None
+    student_current_band: float | None = None
+    queue_pending_count: int = 0
     created_at: datetime
     reviewed_at: datetime | None = None
 
 
+class PatchSpeakingReviewRequest(BaseModel):
+    human_criteria_scores: HumanCriteriaScores | None = None
+    reviewer_notes: str | None = None
+    status: Literal["in_review"] | None = None
+
+
 class ApproveSpeakingRequest(BaseModel):
-    human_band: float = Field(ge=0, le=9)
+    human_criteria_scores: HumanCriteriaScores
     reviewer_notes: str | None = None
 
 
