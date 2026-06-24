@@ -242,7 +242,7 @@ def dashboard_summary(
                 day_counts[d] = day_counts.get(d, 0) + 1
             score = scores_by_attempt.get(str(a["id"]))
             band_val = float(score["band"]) if score and score.get("band") is not None else None
-            if band_val is not None:
+            if band_val is not None and band_val > 0:
                 bands.append(band_val)
             recent.append(
                 RecentAttempt(
