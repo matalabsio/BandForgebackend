@@ -17,7 +17,18 @@ from app.auth.schemas import AuthResponse, UserPublic
 from app.config import get_settings
 from app.diagnostic import service
 from app.diagnostic.complete import complete_diagnostic
-from app.diagnostic.schemas import DiagnosticCompleteRequest, DiagnosticCompleteResponse
+from app.diagnostic.schemas import (
+    DiagnosticCompleteRequest,
+    DiagnosticCompleteResponse,
+    DiagnosticReviewSubmitRequest,
+    DiagnosticReviewSubmitResponse,
+)
+from app.diagnostic.evaluation_schemas import (
+    DiagnosticEvaluateWritingRequest,
+    DiagnosticEvaluateWritingResponse,
+)
+from app.diagnostic.submit_review import submit_diagnostic_review
+from app.diagnostic.writing_evaluator import evaluate_diagnostic_writing
 
 router = APIRouter(prefix="/api/diagnostic", tags=["diagnostic"])
 
@@ -60,6 +71,23 @@ async def diagnostic_complete(
             "Sign in with a full account to save diagnostic results.",
         )
     return complete_diagnostic(user_id=current_user.id, body=body)
+
+
+@router.post("/submit-review", response_model=DiagnosticReviewSubmitResponse)
+async def diagnostic_submit_review(
+    body: DiagnosticReviewSubmitRequest,
+) -> DiagnosticReviewSubmitResponse:
+    """Queue a marketing diagnostic for human examiner review (no login required)."""
+    return await submit_diagnostic_review(body)
+
+
+@router.post("/evaluate-writing", response_model=DiagnosticEvaluateWritingResponse)
+async def diagnostic_evaluate_writing(
+    body: DiagnosticEvaluateWritingRequest,
+    request: Request,
+) -> DiagnosticEvaluateWritingResponse:
+    """Evaluate diagnostic Writing via Groq (cached per essay / attempt)."""
+    return await evaluate_diagnostic_writing(body, request)
 
 
 @router.post("/guest-session", response_model=AuthResponse)

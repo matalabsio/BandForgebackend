@@ -92,6 +92,20 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", validation_alias="OPENAI_MODEL")
 
+    groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
+    groq_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        validation_alias="GROQ_MODEL",
+    )
+    groq_api_base: str = Field(
+        default="https://api.groq.com/openai/v1",
+        validation_alias="GROQ_API_BASE",
+    )
+    diagnostic_writing_prompt_version: str = Field(
+        default="v1",
+        validation_alias="DIAGNOSTIC_WRITING_PROMPT_VERSION",
+    )
+
     auth_demo_otp: str = Field(default="", validation_alias="AUTH_DEMO_OTP")
     auth_open_otp: bool = Field(default=False, validation_alias="AUTH_OPEN_OTP")
     auth_demo_otp_enabled: bool = Field(
@@ -141,6 +155,7 @@ class Settings(BaseSettings):
         "google_redirect_uri",
         "resend_api_key",
         "openai_api_key",
+        "groq_api_key",
         mode="before",
     )
     @classmethod
