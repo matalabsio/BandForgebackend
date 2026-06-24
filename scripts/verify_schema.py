@@ -24,6 +24,8 @@ ADMIN_TABLES = (
     "question_versions",
     "admin_audit_logs",
     "diagnostic_attempts",
+    "diagnostic_review_submissions",
+    "diagnostic_ai_evaluations",
 )
 
 
