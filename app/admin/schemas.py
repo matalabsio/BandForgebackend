@@ -19,6 +19,7 @@ class DashboardMetrics(BaseModel):
     new_signups_7d: int = 0
     mock_attempts_7d: int = 0
     speaking_pending: int = 0
+    writing_pending: int = 0
     total_mocks: int = 0
     published_mocks: int = 0
     users_trend_pct: int | None = None
@@ -198,6 +199,7 @@ class AdminMockListItem(BaseModel):
     catalog_number: int | None = None
     created_at: datetime
     total_questions: int = 0
+    attempt_count: int = 0
     modules: list[MockModuleSummary] = Field(default_factory=list)
 
 

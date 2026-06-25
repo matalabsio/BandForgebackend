@@ -122,6 +122,17 @@ def get_dashboard_overview() -> DashboardOverview:
         .execute()
     ).count or 0
 
+    writing_pending = 0
+    try:
+        writing_pending = (
+            sb.table("diagnostic_review_submissions")
+            .select("id", count="exact")
+            .eq("status", "pending_review")
+            .execute()
+        ).count or 0
+    except Exception:
+        writing_pending = 0
+
     mock_rows = (
         sb.table("mock_tests")
         .select("id, status, catalog_number")
@@ -277,6 +288,7 @@ def get_dashboard_overview() -> DashboardOverview:
         new_signups_7d=signups_7d,
         mock_attempts_7d=mock_attempts_7d,
         speaking_pending=speaking_pending,
+        writing_pending=writing_pending,
         total_mocks=total_mocks,
         published_mocks=published_mocks,
         users_trend_pct=_trend_pct(len(active_user_ids), len(prev_active_user_ids)),
