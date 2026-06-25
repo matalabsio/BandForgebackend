@@ -199,11 +199,36 @@ def _module_summaries(
     return result
 
 
+def _fetch_attempt_counts_by_mock(
+    sb: Any, mock_ids: list[str]
+) -> dict[str, int]:
+    if not mock_ids:
+        return {}
+    try:
+        rows = (
+            _exec(
+                sb.table("mock_attempts")
+                .select("mock_test_id")
+                .in_("mock_test_id", mock_ids)
+            ).data
+            or []
+        )
+        out: dict[str, int] = {}
+        for row in rows:
+            mid = str(row.get("mock_test_id") or "")
+            if mid:
+                out[mid] = out.get(mid, 0) + 1
+        return out
+    except Exception:
+        return {}
+
+
 def _build_mock_list_item(
     row: dict[str, Any],
     *,
     module_rows: list[dict[str, Any]],
     counts: dict[str, dict[int, int]],
+    attempt_count: int = 0,
 ) -> AdminMockListItem:
     mock_id = str(row["id"])
     total = sum(sum(parts.values()) for parts in counts.values())
@@ -224,6 +249,7 @@ def _build_mock_list_item(
         ),
         created_at=_parse_dt(row["created_at"]),
         total_questions=total,
+        attempt_count=attempt_count,
         modules=_module_summaries(
             mock_id=mock_id,
             module_rows=module_rows,
@@ -253,12 +279,14 @@ def list_mocks() -> list[AdminMockListItem]:
     mock_ids = [str(row["id"]) for row in rows]
     modules_by_mock = _fetch_modules_by_mock(sb, mock_ids)
     counts_by_mock = _fetch_question_counts_by_mock(sb, mock_ids)
+    attempt_counts = _fetch_attempt_counts_by_mock(sb, mock_ids)
 
     return [
         _build_mock_list_item(
             row,
             module_rows=modules_by_mock.get(str(row["id"]), []),
             counts=counts_by_mock.get(str(row["id"]), {}),
+            attempt_count=attempt_counts.get(str(row["id"]), 0),
         )
         for row in rows
     ]
