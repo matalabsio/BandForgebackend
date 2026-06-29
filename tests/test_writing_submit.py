@@ -1,4 +1,4 @@
-"""Writing submit scores the essay by word count and persists a band."""
+"""Writing submit queues human review instead of persisting an immediate band."""
 
 from unittest.mock import patch
 from uuid import UUID
@@ -6,7 +6,6 @@ from uuid import UUID
 import pytest
 from fastapi import HTTPException
 
-from app.writing.evaluation import calculate_writing_band
 from app.writing.service import submit_attempt
 
 M01 = UUID("a0000000-0000-4000-8000-000000000001")
@@ -48,7 +47,7 @@ def test_submit_rejects_empty_essay():
         assert exc.value.status_code == 400
 
 
-def test_submit_persists_word_count_band():
+def test_submit_queues_review_without_module_score():
     attempt = {
         "id": str(ATTEMPT),
         "user_id": str(USER),
@@ -64,8 +63,8 @@ def test_submit_persists_word_count_band():
         "question_type": "task2",
         "part": 2,
     }
-    essay = " ".join(["word"] * 260)  # over the 250-word Task 2 minimum
-    expected_band = calculate_writing_band(words=260, part=2)
+    essay = " ".join(["word"] * 260)
+    mock_test = {"id": str(M01), "title": "Mock 1", "is_published": True}
 
     with (
         patch("app.writing.service.repo.get_attempt", return_value=attempt),
@@ -73,10 +72,13 @@ def test_submit_persists_word_count_band():
             "app.writing.service.repo.list_questions_for_part",
             return_value=[question],
         ),
+        patch("app.writing.service.repo.get_mock_test", return_value=mock_test),
+        patch("app.writing.service.repo.upsert_answer") as upsert,
+        patch("app.writing.service.repo.insert_writing_review") as insert_review,
         patch(
-            "app.writing.service.persist_module_submit_bundle",
+            "app.writing.service.repo.mark_attempt_completed",
             return_value={"completed_at": "2026-05-27T12:00:00+00:00"},
-        ) as persist,
+        ) as complete,
     ):
         res = submit_attempt(
             attempt_id=ATTEMPT,
@@ -84,27 +86,12 @@ def test_submit_persists_word_count_band():
             answers=[{"question_id": str(QUESTION), "user_answer": essay}],
         )
 
-    persist.assert_called_once()
-    _, persist_kwargs = persist.call_args
-    assert persist_kwargs["module"] == "writing"
-    assert persist_kwargs["raw_score"] == 260
-    assert persist_kwargs["band"] == expected_band
+    upsert.assert_called_once()
+    insert_review.assert_called_once()
+    complete.assert_called_once()
     assert res.status == "completed"
-    assert res.saved_for_review is False
+    assert res.saved_for_review is True
     assert res.word_count == 260
-    assert res.band is not None and res.band >= 7.8
+    assert res.band is None
     assert res.min_words == 250
     assert res.part == 2
-
-
-def test_writing_band_ladder():
-    # Task 2 (min 250): at/over minimum lands in the 7.8-8.3 range.
-    assert calculate_writing_band(words=250, part=2) == 7.8
-    assert calculate_writing_band(words=350, part=2) == 8.3
-    assert calculate_writing_band(words=500, part=2) == 8.3  # capped
-    # Below the minimum scales down.
-    assert calculate_writing_band(words=200, part=2) < 7.8
-    assert calculate_writing_band(words=0, part=2) == 0.0
-    # Task 1 uses the 150-word minimum.
-    assert calculate_writing_band(words=150, part=1) == 7.8
-    assert calculate_writing_band(words=100, part=1) < 7.8

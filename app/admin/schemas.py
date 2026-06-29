@@ -79,6 +79,7 @@ class AdminUserDetail(BaseModel):
     created_at: datetime
     mock_attempt_count: int = 0
     completed_mock_count: int = 0
+    target_band: float | None = None
 
 
 class AdminUserAttemptItem(BaseModel):
@@ -389,6 +390,80 @@ class PatchSpeakingReviewRequest(BaseModel):
 
 class ApproveSpeakingRequest(BaseModel):
     human_criteria_scores: HumanCriteriaScores
+    reviewer_notes: str | None = None
+
+
+class WritingHumanCriteriaScores(BaseModel):
+    task_achievement: float = Field(ge=0, le=9)
+    coherence: float = Field(ge=0, le=9)
+    lexical_resource: float = Field(ge=0, le=9)
+    grammar: float = Field(ge=0, le=9)
+
+
+class WritingSubmissionMeta(BaseModel):
+    part: int | None = None
+    part_label: str | None = None
+    prompt_title: str | None = None
+    question: str | None = None
+    essay: str | None = None
+    word_count: int | None = None
+    mock_title: str | None = None
+
+
+class WritingQueueItem(BaseModel):
+    id: UUID
+    source: Literal["mock", "diagnostic"]
+    student_name: str | None = None
+    student_email: str | None = None
+    status: str
+    human_band: float | None = None
+    ai_overall_band: float | None = None
+    task_label: str | None = None
+    created_at: datetime
+
+
+class WritingQueueResponse(BaseModel):
+    items: list[WritingQueueItem]
+    total: int
+    page: int
+    page_size: int
+    pending_count: int = 0
+
+
+class WritingReviewDetail(BaseModel):
+    id: UUID
+    source: Literal["mock", "diagnostic"]
+    attempt_id: UUID | None = None
+    client_attempt_id: str | None = None
+    status: str
+    human_band: float | None = None
+    human_criteria_scores: WritingHumanCriteriaScores | None = None
+    submission_meta: WritingSubmissionMeta | None = None
+    essay: str | None = None
+    question: str | None = None
+    word_count: int | None = None
+    reviewer_notes: str | None = None
+    ai_scores: dict[str, Any] | None = None
+    ai_feedback: dict[str, Any] | None = None
+    student_name: str | None = None
+    student_email: str | None = None
+    student_target_band: float | None = None
+    student_current_band: float | None = None
+    task_label: str | None = None
+    mock_title: str | None = None
+    queue_pending_count: int = 0
+    created_at: datetime
+    reviewed_at: datetime | None = None
+
+
+class PatchWritingReviewRequest(BaseModel):
+    human_criteria_scores: WritingHumanCriteriaScores | None = None
+    reviewer_notes: str | None = None
+    status: Literal["in_review"] | None = None
+
+
+class ApproveWritingRequest(BaseModel):
+    human_criteria_scores: WritingHumanCriteriaScores
     reviewer_notes: str | None = None
 
 

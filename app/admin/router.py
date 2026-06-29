@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.admin import audit_routes, dashboard, mocks, mocks_ingest, questions, speaking, users
+from app.admin import audit_routes, dashboard, mocks, mocks_ingest, questions, speaking, users, writing
 from app.admin.dependencies import require_admin, require_super_admin
 from app.admin.schemas import (
     AdminMockDetail,
@@ -19,7 +19,9 @@ from app.admin.schemas import (
     AdminUserListResponse,
     AdminUserOverview,
     ApproveSpeakingRequest,
+    ApproveWritingRequest,
     PatchSpeakingReviewRequest,
+    PatchWritingReviewRequest,
     AuditLogResponse,
     DashboardMetrics,
     DashboardOverview,
@@ -33,6 +35,8 @@ from app.admin.schemas import (
     QuestionTreeResponse,
     SpeakingQueueResponse,
     SpeakingReviewDetail,
+    WritingQueueResponse,
+    WritingReviewDetail,
 )
 from app.auth.schemas import UserPublic
 from app.listening.service import invalidate_listening_audio_caches
@@ -291,6 +295,57 @@ def approve_speaking_route(
 ) -> SpeakingReviewDetail:
     return speaking.approve_speaking_review(
         review_id=review_id, body=body, admin_id=admin.id
+    )
+
+
+@router.get("/writing", response_model=WritingQueueResponse)
+def list_writing_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> WritingQueueResponse:
+    return writing.list_writing_queue(
+        status_filter=status, page=page, page_size=page_size
+    )
+
+
+@router.get("/writing/{review_id}", response_model=WritingReviewDetail)
+def get_writing_route(
+    review_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")],
+) -> WritingReviewDetail:
+    return writing.get_writing_detail(review_id=review_id, source=source)  # type: ignore[arg-type]
+
+
+@router.patch("/writing/{review_id}", response_model=WritingReviewDetail)
+def patch_writing_route(
+    review_id: UUID,
+    body: PatchWritingReviewRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")],
+) -> WritingReviewDetail:
+    return writing.patch_writing_review(
+        review_id=review_id,
+        source=source,  # type: ignore[arg-type]
+        body=body,
+        admin_id=admin.id,
+    )
+
+
+@router.patch("/writing/{review_id}/approve", response_model=WritingReviewDetail)
+def approve_writing_route(
+    review_id: UUID,
+    body: ApproveWritingRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")],
+) -> WritingReviewDetail:
+    return writing.approve_writing_review(
+        review_id=review_id,
+        source=source,  # type: ignore[arg-type]
+        body=body,
+        admin_id=admin.id,
     )
 
 

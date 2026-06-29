@@ -10,7 +10,6 @@ from uuid import UUID
 from fastapi import HTTPException, status
 
 from app.cache.hybrid_cache import get_json, set_json
-from app.db.module_submit_bundle import persist_module_submit_bundle
 from app.config import get_settings
 from app.schemas.test_engine import TestSummary
 from app.services.mock_progress_timing import MockProgressTiming
@@ -25,6 +24,7 @@ from app.writing.schemas import (
     AutosaveResponse,
     StartWritingResponse,
     SubmitWritingResponse,
+    WritingPendingResponse,
     WritingReviewResponse,
     WritingTaskQuestion,
 )
@@ -337,30 +337,38 @@ def submit_attempt(
 
     t0 = perf_counter()
     words = _word_count(essay)
-    band = calculate_writing_band(words=words, part=part)
+    estimate_band = calculate_writing_band(words=words, part=part)
     if timing is not None:
         timing.scoring_compute_ms = round((perf_counter() - t0) * 1000)
 
     now = datetime.now(UTC)
     t0 = perf_counter()
-    completed = persist_module_submit_bundle(
+    repo.upsert_answer(
         attempt_id=attempt_id,
-        user_id=user_id,
-        module="writing",
-        completed_at=now,
-        answer_rows=[
-            {
-                "question_id": str(question_id),
-                "user_answer": essay,
-            }
-        ],
-        raw_score=words,
-        total_count=words,
-        band=band,
-        skill_breakdown={
-            "word_count": {"count": words, "part": part},
+        question_id=question_id,
+        user_answer=essay,
+    )
+    test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
+    part_label = f"Task {part}"
+    submission_meta = {
+        "part": part,
+        "part_label": part_label,
+        "prompt_title": str(question.get("question_type") or "writing"),
+        "question": str(question.get("prompt") or ""),
+        "essay": essay,
+        "word_count": words,
+        "mock_title": test_row.get("title"),
+    }
+    repo.insert_writing_review(
+        attempt_id=attempt_id,
+        submission_meta=submission_meta,
+        ai_scores={
+            "word_count_estimate": estimate_band,
+            "word_count": words,
         },
-        correct_count=words,
+    )
+    completed = repo.mark_attempt_completed(
+        attempt_id, completed_at_iso=now.isoformat()
     )
     if timing is not None:
         timing.rpc_bundle_ms = round((perf_counter() - t0) * 1000)
@@ -405,9 +413,9 @@ def submit_attempt(
         submitted_at=submitted_at,
         part=part,
         word_count=words,
-        band=band,
+        band=None,
         min_words=min_words_for_part(part),
-        saved_for_review=False,
+        saved_for_review=True,
         next_part=next_part,
         mock_next_module=mock_next_module,
         mock_next_part=mock_next_part,
@@ -453,12 +461,14 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         )
 
     words = _word_count(essay)
+    review_row = repo.get_writing_review_for_attempt(attempt_id)
     score_row = repo.get_module_score(attempt_id)
-    band = (
-        float(score_row["band"])
-        if score_row and score_row.get("band") is not None
-        else calculate_writing_band(words=words, part=part)
-    )
+    saved_for_review = review_row is not None
+    band = None
+    if score_row and score_row.get("band") is not None:
+        band = float(score_row["band"])
+    elif review_row and review_row.get("human_band") is not None:
+        band = float(review_row["human_band"])
 
     opts = question.get("options")
     return WritingReviewResponse(
@@ -474,5 +484,50 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         band=band,
         min_words=min_words_for_part(part),
         submitted_at=submitted_at,
-        saved_for_review=False,
+        saved_for_review=saved_for_review and band is None,
+    )
+
+
+def get_pending_status(
+    *,
+    attempt_id: UUID,
+    user_id: UUID,
+) -> WritingPendingResponse:
+    attempt = repo.get_attempt(attempt_id)
+    _ensure_owner(attempt, user_id)
+    if attempt.get("module") != "writing":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a writing attempt.")
+
+    review = repo.get_writing_review_for_attempt(attempt_id)
+    if not review:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No writing submission found.")
+
+    review_status = str(review.get("status") or "pending")
+    human_band = review.get("human_band")
+    band_val = float(human_band) if human_band is not None else None
+
+    if review_status == "completed" and band_val is not None:
+        message = f"Your Writing band is {band_val:.1f}."
+    else:
+        message = (
+            "Your Writing score is coming soon. A certified examiner is reviewing "
+            "your essay — you will receive your band within 24 hours."
+        )
+
+    completed_raw = attempt.get("completed_at")
+    submitted_at = None
+    if completed_raw:
+        submitted_at = (
+            datetime.fromisoformat(str(completed_raw).replace("Z", "+00:00"))
+            if isinstance(completed_raw, str)
+            else completed_raw
+        )
+
+    return WritingPendingResponse(
+        attempt_id=attempt_id,
+        status=str(attempt.get("status") or "completed"),
+        review_status=review_status,
+        human_band=band_val,
+        submitted_at=submitted_at,
+        message=message,
     )
