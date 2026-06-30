@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import HTTPException, status
-
 from app.db.supabase_client import get_supabase
 from app.diagnostic.review_email import send_diagnostic_submitted_email
 from app.diagnostic.schemas import DiagnosticReviewSubmitRequest, DiagnosticReviewSubmitResponse
@@ -33,12 +31,15 @@ async def submit_diagnostic_review(
 ) -> DiagnosticReviewSubmitResponse:
     sb = get_supabase()
 
+    # Writing AI evaluation is optional: a too-short / empty essay skips AI
+    # scoring (writing band stays null) but the diagnostic must still be queued
+    # for human review so it shows up in the admin Diagnostics queue.
     writing_eval = _lookup_writing_evaluation(body.client_attempt_id)
-    if not writing_eval:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Writing AI evaluation required before submit-review.",
-        )
+    writing_band = (
+        float(writing_eval["overall_band"])
+        if writing_eval and writing_eval.get("overall_band") is not None
+        else body.writing_band
+    )
 
     payload: dict[str, Any] = {
         "client_attempt_id": body.client_attempt_id,
@@ -49,14 +50,15 @@ async def submit_diagnostic_review(
         "target_band": body.target_band,
         "listening_band": body.listening_band,
         "reading_band": body.reading_band,
-        "writing_band": float(writing_eval["overall_band"]),
+        "writing_band": writing_band,
         "speaking_band": body.speaking_band,
         "aggregate_band": body.aggregate_band,
         "answers": body.answers,
         "review": body.review,
         "status": "pending_review",
-        "writing_evaluation_id": str(writing_eval["id"]),
     }
+    if writing_eval and writing_eval.get("id"):
+        payload["writing_evaluation_id"] = str(writing_eval["id"])
 
     existing = (
         sb.table("diagnostic_review_submissions")

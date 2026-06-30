@@ -10,6 +10,7 @@ from app.middleware.timing import ApiTimingMiddleware
 from app.admin import router as admin_router
 from app.auth import router as auth_router
 from app.listening import router as listening_router
+from app.payments import router as payments_router
 from app.reading import router as reading_router
 from app.speaking import router as speaking_router
 from app.writing import router as writing_router
@@ -76,6 +77,7 @@ app.include_router(listening_router)
 app.include_router(reading_router)
 app.include_router(writing_router)
 app.include_router(speaking_router)
+app.include_router(payments_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=True)

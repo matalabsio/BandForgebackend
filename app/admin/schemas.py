@@ -483,3 +483,88 @@ class AuditLogResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class DiagnosticSpeakingPart1Item(BaseModel):
+    question_id: str
+    duration_sec: int = 0
+    completed: bool = False
+
+
+class DiagnosticSpeakingSummary(BaseModel):
+    part1: list[DiagnosticSpeakingPart1Item] = Field(default_factory=list)
+    part2_prep_sec: int | None = None
+    part2_record_sec: int | None = None
+    part2_completed: bool = False
+
+
+class DiagnosticQueueItem(BaseModel):
+    id: UUID
+    full_name: str
+    email: str | None = None
+    phone: str
+    goal_label: str | None = None
+    target_band: float | None = None
+    listening_band: float | None = None
+    reading_band: float | None = None
+    writing_band: float | None = None
+    speaking_band: float | None = None
+    speaking_human_band: float | None = None
+    aggregate_band: float | None = None
+    status: str
+    report_email_sent_at: datetime | None = None
+    created_at: datetime
+
+
+class DiagnosticQueueResponse(BaseModel):
+    items: list[DiagnosticQueueItem]
+    total: int
+    page: int
+    page_size: int
+    pending_count: int = 0
+
+
+class DiagnosticWritingSummary(BaseModel):
+    task_part: int | None = None
+    overall_band: float | None = None
+    essay_preview: str | None = None
+    word_count: int | None = None
+    ai_feedback: dict[str, Any] | None = None
+
+
+class DiagnosticDetail(BaseModel):
+    id: UUID
+    client_attempt_id: str
+    full_name: str
+    email: str | None = None
+    phone: str
+    goal_label: str | None = None
+    target_band: float | None = None
+    listening_band: float | None = None
+    reading_band: float | None = None
+    writing_band: float | None = None
+    writing_human_band: float | None = None
+    speaking_band: float | None = None
+    speaking_human_band: float | None = None
+    aggregate_band: float | None = None
+    status: str
+    speaking_human_criteria_scores: HumanCriteriaScores | None = None
+    speaking_reviewer_notes: str | None = None
+    speaking_reviewed_at: datetime | None = None
+    report_email_sent_at: datetime | None = None
+    writing_review_id: UUID | None = None
+    writing: DiagnosticWritingSummary | None = None
+    speaking: DiagnosticSpeakingSummary | None = None
+    created_at: datetime
+    reviewed_at: datetime | None = None
+
+
+class PatchDiagnosticSpeakingRequest(BaseModel):
+    human_criteria_scores: HumanCriteriaScores
+    reviewer_notes: str | None = None
+
+
+class SendDiagnosticReportResponse(BaseModel):
+    ok: bool
+    sent_at: datetime
+    recipient: str

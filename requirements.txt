@@ -9,4 +9,5 @@ python-jose[cryptography]
 httpx
 boto3
 redis
+razorpay
 pytest
