@@ -84,3 +84,12 @@ class WritingReviewResponse(BaseModel):
     min_words: int = 0
     submitted_at: datetime | None = None
     saved_for_review: bool = False
+
+
+class WritingPendingResponse(BaseModel):
+    attempt_id: UUID
+    status: str
+    review_status: str
+    human_band: float | None = None
+    submitted_at: datetime | None = None
+    message: str

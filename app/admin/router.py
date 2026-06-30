@@ -7,7 +7,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.admin import audit_routes, dashboard, mocks, mocks_ingest, questions, speaking, users
+from app.admin import (
+    audit_routes,
+    dashboard,
+    diagnostics,
+    mocks,
+    mocks_ingest,
+    payments as admin_payments,
+    questions,
+    speaking,
+    users,
+    writing,
+)
+from app.admin.payments import (
+    AdminPaymentMetrics,
+    AdminPaymentsResponse,
+    AdminSubscriptionsResponse,
+)
 from app.admin.dependencies import require_admin, require_super_admin
 from app.admin.schemas import (
     AdminMockDetail,
@@ -19,20 +35,28 @@ from app.admin.schemas import (
     AdminUserListResponse,
     AdminUserOverview,
     ApproveSpeakingRequest,
+    ApproveWritingRequest,
     PatchSpeakingReviewRequest,
+    PatchWritingReviewRequest,
     AuditLogResponse,
     DashboardMetrics,
     DashboardOverview,
+    DiagnosticDetail,
+    DiagnosticQueueResponse,
     IngestPublishRequest,
     IngestPublishResponse,
     IngestValidateRequest,
     IngestValidateResponse,
     PatchAdminUserRequest,
+    PatchDiagnosticSpeakingRequest,
     PatchMockStatusRequest,
     PatchQuestionRequest,
     QuestionTreeResponse,
+    SendDiagnosticReportResponse,
     SpeakingQueueResponse,
     SpeakingReviewDetail,
+    WritingQueueResponse,
+    WritingReviewDetail,
 )
 from app.auth.schemas import UserPublic
 from app.listening.service import invalidate_listening_audio_caches
@@ -291,6 +315,133 @@ def approve_speaking_route(
 ) -> SpeakingReviewDetail:
     return speaking.approve_speaking_review(
         review_id=review_id, body=body, admin_id=admin.id
+    )
+
+
+@router.get("/writing", response_model=WritingQueueResponse)
+def list_writing_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> WritingQueueResponse:
+    return writing.list_writing_queue(
+        status_filter=status, page=page, page_size=page_size
+    )
+
+
+@router.get("/writing/{review_id}", response_model=WritingReviewDetail)
+def get_writing_route(
+    review_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")],
+) -> WritingReviewDetail:
+    return writing.get_writing_detail(review_id=review_id, source=source)  # type: ignore[arg-type]
+
+
+@router.patch("/writing/{review_id}", response_model=WritingReviewDetail)
+def patch_writing_route(
+    review_id: UUID,
+    body: PatchWritingReviewRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")],
+) -> WritingReviewDetail:
+    return writing.patch_writing_review(
+        review_id=review_id,
+        source=source,  # type: ignore[arg-type]
+        body=body,
+        admin_id=admin.id,
+    )
+
+
+@router.patch("/writing/{review_id}/approve", response_model=WritingReviewDetail)
+def approve_writing_route(
+    review_id: UUID,
+    body: ApproveWritingRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")],
+) -> WritingReviewDetail:
+    return writing.approve_writing_review(
+        review_id=review_id,
+        source=source,  # type: ignore[arg-type]
+        body=body,
+        admin_id=admin.id,
+    )
+
+
+@router.get("/diagnostics", response_model=DiagnosticQueueResponse)
+def list_diagnostics_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    status: str | None = None,
+    q: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> DiagnosticQueueResponse:
+    return diagnostics.list_diagnostics(
+        status_filter=status, q=q, page=page, page_size=page_size
+    )
+
+
+@router.get("/diagnostics/{diagnostic_id}", response_model=DiagnosticDetail)
+def get_diagnostic_route(
+    diagnostic_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> DiagnosticDetail:
+    return diagnostics.get_diagnostic_detail(diagnostic_id)
+
+
+@router.patch("/diagnostics/{diagnostic_id}/speaking", response_model=DiagnosticDetail)
+def patch_diagnostic_speaking_route(
+    diagnostic_id: UUID,
+    body: PatchDiagnosticSpeakingRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> DiagnosticDetail:
+    return diagnostics.patch_diagnostic_speaking(
+        diagnostic_id=diagnostic_id, body=body, admin_id=admin.id
+    )
+
+
+@router.post(
+    "/diagnostics/{diagnostic_id}/send-report",
+    response_model=SendDiagnosticReportResponse,
+)
+async def send_diagnostic_report_route(
+    diagnostic_id: UUID,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> SendDiagnosticReportResponse:
+    return await diagnostics.send_diagnostic_report(
+        diagnostic_id=diagnostic_id, admin_id=admin.id
+    )
+
+
+@router.get("/payments", response_model=AdminPaymentsResponse)
+def list_payments_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> AdminPaymentsResponse:
+    return admin_payments.list_payments(
+        status_filter=status, page=page, page_size=page_size
+    )
+
+
+@router.get("/payments/metrics", response_model=AdminPaymentMetrics)
+def payment_metrics_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> AdminPaymentMetrics:
+    return admin_payments.get_payment_metrics()
+
+
+@router.get("/subscriptions", response_model=AdminSubscriptionsResponse)
+def list_subscriptions_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> AdminSubscriptionsResponse:
+    return admin_payments.list_subscriptions(
+        status_filter=status, page=page, page_size=page_size
     )
 
 

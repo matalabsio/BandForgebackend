@@ -106,6 +106,13 @@ class Settings(BaseSettings):
         validation_alias="DIAGNOSTIC_WRITING_PROMPT_VERSION",
     )
 
+    razorpay_key_id: str = Field(default="", validation_alias="RAZORPAY_KEY_ID")
+    razorpay_key_secret: str = Field(default="", validation_alias="RAZORPAY_KEY_SECRET")
+    razorpay_webhook_secret: str = Field(
+        default="", validation_alias="RAZORPAY_WEBHOOK_SECRET"
+    )
+    razorpay_enabled: bool = Field(default=False, validation_alias="RAZORPAY_ENABLED")
+
     auth_demo_otp: str = Field(default="", validation_alias="AUTH_DEMO_OTP")
     auth_open_otp: bool = Field(default=False, validation_alias="AUTH_OPEN_OTP")
     auth_demo_otp_enabled: bool = Field(
@@ -143,6 +150,7 @@ class Settings(BaseSettings):
         "auth_demo_otp_enabled",
         "phone_otp_enabled",
         "auth_skip_email_verify",
+        "razorpay_enabled",
         mode="before",
     )
     @classmethod
@@ -156,6 +164,9 @@ class Settings(BaseSettings):
         "resend_api_key",
         "openai_api_key",
         "groq_api_key",
+        "razorpay_key_id",
+        "razorpay_key_secret",
+        "razorpay_webhook_secret",
         mode="before",
     )
     @classmethod

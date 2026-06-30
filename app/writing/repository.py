@@ -171,33 +171,6 @@ def get_answer_for_attempt(
     return rows[0] if rows else None
 
 
-def upsert_module_score(
-    *,
-    attempt_id: UUID,
-    band: float,
-    word_count: int,
-    part: int,
-) -> None:
-    """Persist a writing band so it rolls up into mock progress and aggregate."""
-    client = get_supabase()
-    _exec(
-        client.table("module_scores").upsert(
-            {
-                "attempt_id": str(attempt_id),
-                "module": "writing",
-                "raw_score": word_count,
-                "correct_count": word_count,
-                "total_count": word_count,
-                "band": band,
-                "skill_breakdown": {
-                    "word_count": {"count": word_count, "part": part},
-                },
-            },
-            on_conflict="attempt_id,module",
-        )
-    )
-
-
 def get_module_score(attempt_id: UUID) -> dict[str, Any] | None:
     client = get_supabase()
     result = _exec(
@@ -209,6 +182,42 @@ def get_module_score(attempt_id: UUID) -> dict[str, Any] | None:
     )
     rows = result.data or []
     return rows[0] if rows else None
+
+
+def get_writing_review_for_attempt(attempt_id: UUID) -> dict[str, Any] | None:
+    client = get_supabase()
+    result = _exec(
+        client.table("writing_reviews")
+        .select("id, status, human_band, created_at, reviewer_notes")
+        .eq("attempt_id", str(attempt_id))
+        .order("created_at", desc=True)
+        .limit(1)
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def insert_writing_review(
+    *,
+    attempt_id: UUID,
+    submission_meta: dict[str, Any],
+    ai_scores: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    client = get_supabase()
+    payload: dict[str, Any] = {
+        "attempt_id": str(attempt_id),
+        "status": "pending",
+        "submission_meta": submission_meta,
+    }
+    if ai_scores is not None:
+        payload["ai_scores"] = ai_scores
+    insert = _exec(client.table("writing_reviews").insert(payload))
+    if not insert.data:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Failed to queue writing review.",
+        )
+    return insert.data[0]
 
 
 def mark_attempt_completed(attempt_id: UUID, *, completed_at_iso: str) -> dict[str, Any]:

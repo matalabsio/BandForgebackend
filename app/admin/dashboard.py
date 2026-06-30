@@ -124,12 +124,19 @@ def get_dashboard_overview() -> DashboardOverview:
 
     writing_pending = 0
     try:
-        writing_pending = (
+        mock_writing_pending = (
+            sb.table("writing_reviews")
+            .select("id", count="exact")
+            .eq("status", "pending")
+            .execute()
+        ).count or 0
+        diag_writing_pending = (
             sb.table("diagnostic_review_submissions")
             .select("id", count="exact")
             .eq("status", "pending_review")
             .execute()
         ).count or 0
+        writing_pending = int(mock_writing_pending) + int(diag_writing_pending)
     except Exception:
         writing_pending = 0
 

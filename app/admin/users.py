@@ -109,7 +109,8 @@ def get_user_detail(user_id: UUID) -> AdminUserDetail:
     result = (
         sb.table("users")
         .select(
-            "id, email, full_name, phone, role, is_active, email_verified_at, created_at"
+            "id, email, full_name, phone, role, is_active, email_verified_at, "
+            "created_at, target_band"
         )
         .eq("id", str(user_id))
         .limit(1)
@@ -146,6 +147,9 @@ def get_user_detail(user_id: UUID) -> AdminUserDetail:
         created_at=_parse_dt(row["created_at"]),
         mock_attempt_count=mock_count,
         completed_mock_count=completed,
+        target_band=(
+            float(row["target_band"]) if row.get("target_band") is not None else None
+        ),
     )
 
 

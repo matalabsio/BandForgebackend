@@ -19,6 +19,7 @@ from app.writing.schemas import (
     StartWritingResponse,
     SubmitWritingRequest,
     SubmitWritingResponse,
+    WritingPendingResponse,
     WritingReviewResponse,
 )
 from app.writing.timing import (
@@ -162,3 +163,11 @@ def writing_review(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> WritingReviewResponse:
     return service.get_review(attempt_id=attempt_id, user_id=current_user.id)
+
+
+@router.get("/attempts/{attempt_id}/pending", response_model=WritingPendingResponse)
+def writing_pending(
+    attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> WritingPendingResponse:
+    return service.get_pending_status(attempt_id=attempt_id, user_id=current_user.id)
