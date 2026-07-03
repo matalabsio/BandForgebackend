@@ -7,7 +7,7 @@ from jose import JWTError
 
 from app.auth.constants import ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE
 from app.auth.jwt import decode_access_token
-from app.auth.schemas import UserPublic
+from app.auth.schemas import SessionUser, UserPublic
 from app.auth import service
 
 
@@ -25,19 +25,34 @@ def _extract_access_token(
     return _extract_bearer(request) or bf_access
 
 
-async def get_current_user(
+async def _resolve_user_id_from_request(
     request: Request,
-    bf_access: Annotated[str | None, Cookie(alias=ACCESS_TOKEN_COOKIE)] = None,
-) -> UserPublic:
+    bf_access: str | None,
+) -> UUID:
     token = _extract_access_token(request, bf_access)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated.")
     try:
         payload = decode_access_token(token)
-        user_id = UUID(str(payload["sub"]))
+        return UUID(str(payload["sub"]))
     except (JWTError, ValueError) as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token.") from exc
+
+
+async def get_current_user(
+    request: Request,
+    bf_access: Annotated[str | None, Cookie(alias=ACCESS_TOKEN_COOKIE)] = None,
+) -> UserPublic:
+    user_id = await _resolve_user_id_from_request(request, bf_access)
     return await service.get_user_by_id(user_id)
+
+
+async def get_current_session_user(
+    request: Request,
+    bf_access: Annotated[str | None, Cookie(alias=ACCESS_TOKEN_COOKIE)] = None,
+) -> SessionUser:
+    user_id = await _resolve_user_id_from_request(request, bf_access)
+    return await service.get_session_user_by_id(user_id)
 
 
 async def get_current_user_timed(

@@ -16,7 +16,13 @@ from app.auth.constants import (
 from app.auth.email import send_password_reset_email, send_verification_email
 from app.auth.jwt import create_access_token, create_refresh_token, decode_refresh_token
 from app.auth.otp import OtpError, create_and_send_otp, verify_otp_code
-from app.auth.schemas import AuthResponse, MessageResponse, UpdateProfileRequest, UserPublic
+from app.auth.schemas import (
+    AuthResponse,
+    MessageResponse,
+    SessionUser,
+    UpdateProfileRequest,
+    UserPublic,
+)
 from app.storage.r2 import delete_object, upload_object
 from app.auth.security import hash_password, verify_password
 from app.auth.utils import generate_opaque_token, hash_token, phone_e164, utcnow
@@ -100,6 +106,39 @@ def _row_to_user(row: dict[str, Any]) -> UserPublic:
         role=str(row.get("role") or "student"),
         is_active=bool(row.get("is_active", True)),
     )
+
+
+def _row_to_session(row: dict[str, Any]) -> SessionUser:
+    return SessionUser(
+        id=UUID(str(row["id"])),
+        full_name=row.get("full_name"),
+        email=row.get("email"),
+        role=str(row.get("role") or "student"),
+        avatar_display_url=_avatar_display_url(row.get("avatar_url")),
+        is_active=bool(row.get("is_active", True)),
+    )
+
+
+def _assert_user_accessible(
+    *,
+    email: str | None,
+    email_verified_at: Any,
+    is_active: bool,
+) -> None:
+    if not is_active:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Account is deactivated.",
+        )
+    if (
+        _email_verification_required()
+        and email
+        and email_verified_at is None
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Verify your email before continuing.",
+        )
 
 
 def _auth_response(user: UserPublic, access_token: str) -> AuthResponse:
@@ -667,22 +706,33 @@ async def get_user_by_id(user_id: UUID) -> UserPublic:
     result = sb.table("users").select("*").eq("id", str(user_id)).limit(1).execute()
     if not result.data:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
-    user = _row_to_user(result.data[0])
-    if not user.is_active:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Account is deactivated.",
-        )
-    if (
-        _email_verification_required()
-        and user.email
-        and not user.email_verified
-    ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Verify your email before continuing.",
-        )
-    return user
+    row = result.data[0]
+    _assert_user_accessible(
+        email=row.get("email"),
+        email_verified_at=row.get("email_verified_at"),
+        is_active=bool(row.get("is_active", True)),
+    )
+    return _row_to_user(row)
+
+
+async def get_session_user_by_id(user_id: UUID) -> SessionUser:
+    sb = get_supabase()
+    result = (
+        sb.table("users")
+        .select("id, full_name, email, role, avatar_url, is_active, email_verified_at")
+        .eq("id", str(user_id))
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    row = result.data[0]
+    _assert_user_accessible(
+        email=row.get("email"),
+        email_verified_at=row.get("email_verified_at"),
+        is_active=bool(row.get("is_active", True)),
+    )
+    return _row_to_session(row)
 
 
 async def _issue_tokens(
