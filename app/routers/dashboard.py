@@ -44,6 +44,7 @@ class RecentAttempt(BaseModel):
     band: float | None = None
     raw_score: int | None = None
     total_questions: int | None = None
+    part: int | None = None
     mock_test: MockTestRef
 
 
@@ -136,6 +137,15 @@ def _safe_dt(value: Any) -> datetime | None:
         return None
 
 
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("/summary", response_model=DashboardSummary)
 def dashboard_summary(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
@@ -166,7 +176,7 @@ def dashboard_summary(
 
     attempts_res = execute_with_retry(lambda: (
         client.table("test_attempts")
-        .select("id, module, status, started_at, completed_at, mock_test_id")
+        .select("id, module, status, started_at, completed_at, mock_test_id, part")
         .eq("user_id", user_id)
         .order("started_at", desc=True)
         .limit(50)
@@ -197,6 +207,36 @@ def dashboard_summary(
         ))
         for row in scores_res.data or []:
             scores_by_attempt[str(row["attempt_id"])] = row
+
+    writing_reviews_by_attempt: dict[str, dict[str, Any]] = {}
+    if attempt_ids:
+        writing_res = execute_with_retry(lambda: (
+            client.table("writing_reviews")
+            .select("attempt_id, status, human_band, ai_scores, created_at")
+            .in_("attempt_id", attempt_ids)
+            .order("created_at", desc=True)
+            .execute()
+        ))
+        for row in writing_res.data or []:
+            aid = str(row.get("attempt_id") or "")
+            if not aid or aid in writing_reviews_by_attempt:
+                continue
+            writing_reviews_by_attempt[aid] = row
+
+    speaking_reviews_by_attempt: dict[str, dict[str, Any]] = {}
+    if attempt_ids:
+        speaking_res = execute_with_retry(lambda: (
+            client.table("speaking_reviews")
+            .select("attempt_id, status, human_band, created_at")
+            .in_("attempt_id", attempt_ids)
+            .order("created_at", desc=True)
+            .execute()
+        ))
+        for row in speaking_res.data or []:
+            aid = str(row.get("attempt_id") or "")
+            if not aid or aid in speaking_reviews_by_attempt:
+                continue
+            speaking_reviews_by_attempt[aid] = row
 
     bands: list[float] = []
     in_progress: list[InProgressAttempt] = []
@@ -241,9 +281,23 @@ def dashboard_summary(
                 d = _to_app_date(activity_dt)
                 day_counts[d] = day_counts.get(d, 0) + 1
             score = scores_by_attempt.get(str(a["id"]))
-            band_val = float(score["band"]) if score and score.get("band") is not None else None
+            review_writing = writing_reviews_by_attempt.get(str(a["id"]))
+            review_speaking = speaking_reviews_by_attempt.get(str(a["id"]))
+            band_val = (
+                _safe_float(score.get("band")) if score else None
+            )
+            if band_val is None and module == "writing" and review_writing:
+                band_val = _safe_float(review_writing.get("human_band"))
+                if band_val is None:
+                    ai_scores = review_writing.get("ai_scores")
+                    if isinstance(ai_scores, dict):
+                        band_val = _safe_float(ai_scores.get("word_count_estimate"))
+            if band_val is None and module == "speaking" and review_speaking:
+                band_val = _safe_float(review_speaking.get("human_band"))
             if band_val is not None and band_val > 0:
                 bands.append(band_val)
+            part_raw = a.get("part")
+            part_val = int(part_raw) if part_raw is not None else None
             recent.append(
                 RecentAttempt(
                     id=str(a["id"]),
@@ -256,6 +310,7 @@ def dashboard_summary(
                     total_questions=int(score["total_count"])
                     if score and score.get("total_count") is not None
                     else None,
+                    part=part_val,
                     mock_test=mock_ref,
                 )
             )

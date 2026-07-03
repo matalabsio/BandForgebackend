@@ -188,7 +188,7 @@ def get_writing_review_for_attempt(attempt_id: UUID) -> dict[str, Any] | None:
     client = get_supabase()
     result = _exec(
         client.table("writing_reviews")
-        .select("id, status, human_band, created_at, reviewer_notes")
+        .select("id, status, human_band, ai_scores, created_at, reviewer_notes")
         .eq("attempt_id", str(attempt_id))
         .order("created_at", desc=True)
         .limit(1)
@@ -233,6 +233,24 @@ def mark_attempt_completed(attempt_id: UUID, *, completed_at_iso: str) -> dict[s
             "Failed to complete writing attempt.",
         )
     return updated.data[0]
+
+
+def list_completed_writing_attempts_for_session(
+    *,
+    user_id: UUID,
+    mock_attempt_id: UUID,
+) -> list[dict[str, Any]]:
+    client = get_supabase()
+    result = _exec(
+        client.table("test_attempts")
+        .select("id, part, status, completed_at")
+        .eq("user_id", str(user_id))
+        .eq("mock_attempt_id", str(mock_attempt_id))
+        .eq("module", "writing")
+        .eq("status", "completed")
+        .order("part")
+    )
+    return list(result.data or [])
 
 
 def has_completed_part(
