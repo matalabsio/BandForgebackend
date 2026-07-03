@@ -82,6 +82,17 @@ class UserPublic(BaseModel):
     is_active: bool = True
 
 
+class SessionUser(BaseModel):
+    """Minimal authenticated user for shell rendering (layout, auth guards)."""
+
+    id: UUID
+    full_name: str | None = None
+    email: str | None = None
+    role: str = "student"
+    avatar_display_url: str | None = None
+    is_active: bool = True
+
+
 class UpdateProfileRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=120)
     phone: str | None = None

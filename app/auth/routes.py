@@ -9,7 +9,11 @@ from app.auth.constants import (
     REFRESH_TOKEN_COOKIE,
     REFRESH_TOKEN_EXPIRE_DAYS,
 )
-from app.auth.dependencies import get_current_user, get_refresh_token
+from app.auth.dependencies import (
+    get_current_session_user,
+    get_current_user,
+    get_refresh_token,
+)
 from app.auth.google_oauth import (
     build_google_authorization_url,
     create_oauth_state,
@@ -31,6 +35,7 @@ from app.auth.schemas import (
     RestoreSessionRequest,
     SendOtpRequest,
     UpdateProfileRequest,
+    SessionUser,
     UserPublic,
     VerifyEmailRequest,
     VerifyOtpRequest,
@@ -185,6 +190,13 @@ async def reset_password(body: ResetPasswordRequest) -> MessageResponse:
 
 @router.get("/me", response_model=UserPublic)
 async def me(user: Annotated[UserPublic, Depends(get_current_user)]) -> UserPublic:
+    return user
+
+
+@router.get("/session", response_model=SessionUser)
+async def session(
+    user: Annotated[SessionUser, Depends(get_current_session_user)],
+) -> SessionUser:
     return user
 
 
