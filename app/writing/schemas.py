@@ -69,6 +69,13 @@ class SubmitWritingResponse(BaseModel):
     mock_writing_complete: bool = False
 
 
+class WritingSessionTaskSummary(BaseModel):
+    attempt_id: UUID
+    part: int
+    human_band: float | None = None
+    review_status: str
+
+
 class WritingReviewResponse(BaseModel):
     attempt_id: UUID
     status: str
@@ -84,6 +91,7 @@ class WritingReviewResponse(BaseModel):
     min_words: int = 0
     submitted_at: datetime | None = None
     saved_for_review: bool = False
+    session_tasks: list[WritingSessionTaskSummary] = Field(default_factory=list)
 
 
 class WritingPendingResponse(BaseModel):
@@ -93,3 +101,4 @@ class WritingPendingResponse(BaseModel):
     human_band: float | None = None
     submitted_at: datetime | None = None
     message: str
+    session_tasks: list[WritingSessionTaskSummary] = Field(default_factory=list)

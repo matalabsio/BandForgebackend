@@ -26,6 +26,7 @@ from app.writing.schemas import (
     SubmitWritingResponse,
     WritingPendingResponse,
     WritingReviewResponse,
+    WritingSessionTaskSummary,
     WritingTaskQuestion,
 )
 from app.writing.timing import (
@@ -47,6 +48,49 @@ def _duration_seconds_for_part(part: int) -> int:
 def _word_count(text: str) -> int:
     stripped = text.strip()
     return len(stripped.split()) if stripped else 0
+
+
+def _session_tasks(
+    attempt: dict[str, Any],
+    *,
+    user_id: UUID,
+) -> list[WritingSessionTaskSummary]:
+    part = int(attempt.get("part") or 1)
+    attempt_id = UUID(str(attempt["id"]))
+    mock_attempt_raw = attempt.get("mock_attempt_id")
+    if not mock_attempt_raw:
+        review = repo.get_writing_review_for_attempt(attempt_id)
+        if not review:
+            return []
+        human_band = review.get("human_band")
+        return [
+            WritingSessionTaskSummary(
+                attempt_id=attempt_id,
+                part=part,
+                human_band=float(human_band) if human_band is not None else None,
+                review_status=str(review.get("status") or "pending"),
+            )
+        ]
+
+    mock_attempt_id = UUID(str(mock_attempt_raw))
+    rows = repo.list_completed_writing_attempts_for_session(
+        user_id=user_id,
+        mock_attempt_id=mock_attempt_id,
+    )
+    tasks: list[WritingSessionTaskSummary] = []
+    for row in rows:
+        aid = UUID(str(row["id"]))
+        review = repo.get_writing_review_for_attempt(aid)
+        human_band = review.get("human_band") if review else None
+        tasks.append(
+            WritingSessionTaskSummary(
+                attempt_id=aid,
+                part=int(row.get("part") or 1),
+                human_band=float(human_band) if human_band is not None else None,
+                review_status=str((review or {}).get("status") or "pending"),
+            )
+        )
+    return tasks
 
 
 def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
@@ -469,6 +513,13 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         band = float(score_row["band"])
     elif review_row and review_row.get("human_band") is not None:
         band = float(review_row["human_band"])
+    elif review_row:
+        ai_scores = review_row.get("ai_scores")
+        if isinstance(ai_scores, dict) and ai_scores.get("word_count_estimate") is not None:
+            try:
+                band = float(ai_scores["word_count_estimate"])
+            except (TypeError, ValueError):
+                band = None
 
     opts = question.get("options")
     return WritingReviewResponse(
@@ -485,6 +536,7 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         min_words=min_words_for_part(part),
         submitted_at=submitted_at,
         saved_for_review=saved_for_review and band is None,
+        session_tasks=_session_tasks(attempt, user_id=user_id),
     )
 
 
@@ -530,4 +582,5 @@ def get_pending_status(
         human_band=band_val,
         submitted_at=submitted_at,
         message=message,
+        session_tasks=_session_tasks(attempt, user_id=user_id),
     )
