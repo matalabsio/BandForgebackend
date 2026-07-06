@@ -22,7 +22,7 @@ from app.payments.constants import DEFAULT_CURRENCY
 class RazorpayOrderPayload(BaseModel):
     """Only fields passed to client.order.create(). No user_id, no plan_slug."""
 
-    amount: int = Field(gt=0)
+    amount: int = Field(ge=100, description="Amount in paise; Razorpay minimum is 100")
     currency: str = DEFAULT_CURRENCY
     receipt: str  # opaque, e.g. secrets.token_hex(8) — NOT user_id or plan slug
 
@@ -62,6 +62,8 @@ class PlanOut(BaseModel):
 
 class PlansResponse(BaseModel):
     plans: list[PlanOut]
+    payments_enabled: bool = True
+    checkout_test_mode: bool = False
 
 
 class CreateOrderRequest(BaseModel):
@@ -75,6 +77,7 @@ class CreateOrderResponse(BaseModel):
     currency: str
     plan_name: str
     checkout_contact: CheckoutContact
+    checkout_config_id: str | None = None
 
 
 class VerifyPaymentRequest(BaseModel):
@@ -104,6 +107,7 @@ class PaymentHistoryItem(BaseModel):
     currency: str
     status: str
     created_at: datetime
+    razorpay_payment_id: str | None = None
 
 
 class PaymentHistoryResponse(BaseModel):

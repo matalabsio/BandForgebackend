@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         extra="ignore",
+        env_file_override=True,
     )
 
     app_env: str = Field(default="development", validation_alias="APP_ENV")
@@ -112,6 +113,9 @@ class Settings(BaseSettings):
         default="", validation_alias="RAZORPAY_WEBHOOK_SECRET"
     )
     razorpay_enabled: bool = Field(default=False, validation_alias="RAZORPAY_ENABLED")
+    razorpay_checkout_config_id: str = Field(
+        default="", validation_alias="RAZORPAY_CHECKOUT_CONFIG_ID"
+    )
 
     auth_demo_otp: str = Field(default="", validation_alias="AUTH_DEMO_OTP")
     auth_open_otp: bool = Field(default=False, validation_alias="AUTH_OPEN_OTP")
@@ -230,8 +234,12 @@ def reload_settings() -> Settings:
     """Clear cached settings/client after .env changes (dev convenience)."""
     get_settings.cache_clear()
     from app.db.supabase_client import get_supabase
+    from app.config import reload_settings
+    from app.payments.razorpay_client import clear_client_cache, clear_credentials_probe
 
     get_supabase.cache_clear()
+    clear_client_cache()
+    clear_credentials_probe()
     return get_settings()
 
 
@@ -247,4 +255,34 @@ def settings_diagnostics() -> dict[str, str]:
         "env_local_active": str(local),
         "project_ref": project_ref_from_url(s.supabase_url_normalized),
         "supabase_url": s.supabase_url_normalized,
+    }
+
+
+def razorpay_env_diagnostics() -> dict[str, str]:
+    """Non-secret Razorpay config diagnostics for startup logs."""
+    s = get_settings()
+    kid = s.razorpay_key_id or ""
+    shell_kid = os.environ.get("RAZORPAY_KEY_ID", "").strip()
+    shell_secret_set = bool(os.environ.get("RAZORPAY_KEY_SECRET", "").strip())
+    mode = (
+        "TEST"
+        if kid.startswith("rzp_test_")
+        else "LIVE"
+        if kid.startswith("rzp_live_")
+        else "UNSET"
+    )
+    shell_override = ""
+    if shell_kid and shell_kid != kid:
+        shell_override = (
+            "shell RAZORPAY_KEY_ID differs from loaded settings "
+            "(env_file_override should prefer .env — restart in a clean shell if this persists)"
+        )
+    elif shell_kid and shell_secret_set and not kid:
+        shell_override = "shell has RAZORPAY_* but settings loaded empty key"
+    return {
+        "mode": mode,
+        "key_id_prefix": f"{kid[:18]}..." if kid else "(unset)",
+        "shell_key_id_set": str(bool(shell_kid)),
+        "shell_secret_set": str(shell_secret_set),
+        "shell_override_warning": shell_override,
     }

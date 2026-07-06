@@ -27,6 +27,7 @@ SUPPORTED_GROUP_TYPES = frozenset(
         "multiple_choice_multiple",
         "matching",
         "sentence_completion",
+        "note_completion",
         "form_completion",
     }
 )
@@ -34,7 +35,6 @@ SUPPORTED_GROUP_TYPES = frozenset(
 DEFERRED_GROUP_TYPES = frozenset(
     {
         "map_labeling",
-        "note_completion",
     }
 )
 
@@ -78,19 +78,52 @@ def _normalize_options(raw: list[dict[str, Any]] | None) -> list[dict[str, str]]
 def _skill_tag(question_type: str, question_number: int) -> str:
     if question_type == "matching":
         return "matching"
-    if question_type in {"sentence_completion", "form_completion"}:
+    if question_type in {"sentence_completion", "note_completion", "form_completion"}:
         return "completion"
     if question_type == "mcq":
         return "detail"
     return "detail"
 
 
+def _notes_section_lines(group: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for section in group.get("notes_sections") or []:
+        heading = str(section.get("heading") or "").strip()
+        if not heading:
+            continue
+        range_raw = section.get("range")
+        if isinstance(range_raw, (list, tuple)) and len(range_raw) >= 2:
+            start, end = int(range_raw[0]), int(range_raw[1])
+        elif isinstance(range_raw, (list, tuple)) and len(range_raw) == 1:
+            start = end = int(range_raw[0])
+        else:
+            continue
+        if start == end:
+            lines.append(f"@@section@@{start}|{heading}")
+        else:
+            lines.append(f"@@section@@{start}-{end}|{heading}")
+    return lines
+
+
 def _group_passage_text(group: dict[str, Any], *, gtype: str, instruction: str | None) -> str | None:
-    """Instruction / form header shown on the first question of a group."""
+    """Instruction / form header / notes meta shown on the first question of a group."""
     if gtype == "form_completion":
         form_title = str(group.get("form_title") or "").strip()
-        parts = [p for p in (form_title, instruction or "") if p]
+        parts: list[str] = []
+        if instruction:
+            parts.append(instruction)
+        if form_title:
+            parts.append(f"@@form_title@@{form_title}")
         return "\n\n".join(parts) if parts else instruction
+    if gtype == "note_completion":
+        parts = []
+        if instruction:
+            parts.append(instruction)
+        notes_title = str(group.get("notes_title") or "").strip()
+        if notes_title:
+            parts.append(f"@@notes_title@@{notes_title}")
+        parts.extend(_notes_section_lines(group))
+        return "\n".join(parts) if parts else instruction
     return instruction
 
 
@@ -170,7 +203,7 @@ def _flatten_groups(
                 first_number = number
 
             prompt = str(q.get("prompt") or "").strip()
-            if gtype == "sentence_completion":
+            if gtype in {"sentence_completion", "note_completion"}:
                 before = str(q.get("text_before") or "").strip()
                 after = str(q.get("text_after") or "").strip()
                 prompt = f"{before} ___ {after}".strip()

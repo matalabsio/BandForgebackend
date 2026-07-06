@@ -142,3 +142,79 @@ class MockCheckpointResponse(BaseModel):
     reading_band: float | None = None
     listening_band: float | None = None
     modules: list[ModuleProgress] = Field(default_factory=list)
+
+
+class ModuleReviewQuestion(BaseModel):
+    """One checked question in a module review (shared by listening + reading)."""
+
+    question_id: UUID
+    question_number: int
+    question_type: str
+    prompt: str
+    user_answer: str
+    correct_answer: str
+    is_correct: bool
+    explanation: str = ""
+
+
+class ModuleReviewGroup(BaseModel):
+    """A part (listening) or passage-section (reading) with its sub-score."""
+
+    label: str
+    raw_score: int
+    total_questions: int
+    questions: list[ModuleReviewQuestion] = Field(default_factory=list)
+
+
+class ModuleReviewResponse(BaseModel):
+    """Full-module answer review after every part/passage is submitted."""
+
+    module: ModuleName
+    mock_attempt_id: UUID
+    raw_score: int
+    total_questions: int
+    groups: list[ModuleReviewGroup] = Field(default_factory=list)
+    next_module: ModuleName | None = None
+    next_part: int | None = None
+
+
+class WritingTaskReview(BaseModel):
+    """One writing task inside a module review (AI estimate now, human later)."""
+
+    attempt_id: UUID
+    part: int
+    prompt: str
+    essay: str
+    word_count: int
+    ai_band: float | None = None
+    criteria: dict[str, float] = Field(default_factory=dict)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+
+
+class WritingModuleReviewResponse(BaseModel):
+    """Both writing tasks with AI feedback and one persona summary."""
+
+    mock_attempt_id: UUID
+    tasks: list[WritingTaskReview] = Field(default_factory=list)
+    ai_band: float | None = None
+    persona_message: str
+    ai_available: bool = True
+    next_module: ModuleName | None = None
+    next_part: int | None = None
+
+
+class SpeakingModuleReviewResponse(BaseModel):
+    """Speaking AI estimate + delivery notes before human review."""
+
+    mock_attempt_id: UUID
+    attempt_id: UUID
+    part: int
+    duration_seconds: int | None = None
+    duration_hint_seconds: int | None = None
+    ai_band: float | None = None
+    prompts: list[str] = Field(default_factory=list)
+    delivery_notes: list[str] = Field(default_factory=list)
+    persona_message: str
+    next_module: ModuleName | None = None
+    next_part: int | None = None

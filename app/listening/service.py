@@ -38,19 +38,25 @@ from app.listening.schemas import (
     ListeningQuestion,
     ListeningQuestionsResponse,
     ListeningScoreReport,
+    NotesSection,
     QuestionReviewItem,
     SkillBreakdownEntry,
     StartListeningResponse,
     SubmitListeningResponse,
 )
 from app.schemas.test_engine import TestSummary
-from app.listening.instructions import extract_listening_instructions
+from app.listening.instructions import (
+    extract_form_title,
+    extract_listening_instructions,
+    extract_notes_layout,
+)
 from app.listening.timing import ListeningStartTiming, ListeningSubmitTiming, _PhaseTimer
+from app.mock_catalog.constants import M01_MOCK_TEST_ID, M02_MOCK_TEST_ID
 from app.services.mock_progress_timing import MockProgressTiming
 from app.storage.r2 import generate_signed_url, get_object_stream, object_exists, object_head, parse_r2_object_url
 
 
-PART_META: dict[int, dict[str, str]] = {
+DEFAULT_PART_META: dict[int, dict[str, str]] = {
     1: {
         "title": "Part 1 — Social Dialogue",
         "context": "Everyday social conversation between two speakers.",
@@ -72,6 +78,66 @@ PART_META: dict[int, dict[str, str]] = {
         "common_question_type": "note_completion",
     },
 }
+
+M01_PART_META: dict[int, dict[str, str]] = {
+    1: {
+        "title": "Part 1",
+        "context": "Greenfield College",
+        "common_question_type": "form_completion",
+    },
+    2: {
+        "title": "Part 2",
+        "context": "Leisure Centre Orientation",
+        "common_question_type": "mcq / matching",
+    },
+    3: {
+        "title": "Part 3",
+        "context": "Tutorial Discussion",
+        "common_question_type": "mcq / sentence_completion",
+    },
+    4: {
+        "title": "Part 4",
+        "context": "Public Transit & CO2",
+        "common_question_type": "note_completion",
+    },
+}
+
+M02_PART_META: dict[int, dict[str, str]] = {
+    1: {
+        "title": "Part 1",
+        "context": "Telephone Enquiry to a Letting Agency — Tenant Registration",
+        "common_question_type": "form_completion",
+    },
+    2: {
+        "title": "Part 2",
+        "context": "Welcome Talk to Visitors at a Wetlands Nature Reserve",
+        "common_question_type": "sentence_completion · mcq",
+    },
+    3: {
+        "title": "Part 3",
+        "context": "Tutorial Discussion — Students Reviewing a Research Project",
+        "common_question_type": "mcq · sentence_completion",
+    },
+    4: {
+        "title": "Part 4",
+        "context": "Academic Lecture — Dendrochronology (Archaeology)",
+        "common_question_type": "note_completion",
+    },
+}
+
+# Keep legacy name for any external imports.
+PART_META = DEFAULT_PART_META
+
+
+def _part_meta_for_mock(mock_test_id: UUID | str, part_num: int) -> dict[str, str]:
+    mid = str(mock_test_id)
+    if mid == M01_MOCK_TEST_ID:
+        table = M01_PART_META
+    elif mid == M02_MOCK_TEST_ID:
+        table = M02_PART_META
+    else:
+        table = DEFAULT_PART_META
+    return table.get(part_num, DEFAULT_PART_META.get(part_num, {}))
 
 
 def _is_dev() -> bool:
@@ -542,7 +608,21 @@ def get_session_questions(
         items = grouped[part_num]
         if not items:
             continue
-        meta = PART_META.get(part_num, {})
+        meta = _part_meta_for_mock(mock_test_id, part_num)
+        passage_for_meta: str | None = None
+        for row in rows:
+            if int(row.get("part") or 1) != part_num:
+                continue
+            if row.get("passage_text"):
+                passage_for_meta = row.get("passage_text")
+                break
+        notes_layout = extract_notes_layout(passage_for_meta)
+        notes_sections_raw = notes_layout.get("notes_sections")
+        notes_sections = (
+            [NotesSection(**s) for s in notes_sections_raw]
+            if notes_sections_raw
+            else None
+        )
         parts.append(
             ListeningPart(
                 part=part_num,  # type: ignore[arg-type]
@@ -550,6 +630,9 @@ def get_session_questions(
                 context=meta.get("context", ""),
                 common_question_type=meta.get("common_question_type", ""),
                 questions=items,
+                form_title=extract_form_title(passage_for_meta),
+                notes_title=notes_layout.get("notes_title"),
+                notes_sections=notes_sections,
             )
         )
 

@@ -55,6 +55,7 @@ def _fake_settings(**overrides) -> SimpleNamespace:
         "razorpay_key_id": "rzp_test_key",
         "razorpay_key_secret": SECRET,
         "razorpay_webhook_secret": SECRET,
+        "razorpay_checkout_config_id": "",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -66,6 +67,7 @@ def _created_payment() -> dict:
         "user_id": str(USER_ID),
         "plan_id": str(PLAN_ID),
         "status": "created",
+        "amount": 99900,
     }
 
 
@@ -80,16 +82,66 @@ def test_create_order_payload_has_no_notes_or_metadata():
         return {"id": "order_test_1"}
 
     fake_client = SimpleNamespace(order=SimpleNamespace(create=fake_create))
-    with patch("app.payments.razorpay_client._client", return_value=fake_client):
+    with (
+        patch("app.payments.razorpay_client._client", return_value=fake_client),
+        patch("app.payments.razorpay_client.get_settings", return_value=_fake_settings()),
+    ):
         payload = RazorpayOrderPayload(amount=99900, currency="INR", receipt="abcd1234")
         razorpay_client.create_order(payload)
 
     sent = captured["payload"]
-    assert set(sent.keys()) <= {"amount", "currency", "receipt", "payment_capture"}
+    assert set(sent.keys()) <= {
+        "amount",
+        "currency",
+        "receipt",
+        "payment_capture",
+        "checkout_config_id",
+    }
     assert "notes" not in sent
     assert "user_id" not in sent
     assert "plan_slug" not in sent
     assert sent["amount"] == 99900
+    assert "checkout_config_id" not in sent
+
+
+def test_create_order_forwards_checkout_config_id_when_configured():
+    captured = {}
+
+    def fake_create(payload):
+        captured["payload"] = payload
+        return {"id": "order_test_config"}
+
+    fake_client = SimpleNamespace(order=SimpleNamespace(create=fake_create))
+    with (
+        patch("app.payments.razorpay_client._client", return_value=fake_client),
+        patch(
+            "app.payments.razorpay_client.get_settings",
+            return_value=_fake_settings(razorpay_checkout_config_id="config_test_abc"),
+        ),
+    ):
+        payload = RazorpayOrderPayload(amount=99900, currency="INR", receipt="abcd1234")
+        razorpay_client.create_order(payload)
+
+    assert captured["payload"]["checkout_config_id"] == "config_test_abc"
+
+
+def test_create_order_response_includes_checkout_config_id_when_configured():
+    with (
+        patch(
+            "app.payments.service.get_settings",
+            return_value=_fake_settings(razorpay_checkout_config_id="config_resp_xyz"),
+        ),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_with_config"},
+        ),
+        patch("app.payments.service.repository.insert_payment", return_value={"id": str(PAYMENT_ID)}),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+    ):
+        resp = service.create_order(user=_user(), plan_slug="premium_monthly")
+
+    assert resp.checkout_config_id == "config_resp_xyz"
 
 
 def test_create_order_uses_db_amount_minimal_contact_and_long_receipt():
@@ -113,7 +165,22 @@ def test_create_order_uses_db_amount_minimal_contact_and_long_receipt():
     assert resp.amount == 99900
     assert set(resp.checkout_contact.model_dump().keys()) == {"name", "email", "contact"}
     assert resp.checkout_contact.name == "Test Student"
+    assert resp.checkout_contact.contact == "+919876543210"
     assert resp.key_id == "rzp_test_key"
+
+
+def test_checkout_contact_omits_invalid_phone():
+    user = _user()
+    user = user.model_copy(update={"phone": "+91 invalid"})
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch("app.payments.razorpay_client.create_order", return_value={"id": "order_x"}),
+        patch("app.payments.service.repository.insert_payment", return_value={"id": str(PAYMENT_ID)}),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+    ):
+        resp = service.create_order(user=user, plan_slug="premium_monthly")
+    assert resp.checkout_contact.contact is None
 
 
 def test_create_order_rejects_unknown_plan():
@@ -124,6 +191,24 @@ def test_create_order_rejects_unknown_plan():
         with pytest.raises(HTTPException) as exc:
             service.create_order(user=_user(), plan_slug="nope")
         assert exc.value.status_code == 404
+
+
+def test_razorpay_client_maps_auth_failure_to_503():
+    from unittest.mock import MagicMock
+
+    from razorpay.errors import BadRequestError
+
+    from app.payments.schemas import RazorpayOrderPayload
+
+    fake_client = MagicMock()
+    fake_client.order.create.side_effect = BadRequestError("Authentication failed")
+    with patch("app.payments.razorpay_client._client", return_value=fake_client):
+        with pytest.raises(HTTPException) as exc:
+            razorpay_client.create_order(
+                RazorpayOrderPayload(amount=100, currency="INR", receipt="r1")
+            )
+        assert exc.value.status_code == 503
+        assert "authentication failed" in str(exc.value.detail).lower()
 
 
 # --- signatures ------------------------------------------------------------
@@ -345,6 +430,7 @@ def test_webhook_payment_captured_uses_confirm_payment_paid():
         confirm.assert_called_once_with(
             razorpay_order_id="order_x",
             razorpay_payment_id="pay_x",
+            captured_amount=None,
         )
         processed.assert_called_once()
 
@@ -392,29 +478,114 @@ def test_webhook_marks_event_failed_on_processing_error():
         ),
         patch("app.payments.repository.mark_event_failed") as failed,
     ):
-        with pytest.raises(RuntimeError):
-            webhook.handle_webhook(
-                raw_body=b"{}",
-                signature="ok",
-                event_id="evt_err",
-                payload={
-                    "event": "payment.captured",
-                    "payload": {
-                        "payment": {"entity": {"id": "p", "order_id": "o"}}
-                    },
+        result = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="ok",
+            event_id="evt_err",
+            payload={
+                "event": "payment.captured",
+                "payload": {
+                    "payment": {"entity": {"id": "p", "order_id": "o", "amount": 99900}}
                 },
-            )
+            },
+        )
+        assert result == {"ok": True, "processing_failed": True}
         failed.assert_called_once()
 
 
+def test_webhook_payment_failed_marks_payment():
+    payment = {**_created_payment(), "status": "created"}
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch(
+            "app.payments.repository.insert_payment_event",
+            return_value={"id": "evt_pf"},
+        ),
+        patch(
+            "app.payments.repository.get_payment_by_order_id", return_value=payment
+        ),
+        patch("app.payments.repository.mark_payment_status") as mark,
+        patch("app.payments.repository.mark_event_processed") as processed,
+    ):
+        result = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="ok",
+            event_id="evt_pf",
+            payload={
+                "event": "payment.failed",
+                "payload": {"payment": {"entity": {"id": "p", "order_id": "order_x"}}},
+            },
+        )
+        assert result == {"ok": True}
+        mark.assert_called_once()
+        processed.assert_called_once()
+
+
+def test_webhook_refund_cancels_subscription():
+    paid = {**_created_payment(), "status": "paid", "razorpay_payment_id": "pay_r"}
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch(
+            "app.payments.repository.insert_payment_event",
+            return_value={"id": "evt_rf"},
+        ),
+        patch(
+            "app.payments.repository.get_payment_by_razorpay_payment_id",
+            return_value=paid,
+        ),
+        patch("app.payments.repository.mark_payment_status") as mark,
+        patch("app.payments.repository.cancel_subscription_for_payment") as cancel,
+        patch("app.payments.repository.mark_event_processed"),
+    ):
+        result = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="ok",
+            event_id="evt_rf",
+            payload={
+                "event": "refund.created",
+                "payload": {"refund": {"entity": {"payment_id": "pay_r"}}},
+            },
+        )
+        assert result == {"ok": True}
+        mark.assert_called_once()
+        cancel.assert_called_once_with(payment_id=paid["id"])
+
+
+def test_confirm_payment_paid_rejects_amount_mismatch():
+    with (
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_created_payment(),
+        ),
+        patch("app.payments.service.repository.get_plan_by_id", return_value=_plan()),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            service.confirm_payment_paid(
+                razorpay_order_id="order_x",
+                razorpay_payment_id="pay_x",
+                captured_amount=1,
+            )
+        assert exc.value.status_code == 400
+
+
 def test_get_plans_returns_active_plans():
-    with patch(
-        "app.payments.service.repository.list_active_plans",
-        return_value=[_plan()],
+    with (
+        patch(
+            "app.payments.service.repository.list_active_plans",
+            return_value=[_plan()],
+        ),
+        patch("app.payments.razorpay_client.get_settings", return_value=_fake_settings()),
+        patch("app.payments.razorpay_client.credentials_ready", return_value=True),
     ):
         resp = service.get_plans()
         assert len(resp.plans) == 1
         assert resp.plans[0].slug == "premium_monthly"
+        assert resp.payments_enabled is True
+        assert resp.checkout_test_mode is True
 
 
 def test_create_order_disabled_when_flag_off():
@@ -425,6 +596,45 @@ def test_create_order_disabled_when_flag_off():
         with pytest.raises(HTTPException) as exc:
             service.create_order(user=_user(), plan_slug="premium_monthly")
         assert exc.value.status_code == 503
+
+
+def test_get_plans_payments_disabled_without_keys():
+    with (
+        patch(
+            "app.payments.service.repository.list_active_plans",
+            return_value=[_plan()],
+        ),
+        patch(
+            "app.payments.razorpay_client.get_settings",
+            return_value=_fake_settings(razorpay_key_id=""),
+        ),
+    ):
+        resp = service.get_plans()
+        assert resp.payments_enabled is False
+
+
+def test_premium_mock_access_blocks_m02_without_subscription():
+    from uuid import UUID
+
+    from app.auth.schemas import UserPublic
+    from app.mock_catalog.constants import M02_MOCK_TEST_ID
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = UserPublic(
+        id=USER_ID,
+        email="s@example.com",
+        full_name="S",
+        phone=None,
+        target_band=7.0,
+    )
+    with patch(
+        "app.security.entitlements.has_active_subscription", return_value=False
+    ):
+        with pytest.raises(HTTPException) as exc:
+            assert_premium_mock_access(
+                user=user, mock_test_id=UUID(M02_MOCK_TEST_ID)
+            )
+        assert exc.value.status_code == 402
 
 
 def test_receipt_default_length_is_32_chars():

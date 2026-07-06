@@ -10,6 +10,7 @@ import pytest
 from scripts.normalize_listening_mock import normalize
 from scripts.test_content_paths import (
     LISTENING_MT2_S1_JSON,
+    LISTENING_MT2_S4_JSON,
     LISTENING_S2_JSON,
     LISTENING_S3_JSON,
     LISTENING_S4_JSON,
@@ -154,5 +155,28 @@ def test_normalize_mt2_s1_form_completion_produces_ten_questions() -> None:
     first = payload["questions"][0]
     assert first["passage_text"] is not None
     assert "BROOKSIDE LETTINGS" in first["passage_text"]
+    assert "@@form_title@@" in first["passage_text"]
     assert first["correct_answer"] == "Whitfield"
     assert payload["questions"][1]["passage_text"] is None
+
+
+def test_normalize_mt2_s4_note_completion_produces_ten_questions() -> None:
+    data = json.loads(LISTENING_MT2_S4_JSON.read_text(encoding="utf-8"))
+    payload = normalize(
+        data,
+        mock_id="a0000000-0000-4000-8000-000000000002",
+        audio_key="listening/m02/part-4/full.mp3",
+        allow_unsupported=False,
+        part=4,
+        renumber_per_part=True,
+    )
+    assert len(payload["questions"]) == 10
+    assert all(q["question_type"] == "note_completion" for q in payload["questions"])
+    first = payload["questions"][0]
+    assert first["question_number"] == 1
+    assert "DENDROCHRONOLOGY" in (first["passage_text"] or "")
+    assert "@@notes_title@@" in (first["passage_text"] or "")
+    assert "@@section@@31-33|The basic principle" in (first["passage_text"] or "")
+    assert "tree's ___" in first["prompt"]
+    assert first["correct_answer"] == "age"
+    assert payload["questions"][9]["correct_answer"] == "tropical"

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.config import get_settings, reload_settings, settings_diagnostics
+from app.config import get_settings, razorpay_env_diagnostics, reload_settings, settings_diagnostics
 from app.cache.hybrid_cache import redis_status
 from app.middleware.timing import ApiTimingMiddleware
 from app.admin import router as admin_router
@@ -45,6 +45,58 @@ async def lifespan(_app: FastAPI):
                 print(
                     f"[bandforge-api] WARNING: {label}={value!r} — "
                     "set production Vercel URL (see docs/vercel-production.md)"
+                )
+        if settings.razorpay_enabled:
+            missing = [
+                name
+                for name, val in (
+                    ("RAZORPAY_KEY_ID", settings.razorpay_key_id),
+                    ("RAZORPAY_KEY_SECRET", settings.razorpay_key_secret),
+                    ("RAZORPAY_WEBHOOK_SECRET", settings.razorpay_webhook_secret),
+                )
+                if not val
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"Payments enabled in production but missing: {', '.join(missing)}"
+                )
+    elif settings.razorpay_enabled:
+        missing = [
+            name
+            for name, val in (
+                ("RAZORPAY_KEY_ID", settings.razorpay_key_id),
+                ("RAZORPAY_KEY_SECRET", settings.razorpay_key_secret),
+            )
+            if not val
+        ]
+        if missing:
+            print(
+                f"[bandforge-api] WARNING: RAZORPAY_ENABLED but missing: {', '.join(missing)}"
+            )
+        if not settings.razorpay_webhook_secret:
+            print(
+                "[bandforge-api] WARNING: RAZORPAY_WEBHOOK_SECRET unset — "
+                "webhook backup path disabled until configured"
+            )
+        if settings.razorpay_key_id and settings.razorpay_key_secret:
+            rz_diag = razorpay_env_diagnostics()
+            print(
+                f"[bandforge-api] Razorpay config: mode={rz_diag['mode']} "
+                f"key_id={rz_diag['key_id_prefix']}"
+            )
+            if rz_diag["shell_override_warning"]:
+                print(f"[bandforge-api] WARNING: {rz_diag['shell_override_warning']}")
+
+            from app.payments.razorpay_client import probe_credentials, set_credentials_probe_result
+
+            ok, msg = probe_credentials()
+            set_credentials_probe_result(ok)
+            if ok:
+                print("[bandforge-api] Razorpay credentials OK (API probe passed)")
+            else:
+                print(
+                    f"[bandforge-api] ERROR: Razorpay auth failed — {msg}. "
+                    "Regenerate matching API keys in Dashboard → Settings → API Keys."
                 )
     yield
 

@@ -10,13 +10,18 @@ INSERT INTO questions (
   mock_test_id, module, part, question_type, question_number, prompt,
   passage_text, audio_url, options, correct_answer, skill_tag
 ) VALUES
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 1, 'counting the rings reveals the tree''s ___', 'Complete the notes below. Write NO MORE THAN TWO WORDS for each answer.', 'listening/m02/part-4/full.mp3', NULL, 'age', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 2, 'ring width is controlled mainly by the amount of ___ in that year', NULL, 'listening/m02/part-4/full.mp3', NULL, 'rainfall', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 3, 'a year of drought produces a ring that is unusually ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'narrow', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 4, 'trees in a region share a similar ring ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'pattern', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 5, 'samples are linked by a process called ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'cross-dating/cross dating/crossdating', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 6, 'the continuous reference record is called a master ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'chronology', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 7, 'used to establish the construction date of historic ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'buildings/building', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 8, 'tree-ring data is used to ___ radiocarbon dates', NULL, 'listening/m02/part-4/full.mp3', NULL, 'calibrate', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 9, 'ring sequences allow the past ___ of a region to be reconstructed', NULL, 'listening/m02/part-4/full.mp3', NULL, 'climate/climates', 'completion'),
-('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'sentence_completion', 10, 'the method cannot be used in ___ regions', NULL, 'listening/m02/part-4/full.mp3', NULL, 'tropical', 'completion');
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 1, 'A tree adds one ring each year — counting the rings reveals the tree''s ___', 'Complete the notes below. Write NO MORE THAN TWO WORDS for each answer.
+@@notes_title@@DENDROCHRONOLOGY: DATING THE PAST THROUGH TREE RINGS
+@@section@@31-33|The basic principle
+@@section@@34-36|Building a long timeline
+@@section@@37-39|Applications
+@@section@@40|Limitations', 'listening/m02/part-4/full.mp3', NULL, 'age', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 2, 'The width of a ring is controlled mainly by the amount of ___ in that year', NULL, 'listening/m02/part-4/full.mp3', NULL, 'rainfall', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 3, 'A year of drought produces a ring that is unusually ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'narrow', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 4, 'Trees of one species in a region share a similar ring ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'pattern', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 5, 'Living and dead timber samples are linked by a process called ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'cross-dating/cross dating/crossdating', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 6, 'The continuous reference record produced is called a master ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'chronology', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 7, 'Used in archaeology to establish the construction date of historic ___', NULL, 'listening/m02/part-4/full.mp3', NULL, 'buildings/building', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 8, 'Tree-ring data is used to ___ radiocarbon dates, improving their accuracy', NULL, 'listening/m02/part-4/full.mp3', NULL, 'calibrate', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 9, 'Ring sequences allow the past ___ of a region to be reconstructed', NULL, 'listening/m02/part-4/full.mp3', NULL, 'climate/climates', 'completion'),
+('a0000000-0000-4000-8000-000000000002', 'listening', 4, 'note_completion', 10, 'The method cannot be used in ___ regions, where trees lack clear annual rings', NULL, 'listening/m02/part-4/full.mp3', NULL, 'tropical', 'completion');

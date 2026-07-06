@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user, get_current_user_timed
 from app.auth.schemas import UserPublic
 from app.config import get_settings
 from app.diagnostic.access import assert_mock_access
+from app.security.entitlements import assert_premium_mock_access
 from app.schemas.mock_orchestrator import (
     InProgressMockAttempt,
     MockAttemptHistoryItem,
@@ -21,10 +22,13 @@ from app.schemas.mock_orchestrator import (
     MockAttemptSummary,
     MockCatalogItem,
     MockCheckpointResponse,
+    ModuleReviewResponse,
+    SpeakingModuleReviewResponse,
     StartMockRequest,
     StartMockResponse,
+    WritingModuleReviewResponse,
 )
-from app.services import mock_orchestrator
+from app.services import mock_orchestrator, module_review
 
 router = APIRouter(prefix="/api/mock-attempts", tags=["mock-attempts"])
 
@@ -64,6 +68,7 @@ def start_mock_attempt(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> StartMockResponse:
     assert_mock_access(user=current_user, mock_test_id=body.mock_test_id)
+    assert_premium_mock_access(user=current_user, mock_test_id=body.mock_test_id)
     return mock_orchestrator.start_mock(
         mock_test_id=body.mock_test_id,
         user_id=current_user.id,
@@ -78,6 +83,7 @@ def get_mock_session_state(
     current_user: Annotated[UserPublic, Depends(get_current_user_timed)],
 ) -> MockAttemptProgress | None:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     started = perf_counter()
     try:
         progress, timing = mock_orchestrator.get_mock_session_timed(
@@ -164,6 +170,64 @@ def get_mock_checkpoint(
     return mock_orchestrator.get_checkpoint(
         mock_attempt_id=mock_attempt_id,
         attempt_id=attempt_id,
+        user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/{mock_attempt_id}/listening/module-review",
+    response_model=ModuleReviewResponse,
+)
+def get_listening_module_review(
+    mock_attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> ModuleReviewResponse:
+    return module_review.get_module_review(
+        mock_attempt_id=mock_attempt_id,
+        module="listening",
+        user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/{mock_attempt_id}/reading/module-review",
+    response_model=ModuleReviewResponse,
+)
+def get_reading_module_review(
+    mock_attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> ModuleReviewResponse:
+    return module_review.get_module_review(
+        mock_attempt_id=mock_attempt_id,
+        module="reading",
+        user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/{mock_attempt_id}/writing/module-review",
+    response_model=WritingModuleReviewResponse,
+)
+async def get_writing_module_review(
+    mock_attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> WritingModuleReviewResponse:
+    return await module_review.get_writing_module_review(
+        mock_attempt_id=mock_attempt_id,
+        user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/{mock_attempt_id}/speaking/module-review",
+    response_model=SpeakingModuleReviewResponse,
+)
+def get_speaking_module_review(
+    mock_attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> SpeakingModuleReviewResponse:
+    return module_review.get_speaking_module_review(
+        mock_attempt_id=mock_attempt_id,
         user_id=current_user.id,
     )
 

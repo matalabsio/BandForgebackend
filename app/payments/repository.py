@@ -16,6 +16,7 @@ from app.payments.constants import (
     EVENT_PENDING,
     EVENT_PROCESSED,
     PAYMENT_PAID,
+    SUBSCRIPTION_CANCELLED,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ def list_payments_for_user(user_id: UUID, *, limit: int = 50) -> list[dict[str, 
     sb = get_supabase()
     result = (
         sb.table("payments")
-        .select("id, amount, currency, status, created_at, plans(name)")
+        .select("id, amount, currency, status, created_at, razorpay_payment_id, plans(name)")
         .eq("user_id", str(user_id))
         .order("created_at", desc=True)
         .limit(limit)
@@ -279,6 +280,18 @@ def _confirm_payment_paid_sequential(
     }
 
 
+def cancel_subscription_for_payment(*, payment_id: str | UUID) -> None:
+    """Revoke access when a payment is refunded."""
+    sb = get_supabase()
+    now_iso = datetime.now(UTC).isoformat()
+    sb.table("subscriptions").update(
+        {
+            "status": SUBSCRIPTION_CANCELLED,
+            "expires_at": now_iso,
+        }
+    ).eq("payment_id", str(payment_id)).eq("status", "active").execute()
+
+
 # --- payment_events (idempotency log) --------------------------------------
 
 
@@ -293,16 +306,6 @@ def insert_payment_event(
 ) -> dict[str, Any] | None:
     """Insert a webhook event as pending. Returns None if event id already exists."""
     sb = get_supabase()
-    if razorpay_event_id:
-        existing = (
-            sb.table("payment_events")
-            .select("id")
-            .eq("razorpay_event_id", razorpay_event_id)
-            .limit(1)
-            .execute()
-        )
-        if existing.data:
-            return None
     row: dict[str, Any] = {
         "razorpay_event_id": razorpay_event_id,
         "event_type": event_type,
@@ -314,7 +317,18 @@ def insert_payment_event(
         "processing_status": EVENT_PENDING,
         "received_at": datetime.now(UTC).isoformat(),
     }
-    result = sb.table("payment_events").insert(row).execute()
+    try:
+        result = sb.table("payment_events").insert(row).execute()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if razorpay_event_id and (
+            "duplicate" in msg
+            or "unique" in msg
+            or "23505" in msg
+            or "already exists" in msg
+        ):
+            return None
+        raise
     return (result.data or [{}])[0]
 
 

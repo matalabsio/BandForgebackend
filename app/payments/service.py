@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from app.auth.schemas import UserPublic
+from app.auth.utils import is_valid_india_phone, normalize_india_phone, phone_e164
 from app.config import get_settings
 from app.payments import razorpay_client, repository
 from app.payments.constants import (
@@ -15,9 +16,11 @@ from app.payments.constants import (
     SUBSCRIPTION_ACTIVE,
 )
 from app.payments.exceptions import (
+    PaymentAmountMismatchError,
     PaymentNotFoundError,
     PaymentsDisabledError,
     PlanNotFoundError,
+    RazorpayAuthError,
     SignatureVerificationError,
 )
 from app.payments.logging import payment_log
@@ -48,13 +51,40 @@ def ensure_enabled() -> None:
         raise PaymentsDisabledError()
 
 
+def ensure_razorpay_ready() -> None:
+    ensure_enabled()
+    if not razorpay_client.credentials_ready():
+        raise RazorpayAuthError()
+
+
 def get_plans() -> PlansResponse:
     rows = repository.list_active_plans()
-    return PlansResponse(plans=[PlanOut.model_validate(r) for r in rows])
+    settings = get_settings()
+    payments_enabled = razorpay_client.credentials_ready()
+    key_id = settings.razorpay_key_id or ""
+    return PlansResponse(
+        plans=[PlanOut.model_validate(r) for r in rows],
+        payments_enabled=payments_enabled,
+        checkout_test_mode=payments_enabled and key_id.startswith("rzp_test_"),
+    )
+
+
+def _checkout_contact_for_user(user: UserPublic) -> CheckoutContact:
+    """Razorpay card OTP is SMS'd to prefill.contact — E.164 +91… per Razorpay docs."""
+    contact: str | None = None
+    if user.phone:
+        digits = normalize_india_phone(user.phone)
+        if is_valid_india_phone(digits):
+            contact = phone_e164(digits)
+    return CheckoutContact(
+        name=user.full_name,
+        email=user.email,
+        contact=contact,
+    )
 
 
 def create_order(*, user: UserPublic, plan_slug: str) -> CreateOrderResponse:
-    ensure_enabled()
+    ensure_razorpay_ready()
     plan = repository.get_plan_by_slug(plan_slug)
     if not plan:
         raise PlanNotFoundError()
@@ -82,17 +112,17 @@ def create_order(*, user: UserPublic, plan_slug: str) -> CreateOrderResponse:
         amount=payload.amount,
     )
 
+    settings = get_settings()
+    config_id = (settings.razorpay_checkout_config_id or "").strip() or None
+
     return CreateOrderResponse(
         order_id=str(order["id"]),
-        key_id=get_settings().razorpay_key_id,
+        key_id=settings.razorpay_key_id,
         amount=payload.amount,
         currency=payload.currency,
         plan_name=str(plan["name"]),
-        checkout_contact=CheckoutContact(
-            name=user.full_name,
-            email=user.email,
-            contact=user.phone,
-        ),
+        checkout_contact=_checkout_contact_for_user(user),
+        checkout_config_id=config_id,
     )
 
 
@@ -117,6 +147,7 @@ def confirm_payment_paid(
     razorpay_payment_id: str,
     razorpay_signature: str | None = None,
     user_id: UUID | None = None,
+    captured_amount: int | None = None,
 ) -> SubscriptionOut:
     """Single path for granting access after payment — used by /verify and webhook."""
     payment = repository.get_payment_by_order_id(razorpay_order_id)
@@ -137,6 +168,19 @@ def confirm_payment_paid(
     )
     if not plan:
         raise PaymentNotFoundError()
+
+    expected_amount = int(payment["amount"])
+    if captured_amount is not None and int(captured_amount) != expected_amount:
+        payment_log(
+            "confirm_payment_paid",
+            order_id=razorpay_order_id,
+            payment_id=razorpay_payment_id,
+            success=False,
+            error="amount_mismatch",
+            expected=expected_amount,
+            captured=captured_amount,
+        )
+        raise PaymentAmountMismatchError()
 
     starts_at, expires_at = _compute_subscription_dates(payment_user_id, plan)
     repository.confirm_payment_paid_bundle(
@@ -218,6 +262,7 @@ def get_payment_history(*, user_id: UUID) -> PaymentHistoryResponse:
                 currency=str(row["currency"]),
                 status=str(row["status"]),
                 created_at=_parse_dt(row["created_at"]) or datetime.now(UTC),
+                razorpay_payment_id=row.get("razorpay_payment_id"),
             )
         )
     return PaymentHistoryResponse(payments=items)

@@ -68,6 +68,9 @@ def handle_webhook(
     entity = _payment_entity(payload)
     order_id = entity.get("order_id")
     razorpay_payment_id = entity.get("id")
+    captured_amount = entity.get("amount")
+    if captured_amount is not None:
+        captured_amount = int(captured_amount)
 
     event_row = repository.insert_payment_event(
         razorpay_event_id=event_id,
@@ -93,6 +96,7 @@ def handle_webhook(
             service.confirm_payment_paid(
                 razorpay_order_id=order_id,
                 razorpay_payment_id=razorpay_payment_id,
+                captured_amount=captured_amount,
             )
         elif event_type == EVENT_PAYMENT_FAILED and order_id:
             _on_payment_failed(order_id=order_id)
@@ -120,7 +124,7 @@ def handle_webhook(
             processed=False,
             error=str(exc),
         )
-        raise
+        return {"ok": True, "processing_failed": True}
 
     return {"ok": True}
 
@@ -141,3 +145,4 @@ def _on_refund(*, razorpay_payment_id: str | None) -> None:
     repository.mark_payment_status(
         payment_id=sb_payment["id"], status=PAYMENT_REFUNDED
     )
+    repository.cancel_subscription_for_payment(payment_id=sb_payment["id"])

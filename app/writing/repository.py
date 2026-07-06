@@ -188,7 +188,9 @@ def get_writing_review_for_attempt(attempt_id: UUID) -> dict[str, Any] | None:
     client = get_supabase()
     result = _exec(
         client.table("writing_reviews")
-        .select("id, status, human_band, ai_scores, created_at, reviewer_notes")
+        .select(
+            "id, status, human_band, ai_scores, submission_meta, created_at, reviewer_notes"
+        )
         .eq("attempt_id", str(attempt_id))
         .order("created_at", desc=True)
         .limit(1)
@@ -218,6 +220,17 @@ def insert_writing_review(
             "Failed to queue writing review.",
         )
     return insert.data[0]
+
+
+def update_writing_review_ai_scores(
+    *, review_id: UUID, ai_scores: dict[str, Any]
+) -> None:
+    client = get_supabase()
+    _exec(
+        client.table("writing_reviews")
+        .update({"ai_scores": ai_scores})
+        .eq("id", str(review_id))
+    )
 
 
 def mark_attempt_completed(attempt_id: UUID, *, completed_at_iso: str) -> dict[str, Any]:
