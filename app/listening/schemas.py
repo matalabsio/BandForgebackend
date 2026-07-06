@@ -30,6 +30,14 @@ class ListeningQuestion(BaseModel):
     audio_duration_seconds: float | None = None
 
 
+class NotesSection(BaseModel):
+    """Heading + display-number range for note-completion layout."""
+
+    heading: str
+    start: int
+    end: int
+
+
 class ListeningPart(BaseModel):
     """IELTS Listening section grouping (1..4)."""
 
@@ -38,6 +46,9 @@ class ListeningPart(BaseModel):
     context: str
     common_question_type: str
     questions: list[ListeningQuestion]
+    form_title: str | None = None
+    notes_title: str | None = None
+    notes_sections: list[NotesSection] | None = None
 
 
 class StartListeningResponse(BaseModel):

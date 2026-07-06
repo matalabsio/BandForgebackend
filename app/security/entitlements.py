@@ -13,6 +13,7 @@ from fastapi import Depends, HTTPException, status
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
+from app.mock_catalog.constants import M01_MOCK_TEST_ID, M02_MOCK_TEST_ID
 from app.payments import repository
 from app.payments.schemas import SubscriptionOut
 from app.payments.service import get_subscription
@@ -36,3 +37,15 @@ async def require_active_subscription(
             detail="An active subscription is required to access this resource.",
         )
     return current_user
+
+
+def assert_premium_mock_access(*, user: UserPublic, mock_test_id: UUID) -> None:
+    """M01 is free; M02+ requires an active subscription."""
+    mock_id = str(mock_test_id)
+    if mock_id in (M01_MOCK_TEST_ID,):
+        return
+    if mock_id == M02_MOCK_TEST_ID and not has_active_subscription(user.id):
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            detail="An active subscription is required to access this mock test.",
+        )
