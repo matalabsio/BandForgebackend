@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.config import get_settings
 from app.diagnostic.evaluation_schemas import criteria_from_evaluation
+from app.diagnostic.groq_client import groq_configured
 from app.diagnostic.writing_evaluator import (
     MIN_WORDS_FOR_AI,
     _call_groq_evaluation,
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def ai_evaluation_available() -> bool:
-    return bool(get_settings().groq_api_key.strip())
+    return groq_configured()
 
 
 async def evaluate_mock_essay(

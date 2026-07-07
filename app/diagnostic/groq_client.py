@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 GROQ_TIMEOUT_SEC = 60.0
 
 
+def groq_configured() -> bool:
+    return bool(get_settings().groq_api_key.strip())
+
+
 async def chat_completion_json(
     *,
     system: str,

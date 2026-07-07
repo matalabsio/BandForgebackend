@@ -88,6 +88,13 @@ class WritingReviewResponse(BaseModel):
     user_answer: str
     word_count: int
     band: float | None = None
+    ai_band: float | None = None
+    ai_available: bool = False
+    band_source: str = "none"
+    ai_criteria: dict[str, float] = Field(default_factory=dict)
+    ai_strengths: list[str] = Field(default_factory=list)
+    ai_improvements: list[str] = Field(default_factory=list)
+    ai_model_name: str | None = None
     min_words: int = 0
     submitted_at: datetime | None = None
     saved_for_review: bool = False
