@@ -22,7 +22,7 @@ from app.diagnostic.evaluation_schemas import (
     reconcile_overall_band,
     row_to_public_response,
 )
-from app.diagnostic.groq_client import chat_completion_json
+from app.diagnostic.groq_client import chat_completion_json, groq_configured
 from app.diagnostic.rate_limit import record_evaluate_writing_rate_limit
 from app.diagnostic.writing_prompt import (
     PROMPT_VERSION,
@@ -276,8 +276,6 @@ async def evaluate_diagnostic_writing(
     original_essay = body.essay.strip()
     question = body.question.strip()
     cleaned_essay = sanitize_essay(original_essay, question)
-    settings = get_settings()
-
     logger.info(
         "Writing evaluation requested (attempt=%s, task_part=%s, cleaned_words=%s)",
         body.client_attempt_id,
@@ -312,7 +310,7 @@ async def evaluate_diagnostic_writing(
 
     record_evaluate_writing_rate_limit(request)
 
-    if not settings.groq_api_key.strip():
+    if not groq_configured():
         logger.error("GROQ_API_KEY missing — cannot evaluate diagnostic writing")
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,

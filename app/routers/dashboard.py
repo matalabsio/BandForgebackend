@@ -18,7 +18,10 @@ from app.auth.schemas import UserPublic
 from app.cache.hybrid_cache import get_json, set_json
 from app.db.supabase_client import execute_with_retry
 from app.db.supabase_client import get_supabase
+from uuid import UUID
+
 from app.mock_catalog.catalog import is_full_mock_id
+from app.services.user_activity import build_user_mock_sessions
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -45,7 +48,20 @@ class RecentAttempt(BaseModel):
     raw_score: int | None = None
     total_questions: int | None = None
     part: int | None = None
+    mock_attempt_id: str | None = None
     mock_test: MockTestRef
+
+
+class DashboardMockSnapshot(BaseModel):
+    mock_attempt_id: str
+    mock_test_id: str
+    catalog_number: int | None = None
+    status: str
+    listening_band: float | None = None
+    reading_band: float | None = None
+    writing_band: float | None = None
+    speaking_band: float | None = None
+    aggregate_band: float | None = None
 
 
 class ActivityDay(BaseModel):
@@ -69,6 +85,8 @@ class DashboardSummary(BaseModel):
     in_progress: list[InProgressAttempt] = Field(default_factory=list)
     recent: list[RecentAttempt] = Field(default_factory=list)
     activity_days: list[ActivityDay] = Field(default_factory=list)
+    completed_mock_count: int = 0
+    latest_mock: DashboardMockSnapshot | None = None
 
 
 def _round_half(value: float | None) -> float | None:
@@ -176,7 +194,9 @@ def dashboard_summary(
 
     attempts_res = execute_with_retry(lambda: (
         client.table("test_attempts")
-        .select("id, module, status, started_at, completed_at, mock_test_id, part")
+        .select(
+            "id, module, status, started_at, completed_at, mock_test_id, part, mock_attempt_id"
+        )
         .eq("user_id", user_id)
         .order("started_at", desc=True)
         .limit(50)
@@ -298,6 +318,7 @@ def dashboard_summary(
                 bands.append(band_val)
             part_raw = a.get("part")
             part_val = int(part_raw) if part_raw is not None else None
+            mock_attempt_raw = a.get("mock_attempt_id")
             recent.append(
                 RecentAttempt(
                     id=str(a["id"]),
@@ -311,6 +332,7 @@ def dashboard_summary(
                     if score and score.get("total_count") is not None
                     else None,
                     part=part_val,
+                    mock_attempt_id=str(mock_attempt_raw) if mock_attempt_raw else None,
                     mock_test=mock_ref,
                 )
             )
@@ -324,6 +346,29 @@ def dashboard_summary(
     avg = sum(bands) / len(bands) if bands else None
     best = max(bands) if bands else None
     current_streak, longest_streak = _streaks_from_counts(day_counts)
+
+    mock_sessions = build_user_mock_sessions(UUID(user_id))
+    completed_mock_count = sum(
+        1 for s in mock_sessions if str(s.get("status") or "").lower() == "completed"
+    )
+    latest_mock_row = mock_sessions[0] if mock_sessions else None
+    latest_mock: DashboardMockSnapshot | None = None
+    if latest_mock_row:
+        latest_mock = DashboardMockSnapshot(
+            mock_attempt_id=str(latest_mock_row["mock_attempt_id"]),
+            mock_test_id=str(latest_mock_row["mock_test_id"]),
+            catalog_number=(
+                int(latest_mock_row["catalog_number"])
+                if latest_mock_row.get("catalog_number") is not None
+                else None
+            ),
+            status=str(latest_mock_row.get("status") or ""),
+            listening_band=_round_half(latest_mock_row.get("listening_band")),
+            reading_band=_round_half(latest_mock_row.get("reading_band")),
+            writing_band=_round_half(latest_mock_row.get("writing_band")),
+            speaking_band=_round_half(latest_mock_row.get("speaking_band")),
+            aggregate_band=_round_half(latest_mock_row.get("aggregate_band")),
+        )
 
     response = DashboardSummary(
         stats=DashboardStats(
@@ -339,6 +384,8 @@ def dashboard_summary(
         in_progress=in_progress[:5],
         recent=recent,
         activity_days=_activity_calendar(day_counts),
+        completed_mock_count=completed_mock_count,
+        latest_mock=latest_mock,
     )
     set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=20)
     print(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -14,6 +15,7 @@ from app.config import get_settings
 from app.schemas.test_engine import TestSummary
 from app.services.mock_progress_timing import MockProgressTiming
 from app.writing import repository as repo
+from app.writing.ai_evaluator import ai_evaluation_available, evaluate_mock_essay
 from app.writing.constants import (
     TASK1_DURATION_MINUTES,
     TASK2_DURATION_MINUTES,
@@ -48,6 +50,18 @@ def _duration_seconds_for_part(part: int) -> int:
 def _word_count(text: str) -> int:
     stripped = text.strip()
     return len(stripped.split()) if stripped else 0
+
+
+def _run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    new_loop = asyncio.new_event_loop()
+    try:
+        return new_loop.run_until_complete(coro)
+    finally:
+        new_loop.close()
 
 
 def _session_tasks(
@@ -508,18 +522,107 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
     review_row = repo.get_writing_review_for_attempt(attempt_id)
     score_row = repo.get_module_score(attempt_id)
     saved_for_review = review_row is not None
+    ai_available = ai_evaluation_available()
+    ai_band = None
     band = None
+    band_source = "none"
+    ai_scores: dict[str, Any] = {}
+    review_id: UUID | None = None
+    if review_row:
+        raw_ai_scores = review_row.get("ai_scores")
+        ai_scores = raw_ai_scores if isinstance(raw_ai_scores, dict) else {}
+        if review_row.get("id"):
+            review_id = UUID(str(review_row["id"]))
+        ai_band_raw = ai_scores.get("ai_band")
+        if ai_band_raw is not None:
+            try:
+                ai_band = float(ai_band_raw)
+            except (TypeError, ValueError):
+                ai_band = None
+    ai_criteria_raw = ai_scores.get("criteria") if isinstance(ai_scores, dict) else {}
+    ai_criteria = (
+        {
+            str(k): float(v)
+            for k, v in ai_criteria_raw.items()
+            if isinstance(ai_criteria_raw, dict) and isinstance(v, (int, float))
+        }
+        if isinstance(ai_criteria_raw, dict)
+        else {}
+    )
+    ai_strengths = (
+        [str(item) for item in ai_scores.get("strengths", [])]
+        if isinstance(ai_scores, dict)
+        else []
+    )
+    ai_improvements = (
+        [str(item) for item in ai_scores.get("improvements", [])]
+        if isinstance(ai_scores, dict)
+        else []
+    )
+    ai_model_name = (
+        str(ai_scores.get("model_name"))
+        if isinstance(ai_scores, dict) and ai_scores.get("model_name")
+        else None
+    )
+
+    if (
+        review_row
+        and ai_band is None
+        and ai_available
+        and essay.strip()
+        and review_id is not None
+    ):
+        evaluation = None
+        try:
+            evaluation = _run_async(
+                evaluate_mock_essay(
+                    part=part,
+                    question=str(question.get("prompt") or ""),
+                    essay=essay,
+                )
+            )
+        except Exception:
+            evaluation = None
+        if isinstance(evaluation, dict):
+            merged = {**ai_scores, **evaluation}
+            repo.update_writing_review_ai_scores(review_id=review_id, ai_scores=merged)
+            ai_scores = merged
+            ai_band_raw = ai_scores.get("ai_band")
+            if ai_band_raw is not None:
+                try:
+                    ai_band = float(ai_band_raw)
+                except (TypeError, ValueError):
+                    ai_band = None
+            criteria_raw = ai_scores.get("criteria")
+            if isinstance(criteria_raw, dict):
+                ai_criteria = {
+                    str(k): float(v)
+                    for k, v in criteria_raw.items()
+                    if isinstance(v, (int, float))
+                }
+            ai_strengths = [str(item) for item in ai_scores.get("strengths", [])]
+            ai_improvements = [str(item) for item in ai_scores.get("improvements", [])]
+            ai_model_name = (
+                str(ai_scores.get("model_name")) if ai_scores.get("model_name") else None
+            )
+
     if score_row and score_row.get("band") is not None:
         band = float(score_row["band"])
+        band_source = "module_score"
     elif review_row and review_row.get("human_band") is not None:
         band = float(review_row["human_band"])
+        band_source = "human"
+    elif ai_band is not None:
+        band = ai_band
+        band_source = "ai"
     elif review_row:
-        ai_scores = review_row.get("ai_scores")
-        if isinstance(ai_scores, dict) and ai_scores.get("word_count_estimate") is not None:
+        if ai_scores.get("word_count_estimate") is not None:
             try:
                 band = float(ai_scores["word_count_estimate"])
+                band_source = "word_count_estimate"
             except (TypeError, ValueError):
                 band = None
+                band_source = "none"
 
     opts = question.get("options")
     return WritingReviewResponse(
@@ -533,6 +636,13 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         user_answer=essay,
         word_count=words,
         band=band,
+        ai_band=ai_band,
+        ai_available=ai_available,
+        band_source=band_source,
+        ai_criteria=ai_criteria,
+        ai_strengths=ai_strengths,
+        ai_improvements=ai_improvements,
+        ai_model_name=ai_model_name,
         min_words=min_words_for_part(part),
         submitted_at=submitted_at,
         saved_for_review=saved_for_review and band is None,
