@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
@@ -46,6 +46,7 @@ def start_speaking(
 async def submit_speaking(
     attempt_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     duration_sec: Annotated[int | None, Form()] = None,
 ) -> SubmitSpeakingResponse:
@@ -55,8 +56,10 @@ async def submit_speaking(
         user_id=current_user.id,
         audio_bytes=content,
         content_type=file.content_type,
+        filename=file.filename,
         student_name=current_user.full_name,
         duration_sec=duration_sec,
+        background_tasks=background_tasks,
     )
 
 

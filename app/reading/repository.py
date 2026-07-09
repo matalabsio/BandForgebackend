@@ -396,6 +396,17 @@ def list_answers_for_attempt(attempt_id: UUID) -> list[dict[str, Any]]:
     return list(result.data or [])
 
 
+def list_answers_map_for_attempt(attempt_id: UUID) -> dict[str, str]:
+    rows = list_answers_for_attempt(attempt_id)
+    out: dict[str, str] = {}
+    for row in rows:
+        qid = str(row.get("question_id") or "").strip()
+        if not qid:
+            continue
+        out[qid] = str(row.get("user_answer") or "")
+    return out
+
+
 def get_module_score(attempt_id: UUID) -> dict[str, Any] | None:
     client = get_supabase()
     result = (

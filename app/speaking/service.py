@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 
 from app.config import get_settings
 from app.schemas.test_engine import TestSummary
@@ -20,10 +20,51 @@ from app.speaking.schemas import (
     SubmitSpeakingResponse,
 )
 from app.storage.r2 import upload_object
+from app.speaking.ai_evaluator import run_speaking_evaluation
 
 
 def _is_dev() -> bool:
     return get_settings().app_env.strip().lower() == "development"
+
+
+def _audio_extension_for_upload(
+    content_type: str | None,
+    filename: str | None = None,
+) -> str:
+    """Derive a safe R2 key extension from MIME type or uploaded filename."""
+    raw = (content_type or "").lower().split(";", 1)[0].strip()
+    if "mp4" in raw or raw in {"audio/m4a", "audio/x-m4a"}:
+        return "mp4"
+    if "ogg" in raw:
+        return "ogg"
+    if "mpeg" in raw or raw == "audio/mp3":
+        return "mp3"
+    if "wav" in raw:
+        return "wav"
+    if "webm" in raw:
+        return "webm"
+
+    name = (filename or "").lower().rsplit(".", 1)
+    if len(name) == 2:
+        ext = name[1]
+        if ext in {"webm", "mp4", "m4a", "ogg", "mp3", "wav"}:
+            return "mp4" if ext == "m4a" else ext
+
+    return "webm"
+
+
+def _round_half(value: float) -> float:
+    return round(value * 2) / 2
+
+
+def _duration_band_estimate(
+    *, duration_sec: int | None, hint_sec: int | None
+) -> float | None:
+    if not duration_sec or duration_sec <= 0:
+        return None
+    target = hint_sec or 60
+    ratio = min(1.0, duration_sec / target)
+    return _round_half(5.0 + ratio * 1.5)
 
 
 def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
@@ -132,6 +173,8 @@ def submit_attempt(
     content_type: str | None,
     student_name: str | None = None,
     duration_sec: int | None = None,
+    filename: str | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> SubmitSpeakingResponse:
     if len(audio_bytes) < 1000:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Recording is too short.")
@@ -153,7 +196,8 @@ def submit_attempt(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Speaking question missing.")
     question = _row_to_question(rows[0])
 
-    audio_key = f"speaking/{attempt_id}/part-{part}/recording.webm"
+    ext = _audio_extension_for_upload(content_type, filename)
+    audio_key = f"speaking/{attempt_id}/part-{part}/recording.{ext}"
     upload_object(
         key=audio_key,
         body=audio_bytes,
@@ -167,12 +211,31 @@ def submit_attempt(
         "cue_card": question.prompt,
         "duration_sec": duration_sec,
     }
+    duration_estimate = _duration_band_estimate(
+        duration_sec=duration_sec,
+        hint_sec=question.duration_hint_sec,
+    )
+    submit_ai_scores: dict[str, Any] = {
+        "status": "pending",
+        "duration_sec": duration_sec,
+    }
+    if duration_estimate is not None:
+        submit_ai_scores["ai_band"] = duration_estimate
+        submit_ai_scores["duration_estimate"] = duration_estimate
+
     review = repo.insert_speaking_review(
         attempt_id=attempt_id,
         audio_key=audio_key,
         submission_meta=submission_meta,
         student_name=student_name,
+        ai_scores=submit_ai_scores,
     )
+
+    review_id = UUID(str(review["id"]))
+    if background_tasks is not None:
+        background_tasks.add_task(run_speaking_evaluation, review_id)
+    else:
+        run_speaking_evaluation(review_id)
 
     now = datetime.now(UTC)
     completed = repo.mark_attempt_completed(
@@ -229,8 +292,20 @@ def get_pending_status(
     human_band = review.get("human_band")
     band_val = float(human_band) if human_band is not None else None
 
+    ai_scores = review.get("ai_scores") or {}
+    ai_status = (
+        str(ai_scores.get("status"))
+        if isinstance(ai_scores, dict) and ai_scores.get("status")
+        else None
+    )
+
     if review_status == "completed" and band_val is not None:
         message = f"Your Speaking band is {band_val:.1f}."
+    elif ai_status == "pending":
+        message = (
+            "Your recording is being processed. A certified examiner will review "
+            "your speaking and confirm your band within 24 hours."
+        )
     else:
         message = (
             "Your Speaking score is coming soon. A certified examiner is reviewing "
@@ -251,6 +326,7 @@ def get_pending_status(
         status=str(attempt.get("status") or "completed"),
         review_status=review_status,
         human_band=band_val,
+        ai_status=ai_status,
         submitted_at=submitted_at,
         student_name=student_name,
         message=message,

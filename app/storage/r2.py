@@ -107,6 +107,20 @@ def get_object_stream(
     return obj["Body"], headers, status
 
 
+def get_object_bytes(*, key: str) -> bytes:
+    """Download full object bytes from R2 (for Whisper transcription)."""
+    settings = get_settings()
+    client = _s3_client()
+    try:
+        obj = client.get_object(Bucket=settings.r2_bucket_name, Key=key)
+    except Exception as exc:
+        raise RuntimeError(f"R2 get_object failed for {key}: {exc}") from exc
+    body = obj.get("Body")
+    if body is None:
+        raise RuntimeError(f"R2 get_object returned no body for {key}")
+    return body.read()
+
+
 def upload_object(*, key: str, body: bytes, content_type: str) -> None:
     """Upload bytes to the configured R2 bucket."""
     settings = get_settings()

@@ -92,11 +92,42 @@ class Settings(BaseSettings):
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", validation_alias="OPENAI_MODEL")
+    openai_whisper_model: str = Field(
+        default="whisper-1",
+        validation_alias="OPENAI_WHISPER_MODEL",
+    )
+
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        validation_alias="ANTHROPIC_MODEL",
+    )
+
+    speaking_eval_stub: bool = Field(
+        default=False,
+        validation_alias="SPEAKING_EVAL_STUB",
+    )
+    speaking_eval_timeout_sec: int = Field(
+        default=120,
+        validation_alias="SPEAKING_EVAL_TIMEOUT_SEC",
+    )
+    asr_provider: str = Field(
+        default="openai",
+        validation_alias="ASR_PROVIDER",
+    )
+    llm_provider: str = Field(
+        default="claude",
+        validation_alias="LLM_PROVIDER",
+    )
 
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     groq_model: str = Field(
         default="llama-3.3-70b-versatile",
         validation_alias="GROQ_MODEL",
+    )
+    groq_whisper_model: str = Field(
+        default="whisper-large-v3-turbo",
+        validation_alias="GROQ_WHISPER_MODEL",
     )
     groq_api_base: str = Field(
         default="https://api.groq.com/openai/v1",
@@ -155,6 +186,7 @@ class Settings(BaseSettings):
         "phone_otp_enabled",
         "auth_skip_email_verify",
         "razorpay_enabled",
+        "speaking_eval_stub",
         mode="before",
     )
     @classmethod
@@ -167,6 +199,7 @@ class Settings(BaseSettings):
         "google_redirect_uri",
         "resend_api_key",
         "openai_api_key",
+        "anthropic_api_key",
         "groq_api_key",
         "razorpay_key_id",
         "razorpay_key_secret",

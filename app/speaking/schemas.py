@@ -52,6 +52,7 @@ class SpeakingPendingResponse(BaseModel):
     status: str
     review_status: str
     human_band: float | None = None
+    ai_status: str | None = None
     submitted_at: datetime | None = None
     student_name: str | None = None
     message: str

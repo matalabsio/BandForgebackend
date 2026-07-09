@@ -35,6 +35,7 @@ from app.schemas.mock_orchestrator import (
 )
 from app.services import mock_orchestrator
 from app.speaking import repository as speaking_repo
+from app.speaking.ai_evaluator import ai_evaluation_available, run_speaking_evaluation
 from app.writing import repository as writing_repo
 from app.writing.ai_evaluator import ai_evaluation_available, evaluate_mock_essay
 
@@ -502,10 +503,27 @@ def get_speaking_module_review(
             hint_sec = int(opts["duration_hint_sec"])
 
     ai_band = ai_scores.get("ai_band")
+    ai_status = ai_scores.get("status") if isinstance(ai_scores, dict) else None
+
+    if ai_status in ("ai_complete", "ai_stub"):
+        ai_band = ai_scores.get("ai_band")
+    elif (
+        review.get("id")
+        and ai_status == "pending"
+        and ai_evaluation_available()
+    ):
+        run_speaking_evaluation(UUID(str(review["id"])))
+        review = speaking_repo.get_speaking_review_for_attempt(attempt_id) or {}
+        ai_scores = review.get("ai_scores") or {}
+        ai_band = ai_scores.get("ai_band")
+
     if ai_band is None:
         ai_band = _estimate_speaking_band(duration_sec=duration_sec, hint_sec=hint_sec)
-        if ai_band is not None and review.get("id"):
-            merged = {**ai_scores, "ai_band": ai_band}
+        if ai_band is not None and review.get("id") and ai_status not in (
+            "ai_complete",
+            "ai_stub",
+        ):
+            merged = {**(ai_scores if isinstance(ai_scores, dict) else {}), "ai_band": ai_band}
             speaking_repo.update_speaking_review_ai_scores(
                 review_id=UUID(str(review["id"])), ai_scores=merged
             )

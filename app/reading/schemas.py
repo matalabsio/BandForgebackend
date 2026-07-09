@@ -31,6 +31,7 @@ class StartReadingResponse(BaseModel):
     test: TestSummary | None = None
     passage_text: str | None = None
     questions: list[ReadingQuestion] = Field(default_factory=list)
+    saved_answers: dict[str, str] = Field(default_factory=dict)
 
 
 class ReadingQuestionsResponse(BaseModel):
