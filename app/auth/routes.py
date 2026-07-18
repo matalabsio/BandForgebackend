@@ -35,6 +35,7 @@ from app.auth.schemas import (
     RestoreSessionRequest,
     SendOtpRequest,
     UpdateProfileRequest,
+    UpdateProfileResponse,
     SessionUser,
     UserPublic,
     VerifyEmailRequest,
@@ -42,6 +43,7 @@ from app.auth.schemas import (
 )
 from app.auth import service
 from app.config import get_settings
+from app.security.rate_limit import enforce_login_rate_limit
 
 router = APIRouter(prefix=AUTH_ROUTER_PREFIX, tags=["auth"])
 
@@ -100,7 +102,12 @@ async def collect_lead(body: CollectLeadRequest) -> MessageResponse:
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(body: LoginRequest, response: Response) -> AuthResponse:
+async def login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+) -> AuthResponse:
+    enforce_login_rate_limit(request)
     # Email/password is enabled for admin accounts only (admin panel sign-in).
     auth, new_refresh, _ = await service.login_user(
         email=str(body.email),
@@ -200,11 +207,11 @@ async def session(
     return user
 
 
-@router.patch("/profile", response_model=UserPublic)
+@router.patch("/profile", response_model=UpdateProfileResponse)
 async def update_profile(
     body: UpdateProfileRequest,
     user: Annotated[UserPublic, Depends(get_current_user)],
-) -> UserPublic:
+) -> UpdateProfileResponse:
     return await service.update_user_profile(user_id=user.id, body=body)
 
 

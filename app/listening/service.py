@@ -811,6 +811,13 @@ def submit_attempt(
     if timing is not None:
         timing.rpc_bundle_ms = round((perf_counter() - t0) * 1000)
 
+    try:
+        from app.learning.service import schedule_profile_refresh
+
+        schedule_profile_refresh(user_id)
+    except Exception:
+        pass
+
     completed_raw = completed.get("completed_at") or now.isoformat()
     submitted_at = (
         datetime.fromisoformat(completed_raw.replace("Z", "+00:00"))

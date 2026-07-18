@@ -1,0 +1,7 @@
+The line graph shows average daily temperature in two cities from January to December. Overall, City X was warmer for most of the year, while City Y showed a clearer winter drop.
+
+In City X, temperatures started at around 18°C in January, rose steadily to a peak of 32°C in July, then declined gradually to 20°C in December. City Y began colder at 8°C in January, climbed to about 26°C in August, and fell again to 10°C by December.
+
+The gap between the cities was largest in winter months, reaching nearly 10°C in January and December. During summer, both cities were closer, with only a six-degree difference in July.
+
+In conclusion, City X had a milder winter and a warmer summer, whereas City Y experienced a more pronounced seasonal contrast.

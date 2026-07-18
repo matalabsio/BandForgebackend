@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -14,8 +15,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.auth.schemas import UserPublic
-from app.payments import razorpay_client, service, webhook
+from app.payments import razorpay_client, repository, service, webhook
 from app.payments.constants import EVENT_PROCESSED
+from app.payments.exceptions import PaymentConsistencyError
 from app.payments.schemas import (
     RazorpayOrderPayload,
     SubscriptionOut,
@@ -61,14 +63,37 @@ def _fake_settings(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def _created_payment() -> dict:
+def _created_payment(*, order_id: str = "order_test_2") -> dict:
     return {
         "id": str(PAYMENT_ID),
         "user_id": str(USER_ID),
         "plan_id": str(PLAN_ID),
         "status": "created",
         "amount": 99900,
+        "currency": "INR",
+        "razorpay_order_id": order_id,
     }
+
+
+@contextmanager
+def _create_order_persistence(order_id: str, *, row: dict | None = None):
+    """Stub insert + consistency re-read (count==1 + matching row)."""
+    verified = row if row is not None else _created_payment(order_id=order_id)
+    with (
+        patch(
+            "app.payments.service.repository.insert_payment",
+            return_value={"id": str(verified.get("id") or PAYMENT_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.count_payments_by_order_id",
+            return_value=1,
+        ),
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=verified,
+        ),
+    ):
+        yield
 
 
 # --- data minimization -----------------------------------------------------
@@ -136,8 +161,8 @@ def test_create_order_response_includes_checkout_config_id_when_configured():
             "app.payments.razorpay_client.create_order",
             return_value={"id": "order_with_config"},
         ),
-        patch("app.payments.service.repository.insert_payment", return_value={"id": str(PAYMENT_ID)}),
         patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        _create_order_persistence("order_with_config"),
     ):
         resp = service.create_order(user=_user(), plan_slug="premium_monthly")
 
@@ -155,8 +180,8 @@ def test_create_order_uses_db_amount_minimal_contact_and_long_receipt():
         patch("app.payments.service.get_settings", return_value=_fake_settings()),
         patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
         patch("app.payments.razorpay_client.create_order", side_effect=fake_rzp_create),
-        patch("app.payments.service.repository.insert_payment", return_value={"id": str(PAYMENT_ID)}),
         patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        _create_order_persistence("order_test_2"),
     ):
         resp = service.create_order(user=_user(), plan_slug="premium_monthly")
 
@@ -176,8 +201,8 @@ def test_checkout_contact_omits_invalid_phone():
         patch("app.payments.service.get_settings", return_value=_fake_settings()),
         patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
         patch("app.payments.razorpay_client.create_order", return_value={"id": "order_x"}),
-        patch("app.payments.service.repository.insert_payment", return_value={"id": str(PAYMENT_ID)}),
         patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        _create_order_persistence("order_x"),
     ):
         resp = service.create_order(user=user, plan_slug="premium_monthly")
     assert resp.checkout_contact.contact is None
@@ -191,6 +216,170 @@ def test_create_order_rejects_unknown_plan():
         with pytest.raises(HTTPException) as exc:
             service.create_order(user=_user(), plan_slug="nope")
         assert exc.value.status_code == 404
+
+
+# --- create-order DB consistency gate (Phase 4) -----------------------------
+
+
+def test_create_order_consistency_ok_on_first_reread():
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_ok_1"},
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep") as sleep_mock,
+        _create_order_persistence("order_ok_1"),
+    ):
+        resp = service.create_order(user=_user(), plan_slug="premium_monthly")
+
+    assert resp.order_id == "order_ok_1"
+    sleep_mock.assert_not_called()
+
+
+def test_create_order_consistency_retries_once_then_succeeds():
+    verified = _created_payment(order_id="order_retry")
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_retry"},
+        ),
+        patch(
+            "app.payments.service.repository.insert_payment",
+            return_value={"id": str(PAYMENT_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.count_payments_by_order_id",
+            side_effect=[0, 1],
+        ),
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=verified,
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep") as sleep_mock,
+    ):
+        resp = service.create_order(user=_user(), plan_slug="premium_monthly")
+
+    assert resp.order_id == "order_retry"
+    sleep_mock.assert_called_once_with(0.15)
+
+
+def test_create_order_consistency_missing_both_attempts_raises():
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_miss"},
+        ),
+        patch(
+            "app.payments.service.repository.insert_payment",
+            return_value={"id": str(PAYMENT_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.count_payments_by_order_id",
+            return_value=0,
+        ),
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=None,
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep") as sleep_mock,
+    ):
+        with pytest.raises(PaymentConsistencyError) as exc:
+            service.create_order(user=_user(), plan_slug="premium_monthly")
+        assert exc.value.status_code == 503
+
+    sleep_mock.assert_called_once_with(0.15)
+
+
+def test_create_order_consistency_wrong_status_fails():
+    bad = {**_created_payment(order_id="order_bad_status"), "status": "paid"}
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_bad_status"},
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep"),
+        _create_order_persistence("order_bad_status", row=bad),
+    ):
+        with pytest.raises(PaymentConsistencyError):
+            service.create_order(user=_user(), plan_slug="premium_monthly")
+
+
+def test_create_order_consistency_wrong_amount_fails():
+    bad = {**_created_payment(order_id="order_bad_amt"), "amount": 1}
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_bad_amt"},
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep"),
+        _create_order_persistence("order_bad_amt", row=bad),
+    ):
+        with pytest.raises(PaymentConsistencyError):
+            service.create_order(user=_user(), plan_slug="premium_monthly")
+
+
+def test_create_order_consistency_wrong_user_fails():
+    bad = {
+        **_created_payment(order_id="order_bad_user"),
+        "user_id": str(UUID(int=99)),
+    }
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_bad_user"},
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep"),
+        _create_order_persistence("order_bad_user", row=bad),
+    ):
+        with pytest.raises(PaymentConsistencyError):
+            service.create_order(user=_user(), plan_slug="premium_monthly")
+
+
+def test_create_order_consistency_duplicate_order_id_fails_immediately():
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
+        patch(
+            "app.payments.razorpay_client.create_order",
+            return_value={"id": "order_dup"},
+        ),
+        patch(
+            "app.payments.service.repository.insert_payment",
+            return_value={"id": str(PAYMENT_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.count_payments_by_order_id",
+            return_value=2,
+        ),
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_created_payment(order_id="order_dup"),
+        ),
+        patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
+        patch("app.payments.service.time.sleep") as sleep_mock,
+    ):
+        with pytest.raises(PaymentConsistencyError):
+            service.create_order(user=_user(), plan_slug="premium_monthly")
+
+    sleep_mock.assert_not_called()
 
 
 def test_razorpay_client_maps_auth_failure_to_503():
@@ -252,6 +441,10 @@ def test_confirm_payment_paid_idempotent_for_already_paid():
             "app.payments.service.repository.get_payment_by_order_id",
             return_value=paid_payment,
         ),
+        patch(
+            "app.payments.service.repository.list_subscriptions_for_payment",
+            return_value=[{"id": "sub_1"}],
+        ),
         patch("app.payments.service.get_subscription", return_value=active_sub),
         patch("app.payments.service.repository.confirm_payment_paid_bundle") as bundle,
     ):
@@ -261,6 +454,39 @@ def test_confirm_payment_paid_idempotent_for_already_paid():
         )
         assert result.is_active
         bundle.assert_not_called()
+
+
+def test_confirm_payment_paid_heals_paid_without_subscription():
+    paid_payment = {**_created_payment(), "status": "paid"}
+    with (
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=paid_payment,
+        ),
+        patch(
+            "app.payments.service.repository.list_subscriptions_for_payment",
+            return_value=[],
+        ),
+        patch("app.payments.service.repository.get_plan_by_id", return_value=_plan()),
+        patch(
+            "app.payments.service.repository.get_active_subscription",
+            return_value=None,
+        ),
+        patch(
+            "app.payments.service.repository.confirm_payment_paid_bundle",
+            return_value={"already_paid": True, "subscription_id": "sub_new"},
+        ) as bundle,
+        patch(
+            "app.payments.service.get_subscription",
+            return_value=SubscriptionOut(is_active=True, plan_name="Premium"),
+        ),
+    ):
+        result = service.confirm_payment_paid(
+            razorpay_order_id="order_x",
+            razorpay_payment_id="pay_x",
+        )
+        assert result.is_active
+        bundle.assert_called_once()
 
 
 def test_confirm_payment_paid_calls_bundle_for_new_payment():
@@ -307,6 +533,21 @@ def test_confirm_payment_paid_enforces_ownership():
                 user_id=USER_ID,
             )
         assert exc.value.status_code == 404
+
+
+def test_confirm_payment_paid_raises_when_row_missing():
+    with patch(
+        "app.payments.service.repository.get_payment_by_order_id",
+        return_value=None,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            service.confirm_payment_paid(
+                razorpay_order_id="order_missing",
+                razorpay_payment_id="pay_x",
+                user_id=USER_ID,
+            )
+        assert exc.value.status_code == 404
+        assert "not found" in str(exc.value.detail).lower()
 
 
 def test_compute_subscription_dates_stacks_on_active():
@@ -387,6 +628,14 @@ def test_webhook_is_idempotent_on_duplicate_event():
         patch(
             "app.payments.repository.insert_payment_event", return_value=None
         ) as insert,
+        patch(
+            "app.payments.repository.get_payment_event_by_razorpay_event_id",
+            return_value={
+                "id": "evt_row",
+                "processing_status": "processed",
+                "retry_count": 0,
+            },
+        ),
     ):
         result = webhook.handle_webhook(
             raw_body=b'{"event":"payment.captured"}',
@@ -399,6 +648,67 @@ def test_webhook_is_idempotent_on_duplicate_event():
         insert.assert_called_once()
         call_kwargs = insert.call_args.kwargs
         assert call_kwargs["headers"]["X-Razorpay-Event-Id"] == "evt_dup"
+
+
+def test_webhook_reprocesses_failed_event_on_retry():
+    payload = {
+        "event": "payment.captured",
+        "payload": {
+            "payment": {
+                "entity": {"id": "pay_x", "order_id": "order_x", "amount": 49900}
+            }
+        },
+    }
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch("app.payments.repository.insert_payment_event", return_value=None),
+        patch(
+            "app.payments.repository.get_payment_event_by_razorpay_event_id",
+            return_value={
+                "id": "evt_failed",
+                "processing_status": "failed",
+                "retry_count": 1,
+            },
+        ),
+        patch(
+            "app.payments.repository.claim_payment_event_for_retry",
+            return_value={
+                "id": "evt_failed",
+                "processing_status": "pending",
+                "retry_count": 2,
+            },
+        ) as claim,
+        patch("app.payments.service.confirm_payment_paid") as confirm,
+        patch("app.payments.repository.mark_event_processed") as processed,
+    ):
+        result = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="ok",
+            event_id="evt_retry",
+            payload=payload,
+        )
+    assert result == {"ok": True, "reprocess": True}
+    claim.assert_called_once_with("evt_failed")
+    confirm.assert_called_once()
+    processed.assert_called_once_with("evt_failed")
+
+
+def test_webhook_rejects_missing_event_id():
+    from app.payments.exceptions import WebhookEventIdRequiredError
+
+    with patch(
+        "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+    ):
+        with pytest.raises(WebhookEventIdRequiredError) as exc:
+            webhook.handle_webhook(
+                raw_body=b"{}",
+                signature="ok",
+                event_id=None,
+                payload={"event": "payment.captured"},
+            )
+        assert exc.value.status_code == 400
 
 
 def test_webhook_payment_captured_uses_confirm_payment_paid():
@@ -464,6 +774,8 @@ def test_webhook_sanitizes_signature_header():
 
 
 def test_webhook_marks_event_failed_on_processing_error():
+    from app.payments.exceptions import WebhookTransientError
+
     with (
         patch(
             "app.payments.razorpay_client.verify_webhook_signature", return_value=True
@@ -478,19 +790,111 @@ def test_webhook_marks_event_failed_on_processing_error():
         ),
         patch("app.payments.repository.mark_event_failed") as failed,
     ):
+        with pytest.raises(WebhookTransientError) as exc:
+            webhook.handle_webhook(
+                raw_body=b"{}",
+                signature="ok",
+                event_id="evt_err",
+                payload={
+                    "event": "payment.captured",
+                    "payload": {
+                        "payment": {
+                            "entity": {"id": "p", "order_id": "o", "amount": 99900}
+                        }
+                    },
+                },
+            )
+        assert exc.value.status_code == 503
+        failed.assert_called_once()
+
+
+def test_webhook_permanent_error_does_not_raise_503():
+    from app.payments.exceptions import PaymentNotFoundError
+
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch(
+            "app.payments.repository.insert_payment_event",
+            return_value={"id": "evt_nf"},
+        ),
+        patch(
+            "app.payments.service.confirm_payment_paid",
+            side_effect=PaymentNotFoundError(),
+        ),
+        patch("app.payments.repository.mark_event_failed") as failed,
+    ):
         result = webhook.handle_webhook(
             raw_body=b"{}",
             signature="ok",
-            event_id="evt_err",
+            event_id="evt_nf",
             payload={
                 "event": "payment.captured",
                 "payload": {
-                    "payment": {"entity": {"id": "p", "order_id": "o", "amount": 99900}}
+                    "payment": {
+                        "entity": {"id": "p", "order_id": "o", "amount": 99900}
+                    }
                 },
             },
         )
-        assert result == {"ok": True, "processing_failed": True}
-        failed.assert_called_once()
+    assert result == {"ok": True, "processing_failed": True}
+    failed.assert_called_once()
+
+
+def test_sequential_fallback_skips_insert_when_subscription_exists():
+    from datetime import UTC, datetime, timedelta
+
+    paid = {
+        **_created_payment(order_id="order_fb"),
+        "status": "paid",
+    }
+    existing_sub = {"id": "sub_1", "payment_id": paid["id"]}
+    with (
+        patch(
+            "app.payments.repository.get_payment_by_order_id", return_value=paid
+        ),
+        patch(
+            "app.payments.repository.list_subscriptions_for_payment",
+            return_value=[existing_sub],
+        ),
+        patch("app.payments.repository.insert_subscription") as insert_sub,
+        patch("app.payments.repository.mark_payment_status") as mark,
+    ):
+        out = repository._confirm_payment_paid_sequential(
+            razorpay_order_id="order_fb",
+            razorpay_payment_id="pay_fb",
+            razorpay_signature=None,
+            starts_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        )
+    assert out["already_paid"] is True
+    assert out["subscription_id"] == "sub_1"
+    insert_sub.assert_not_called()
+    mark.assert_not_called()
+
+
+def test_insert_subscription_treats_unique_violation_as_success():
+    from datetime import UTC, datetime, timedelta
+
+    from app.payments import repository as repo
+
+    existing = {"id": "sub_race", "payment_id": str(PAYMENT_ID)}
+    with (
+        patch("app.payments.repository._exec", side_effect=Exception("23505 unique")),
+        patch(
+            "app.payments.repository.list_subscriptions_for_payment",
+            return_value=[existing],
+        ),
+    ):
+        row = repo.insert_subscription(
+            user_id=USER_ID,
+            plan_id=PLAN_ID,
+            payment_id=PAYMENT_ID,
+            starts_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        )
+    assert row["id"] == "sub_race"
 
 
 def test_webhook_payment_failed_marks_payment():

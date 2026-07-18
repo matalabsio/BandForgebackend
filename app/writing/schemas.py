@@ -8,6 +8,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.diagnostic.evaluation_schemas import (
+    GrammarMistake,
+    SpellingMistake,
+    StrongSpan,
+    VocabularyHighlight,
+)
 from app.schemas.test_engine import TestSummary
 
 
@@ -74,6 +80,8 @@ class WritingSessionTaskSummary(BaseModel):
     part: int
     human_band: float | None = None
     review_status: str
+    ai_status: str | None = None
+    ai_band: float | None = None
 
 
 class WritingReviewResponse(BaseModel):
@@ -90,11 +98,21 @@ class WritingReviewResponse(BaseModel):
     band: float | None = None
     ai_band: float | None = None
     ai_available: bool = False
+    ai_status: str | None = None
     band_source: str = "none"
+    human_verified: bool = False
+    reviewer_notes: str | None = None
     ai_criteria: dict[str, float] = Field(default_factory=dict)
     ai_strengths: list[str] = Field(default_factory=list)
     ai_improvements: list[str] = Field(default_factory=list)
     ai_model_name: str | None = None
+    ai_provider: str | None = None
+    spelling_mistakes: list[SpellingMistake] = Field(default_factory=list)
+    grammar_mistakes: list[GrammarMistake] = Field(default_factory=list)
+    next_band_advice: str = ""
+    confidence: float | None = None
+    vocabulary_highlights: list[VocabularyHighlight] = Field(default_factory=list)
+    strong_spans: list[StrongSpan] = Field(default_factory=list)
     min_words: int = 0
     submitted_at: datetime | None = None
     saved_for_review: bool = False
@@ -106,6 +124,9 @@ class WritingPendingResponse(BaseModel):
     status: str
     review_status: str
     human_band: float | None = None
+    ai_status: str | None = None
+    ai_band: float | None = None
+    ai_available: bool = False
     submitted_at: datetime | None = None
     message: str
     session_tasks: list[WritingSessionTaskSummary] = Field(default_factory=list)

@@ -27,6 +27,19 @@ class DiagnosticCompleteResponse(BaseModel):
     status: str = "completed"
 
 
+class DiagnosticLatestResponse(BaseModel):
+    id: str
+    client_attempt_id: str | None = None
+    status: str | None = None
+    listening_band: float | None = None
+    reading_band: float | None = None
+    writing_band: float | None = None
+    speaking_band: float | None = None
+    aggregate_band: float | None = None
+    completed_at: datetime | None = None
+    pack_version: str | None = None
+
+
 class DiagnosticReviewSubmitRequest(BaseModel):
     client_attempt_id: str = Field(min_length=1, max_length=128)
     full_name: str = Field(min_length=1, max_length=200)
@@ -34,6 +47,7 @@ class DiagnosticReviewSubmitRequest(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     goal_label: str | None = None
     target_band: float | None = None
+    exam_date: str | None = Field(default=None, max_length=10)
     listening_band: float | None = None
     reading_band: float | None = None
     writing_band: float | None = None

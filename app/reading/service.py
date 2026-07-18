@@ -351,6 +351,7 @@ def start_attempt(
             mock_attempt_id=mock_attempt_id,
             timing=timing,
         )
+        saved_answers = repo.list_answers_map_for_attempt(UUID(str(existing["id"])))
         response = StartReadingResponse(
             attempt_id=UUID(str(existing["id"])),
             started_at=started_at,
@@ -363,6 +364,7 @@ def start_attempt(
             test=test,
             passage_text=passage_text,
             questions=questions,
+            saved_answers=saved_answers,
         )
         if timing is not None:
             timing.duration_ms = round((perf_counter() - t_request) * 1000)
@@ -394,6 +396,7 @@ def start_attempt(
         mock_attempt_id=mock_attempt_id,
         timing=timing,
     )
+    saved_answers = repo.list_answers_map_for_attempt(UUID(str(row["id"])))
     response = StartReadingResponse(
         attempt_id=UUID(str(row["id"])),
         started_at=started_at,
@@ -406,6 +409,7 @@ def start_attempt(
         test=test,
         passage_text=passage_text,
         questions=questions,
+        saved_answers=saved_answers,
     )
     if timing is not None:
         timing.duration_ms = round((perf_counter() - t_request) * 1000)
@@ -556,6 +560,16 @@ def submit_attempt(
             detail="One or more question_ids are invalid for this attempt.",
         )
 
+    # Preserve prior non-empty autosaved answers if submit payload has blanks.
+    existing_answers = repo.list_answers_map_for_attempt(attempt_id)
+    for qid in valid_ids:
+        incoming = answers_by_qid.get(qid, "")
+        if incoming:
+            continue
+        prior = str(existing_answers.get(qid) or "").strip()
+        if prior:
+            answers_by_qid[qid] = prior
+
     t0 = perf_counter()
     raw_score, total, scored_rows = score_answers(
         questions=questions,
@@ -592,6 +606,13 @@ def submit_attempt(
     )
     if timing is not None:
         timing.rpc_bundle_ms = round((perf_counter() - t0) * 1000)
+
+    try:
+        from app.learning.service import schedule_profile_refresh
+
+        schedule_profile_refresh(user_id)
+    except Exception:
+        pass
 
     completed_raw = completed.get("completed_at") or now.isoformat()
     submitted_at = (

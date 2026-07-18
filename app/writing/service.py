@@ -1,27 +1,42 @@
-"""Business logic for the Writing module (save for review, no evaluation)."""
+"""Business logic for the Writing module (submit + background AI evaluation)."""
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 from uuid import UUID
+import threading
 
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 
 from app.cache.hybrid_cache import get_json, set_json
 from app.config import get_settings
+from app.diagnostic.evaluation_schemas import (
+    GrammarMistake,
+    SpellingMistake,
+    StrongSpan,
+    VocabularyHighlight,
+)
 from app.schemas.test_engine import TestSummary
 from app.services.mock_progress_timing import MockProgressTiming
 from app.writing import repository as repo
-from app.writing.ai_evaluator import ai_evaluation_available, evaluate_mock_essay
+from app.writing.ai_evaluator import (
+    AI_STATUS_COMPLETE,
+    AI_STATUS_FAILED,
+    AI_STATUS_PENDING,
+    AI_STATUS_STUB,
+    ai_evaluation_available,
+    run_writing_evaluation,
+)
 from app.writing.constants import (
     TASK1_DURATION_MINUTES,
     TASK2_DURATION_MINUTES,
     WRITING_GRACE_SECONDS,
 )
 from app.writing.evaluation import calculate_writing_band, min_words_for_part
+from app.writing.eval_utils import visual_description_from_task_options
+from app.writing.providers.constants import PROVIDER_NAME_ANTHROPIC_CLAUDE, PROVIDER_NAME_GROQ
 from app.writing.schemas import (
     AutosaveResponse,
     StartWritingResponse,
@@ -52,16 +67,113 @@ def _word_count(text: str) -> int:
     return len(stripped.split()) if stripped else 0
 
 
-def _run_async(coro):
+def _parse_mistakes(
+    ai_scores: dict[str, Any],
+    key: str,
+    model: type[SpellingMistake] | type[GrammarMistake],
+) -> list[SpellingMistake] | list[GrammarMistake]:
+    raw = ai_scores.get(key) or []
+    if not isinstance(raw, list):
+        return []
+    out: list[Any] = []
+    for item in raw:
+        if isinstance(item, dict):
+            try:
+                out.append(model.model_validate(item))
+            except Exception:
+                continue
+    return out
+
+
+def _parse_vocabulary_highlights(ai_scores: dict[str, Any]) -> list[VocabularyHighlight]:
+    raw = ai_scores.get("vocabulary_highlights") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[VocabularyHighlight] = []
+    for item in raw:
+        if isinstance(item, dict):
+            try:
+                out.append(VocabularyHighlight.model_validate(item))
+            except Exception:
+                continue
+    return out[:6]
+
+
+def _parse_strong_spans(ai_scores: dict[str, Any]) -> list[StrongSpan]:
+    raw = ai_scores.get("strong_spans") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[StrongSpan] = []
+    for item in raw:
+        if isinstance(item, dict):
+            try:
+                out.append(StrongSpan.model_validate(item))
+            except Exception:
+                continue
+    return out[:4]
+
+
+def _parse_confidence(ai_scores: dict[str, Any]) -> float | None:
+    if "confidence" not in ai_scores:
+        return None
+    raw = ai_scores.get("confidence")
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    new_loop = asyncio.new_event_loop()
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return None
+    return max(0.0, min(1.0, value))
+
+
+def _parse_next_band_advice(ai_scores: dict[str, Any]) -> str:
+    raw = ai_scores.get("next_band_advice")
+    return str(raw).strip() if raw else ""
+
+
+def _ai_provider_label(ai_scores: dict[str, Any]) -> str | None:
+    used = ai_scores.get("provider_used")
+    if used == PROVIDER_NAME_ANTHROPIC_CLAUDE:
+        return "claude"
+    if used == PROVIDER_NAME_GROQ:
+        return "groq"
+    return str(used) if used else None
+
+
+def _ai_status_from_scores(ai_scores: dict[str, Any] | None) -> str | None:
+    if not isinstance(ai_scores, dict) or not ai_scores.get("status"):
+        return None
+    return str(ai_scores["status"])
+
+
+def _ai_band_from_scores(ai_scores: dict[str, Any] | None) -> float | None:
+    if not isinstance(ai_scores, dict):
+        return None
+    raw = ai_scores.get("ai_band")
+    if raw is None:
+        return None
     try:
-        return new_loop.run_until_complete(coro)
-    finally:
-        new_loop.close()
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _session_task_from_review(
+    *,
+    attempt_id: UUID,
+    part: int,
+    review: dict[str, Any] | None,
+) -> WritingSessionTaskSummary:
+    ai_scores = (review or {}).get("ai_scores") if review else None
+    human_band = review.get("human_band") if review else None
+    return WritingSessionTaskSummary(
+        attempt_id=attempt_id,
+        part=part,
+        human_band=float(human_band) if human_band is not None else None,
+        review_status=str((review or {}).get("status") or "pending"),
+        ai_status=_ai_status_from_scores(ai_scores if isinstance(ai_scores, dict) else None),
+        ai_band=_ai_band_from_scores(ai_scores if isinstance(ai_scores, dict) else None),
+    )
 
 
 def _session_tasks(
@@ -76,15 +188,7 @@ def _session_tasks(
         review = repo.get_writing_review_for_attempt(attempt_id)
         if not review:
             return []
-        human_band = review.get("human_band")
-        return [
-            WritingSessionTaskSummary(
-                attempt_id=attempt_id,
-                part=part,
-                human_band=float(human_band) if human_band is not None else None,
-                review_status=str(review.get("status") or "pending"),
-            )
-        ]
+        return [_session_task_from_review(attempt_id=attempt_id, part=part, review=review)]
 
     mock_attempt_id = UUID(str(mock_attempt_raw))
     rows = repo.list_completed_writing_attempts_for_session(
@@ -95,13 +199,11 @@ def _session_tasks(
     for row in rows:
         aid = UUID(str(row["id"]))
         review = repo.get_writing_review_for_attempt(aid)
-        human_band = review.get("human_band") if review else None
         tasks.append(
-            WritingSessionTaskSummary(
+            _session_task_from_review(
                 attempt_id=aid,
                 part=int(row.get("part") or 1),
-                human_band=float(human_band) if human_band is not None else None,
-                review_status=str((review or {}).get("status") or "pending"),
+                review=review,
             )
         )
     return tasks
@@ -351,6 +453,7 @@ def submit_attempt(
     user_id: UUID,
     answers: list[dict[str, str]],
     timing: WritingSubmitTiming | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> SubmitWritingResponse:
     t_request = perf_counter()
     t0 = perf_counter()
@@ -408,6 +511,8 @@ def submit_attempt(
     )
     test_row = repo.get_mock_test(mock_test_id, allow_unpublished=_is_dev())
     part_label = f"Task {part}"
+    options = question.get("options") if isinstance(question.get("options"), dict) else {}
+    visual_description = visual_description_from_task_options(options, part=part)
     submission_meta = {
         "part": part,
         "part_label": part_label,
@@ -416,15 +521,22 @@ def submit_attempt(
         "essay": essay,
         "word_count": words,
         "mock_title": test_row.get("title"),
+        "visual_description": visual_description,
     }
-    repo.insert_writing_review(
+    review_row = repo.insert_writing_review(
         attempt_id=attempt_id,
         submission_meta=submission_meta,
         ai_scores={
+            "status": AI_STATUS_PENDING,
             "word_count_estimate": estimate_band,
             "word_count": words,
         },
     )
+    review_id = UUID(str(review_row["id"]))
+    if background_tasks is not None:
+        background_tasks.add_task(run_writing_evaluation, review_id)
+    else:
+        run_writing_evaluation(review_id)
     completed = repo.mark_attempt_completed(
         attempt_id, completed_at_iso=now.isoformat()
     )
@@ -533,12 +645,34 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         ai_scores = raw_ai_scores if isinstance(raw_ai_scores, dict) else {}
         if review_row.get("id"):
             review_id = UUID(str(review_row["id"]))
-        ai_band_raw = ai_scores.get("ai_band")
-        if ai_band_raw is not None:
-            try:
-                ai_band = float(ai_band_raw)
-            except (TypeError, ValueError):
-                ai_band = None
+        ai_band = _ai_band_from_scores(ai_scores)
+
+    ai_status = _ai_status_from_scores(ai_scores)
+    # Safety net: re-enqueue in a daemon thread if still pending and stale (>2 min).
+    if (
+        review_id is not None
+        and ai_status == AI_STATUS_PENDING
+        and review_row
+        and review_row.get("created_at")
+    ):
+        created_raw = review_row.get("created_at")
+        try:
+            created_at = (
+                datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+                if not isinstance(created_raw, datetime)
+                else created_raw
+            )
+            age_sec = (datetime.now(UTC) - created_at.astimezone(UTC)).total_seconds()
+            if age_sec > 120:
+                threading.Thread(
+                    target=run_writing_evaluation,
+                    args=(review_id,),
+                    daemon=True,
+                    name=f"writing-eval-retry-{review_id}",
+                ).start()
+        except Exception:
+            pass
+
     ai_criteria_raw = ai_scores.get("criteria") if isinstance(ai_scores, dict) else {}
     ai_criteria = (
         {
@@ -564,47 +698,27 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         if isinstance(ai_scores, dict) and ai_scores.get("model_name")
         else None
     )
-
-    if (
-        review_row
-        and ai_band is None
-        and ai_available
-        and essay.strip()
-        and review_id is not None
-    ):
-        evaluation = None
-        try:
-            evaluation = _run_async(
-                evaluate_mock_essay(
-                    part=part,
-                    question=str(question.get("prompt") or ""),
-                    essay=essay,
-                )
-            )
-        except Exception:
-            evaluation = None
-        if isinstance(evaluation, dict):
-            merged = {**ai_scores, **evaluation}
-            repo.update_writing_review_ai_scores(review_id=review_id, ai_scores=merged)
-            ai_scores = merged
-            ai_band_raw = ai_scores.get("ai_band")
-            if ai_band_raw is not None:
-                try:
-                    ai_band = float(ai_band_raw)
-                except (TypeError, ValueError):
-                    ai_band = None
-            criteria_raw = ai_scores.get("criteria")
-            if isinstance(criteria_raw, dict):
-                ai_criteria = {
-                    str(k): float(v)
-                    for k, v in criteria_raw.items()
-                    if isinstance(v, (int, float))
-                }
-            ai_strengths = [str(item) for item in ai_scores.get("strengths", [])]
-            ai_improvements = [str(item) for item in ai_scores.get("improvements", [])]
-            ai_model_name = (
-                str(ai_scores.get("model_name")) if ai_scores.get("model_name") else None
-            )
+    ai_provider = _ai_provider_label(ai_scores) if isinstance(ai_scores, dict) else None
+    spelling_mistakes = (
+        _parse_mistakes(ai_scores, "spelling_mistakes", SpellingMistake)
+        if isinstance(ai_scores, dict)
+        else []
+    )
+    grammar_mistakes = (
+        _parse_mistakes(ai_scores, "grammar_mistakes", GrammarMistake)
+        if isinstance(ai_scores, dict)
+        else []
+    )
+    next_band_advice = (
+        _parse_next_band_advice(ai_scores) if isinstance(ai_scores, dict) else ""
+    )
+    confidence = _parse_confidence(ai_scores) if isinstance(ai_scores, dict) else None
+    vocabulary_highlights = (
+        _parse_vocabulary_highlights(ai_scores) if isinstance(ai_scores, dict) else []
+    )
+    strong_spans = (
+        _parse_strong_spans(ai_scores) if isinstance(ai_scores, dict) else []
+    )
 
     if score_row and score_row.get("band") is not None:
         band = float(score_row["band"])
@@ -612,7 +726,7 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
     elif review_row and review_row.get("human_band") is not None:
         band = float(review_row["human_band"])
         band_source = "human"
-    elif ai_band is not None:
+    elif ai_band is not None and ai_status in (AI_STATUS_COMPLETE, AI_STATUS_STUB):
         band = ai_band
         band_source = "ai"
     elif review_row:
@@ -623,6 +737,11 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
             except (TypeError, ValueError):
                 band = None
                 band_source = "none"
+
+    human_verified = band_source == "human"
+    reviewer_notes: str | None = None
+    if review_row and review_row.get("reviewer_notes"):
+        reviewer_notes = str(review_row["reviewer_notes"])
 
     opts = question.get("options")
     return WritingReviewResponse(
@@ -638,11 +757,21 @@ def get_review(*, attempt_id: UUID, user_id: UUID) -> WritingReviewResponse:
         band=band,
         ai_band=ai_band,
         ai_available=ai_available,
+        ai_status=ai_status,
         band_source=band_source,
+        human_verified=human_verified,
+        reviewer_notes=reviewer_notes,
         ai_criteria=ai_criteria,
         ai_strengths=ai_strengths,
         ai_improvements=ai_improvements,
         ai_model_name=ai_model_name,
+        ai_provider=ai_provider,
+        spelling_mistakes=spelling_mistakes,
+        grammar_mistakes=grammar_mistakes,
+        next_band_advice=next_band_advice,
+        confidence=confidence,
+        vocabulary_highlights=vocabulary_highlights,
+        strong_spans=strong_spans,
         min_words=min_words_for_part(part),
         submitted_at=submitted_at,
         saved_for_review=saved_for_review and band is None,
@@ -668,8 +797,31 @@ def get_pending_status(
     human_band = review.get("human_band")
     band_val = float(human_band) if human_band is not None else None
 
+    ai_scores = review.get("ai_scores") or {}
+    if not isinstance(ai_scores, dict):
+        ai_scores = {}
+    ai_status = _ai_status_from_scores(ai_scores)
+    ai_band = _ai_band_from_scores(ai_scores)
+    ai_available = ai_evaluation_available()
+
     if review_status == "completed" and band_val is not None:
         message = f"Your Writing band is {band_val:.1f}."
+    elif ai_status == AI_STATUS_PENDING:
+        message = (
+            "Analyzing your essay… AI feedback will appear shortly. "
+            "A certified examiner will confirm your band within 24 hours."
+        )
+    elif ai_status in (AI_STATUS_COMPLETE, AI_STATUS_STUB):
+        preview = f" (AI estimate {ai_band:.1f})" if ai_band is not None else ""
+        message = (
+            f"AI feedback is ready{preview}. A certified examiner is still reviewing "
+            "your essay — you will receive your official band within 24 hours."
+        )
+    elif ai_status == AI_STATUS_FAILED:
+        message = (
+            "AI analysis is unavailable right now. A certified examiner will review "
+            "your essay manually and confirm your band within 24 hours."
+        )
     else:
         message = (
             "Your Writing score is coming soon. A certified examiner is reviewing "
@@ -690,6 +842,9 @@ def get_pending_status(
         status=str(attempt.get("status") or "completed"),
         review_status=review_status,
         human_band=band_val,
+        ai_status=ai_status,
+        ai_band=ai_band,
+        ai_available=ai_available,
         submitted_at=submitted_at,
         message=message,
         session_tasks=_session_tasks(attempt, user_id=user_id),

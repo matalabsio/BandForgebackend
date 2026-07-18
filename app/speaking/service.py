@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 
 from app.config import get_settings
 from app.schemas.test_engine import TestSummary
@@ -14,16 +14,62 @@ from app.services.mock_progress_timing import MockProgressTiming
 from app.speaking import repository as repo
 from app.speaking.constants import SPEAKING_DURATION_MINUTES, SPEAKING_PART1_RECORD_SECONDS
 from app.speaking.schemas import (
+    SpeakingFluencyMetrics,
+    SpeakingHumanCriteria,
+    SpeakingPauseMarker,
     SpeakingPendingResponse,
     SpeakingQuestionPublic,
+    SpeakingReportResponse,
     StartSpeakingResponse,
     SubmitSpeakingResponse,
 )
-from app.storage.r2 import upload_object
+from app.speaking.fluency_metrics import long_pause_markers
+from app.storage.r2 import generate_signed_url, upload_object
+from app.speaking.ai_evaluator import run_speaking_evaluation
 
 
 def _is_dev() -> bool:
     return get_settings().app_env.strip().lower() == "development"
+
+
+def _audio_extension_for_upload(
+    content_type: str | None,
+    filename: str | None = None,
+) -> str:
+    """Derive a safe R2 key extension from MIME type or uploaded filename."""
+    raw = (content_type or "").lower().split(";", 1)[0].strip()
+    if "mp4" in raw or raw in {"audio/m4a", "audio/x-m4a"}:
+        return "mp4"
+    if "ogg" in raw:
+        return "ogg"
+    if "mpeg" in raw or raw == "audio/mp3":
+        return "mp3"
+    if "wav" in raw:
+        return "wav"
+    if "webm" in raw:
+        return "webm"
+
+    name = (filename or "").lower().rsplit(".", 1)
+    if len(name) == 2:
+        ext = name[1]
+        if ext in {"webm", "mp4", "m4a", "ogg", "mp3", "wav"}:
+            return "mp4" if ext == "m4a" else ext
+
+    return "webm"
+
+
+def _round_half(value: float) -> float:
+    return round(value * 2) / 2
+
+
+def _duration_band_estimate(
+    *, duration_sec: int | None, hint_sec: int | None
+) -> float | None:
+    if not duration_sec or duration_sec <= 0:
+        return None
+    target = hint_sec or 60
+    ratio = min(1.0, duration_sec / target)
+    return _round_half(5.0 + ratio * 1.5)
 
 
 def _ensure_owner(attempt: dict[str, Any], user_id: UUID) -> None:
@@ -132,6 +178,8 @@ def submit_attempt(
     content_type: str | None,
     student_name: str | None = None,
     duration_sec: int | None = None,
+    filename: str | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> SubmitSpeakingResponse:
     if len(audio_bytes) < 1000:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Recording is too short.")
@@ -153,7 +201,8 @@ def submit_attempt(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Speaking question missing.")
     question = _row_to_question(rows[0])
 
-    audio_key = f"speaking/{attempt_id}/part-{part}/recording.webm"
+    ext = _audio_extension_for_upload(content_type, filename)
+    audio_key = f"speaking/{attempt_id}/part-{part}/recording.{ext}"
     upload_object(
         key=audio_key,
         body=audio_bytes,
@@ -167,12 +216,31 @@ def submit_attempt(
         "cue_card": question.prompt,
         "duration_sec": duration_sec,
     }
+    duration_estimate = _duration_band_estimate(
+        duration_sec=duration_sec,
+        hint_sec=question.duration_hint_sec,
+    )
+    submit_ai_scores: dict[str, Any] = {
+        "status": "pending",
+        "duration_sec": duration_sec,
+    }
+    if duration_estimate is not None:
+        submit_ai_scores["ai_band"] = duration_estimate
+        submit_ai_scores["duration_estimate"] = duration_estimate
+
     review = repo.insert_speaking_review(
         attempt_id=attempt_id,
         audio_key=audio_key,
         submission_meta=submission_meta,
         student_name=student_name,
+        ai_scores=submit_ai_scores,
     )
+
+    review_id = UUID(str(review["id"]))
+    if background_tasks is not None:
+        background_tasks.add_task(run_speaking_evaluation, review_id)
+    else:
+        run_speaking_evaluation(review_id)
 
     now = datetime.now(UTC)
     completed = repo.mark_attempt_completed(
@@ -229,8 +297,20 @@ def get_pending_status(
     human_band = review.get("human_band")
     band_val = float(human_band) if human_band is not None else None
 
+    ai_scores = review.get("ai_scores") or {}
+    ai_status = (
+        str(ai_scores.get("status"))
+        if isinstance(ai_scores, dict) and ai_scores.get("status")
+        else None
+    )
+
     if review_status == "completed" and band_val is not None:
         message = f"Your Speaking band is {band_val:.1f}."
+    elif ai_status == "pending":
+        message = (
+            "Your recording is being processed. A certified examiner will review "
+            "your speaking and confirm your band within 24 hours."
+        )
     else:
         message = (
             "Your Speaking score is coming soon. A certified examiner is reviewing "
@@ -251,7 +331,170 @@ def get_pending_status(
         status=str(attempt.get("status") or "completed"),
         review_status=review_status,
         human_band=band_val,
+        ai_status=ai_status,
         submitted_at=submitted_at,
         student_name=student_name,
         message=message,
+    )
+
+
+def _parse_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_human_criteria(raw: Any) -> SpeakingHumanCriteria | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SpeakingHumanCriteria(
+            fluency=float(raw["fluency"]),
+            lexical=float(raw["lexical"]),
+            grammar=float(raw["grammar"]),
+            pronunciation=float(raw["pronunciation"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_fluency_metrics(raw: Any) -> SpeakingFluencyMetrics | None:
+    if not isinstance(raw, dict):
+        return None
+    return SpeakingFluencyMetrics(
+        words_per_minute=_parse_optional_float(raw.get("words_per_minute")),
+        total_speaking_seconds=_parse_optional_float(raw.get("total_speaking_seconds")),
+        long_pauses=_parse_optional_int(raw.get("long_pauses")),
+        response_count=_parse_optional_int(raw.get("response_count")),
+        questions_asked=_parse_optional_int(raw.get("questions_asked")),
+    )
+
+
+def _parse_pause_markers(ai_scores: dict[str, Any]) -> list[SpeakingPauseMarker]:
+    words = ai_scores.get("words")
+    if not isinstance(words, list):
+        return []
+    markers = long_pause_markers(words)
+    out: list[SpeakingPauseMarker] = []
+    for item in markers:
+        try:
+            out.append(
+                SpeakingPauseMarker(
+                    after_word=str(item["after_word"]),
+                    gap_sec=float(item["gap_sec"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def get_speaking_report(
+    *,
+    attempt_id: UUID,
+    user_id: UUID,
+    student_name: str | None = None,
+) -> SpeakingReportResponse:
+    """Return rich speaking report only after human band release."""
+    attempt = repo.get_attempt(attempt_id)
+    _ensure_owner(attempt, user_id)
+    if attempt.get("module") != "speaking":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a speaking attempt.")
+
+    review = repo.get_speaking_review_for_attempt(attempt_id)
+    if not review:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No speaking submission found.")
+
+    human_band = review.get("human_band")
+    if human_band is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Speaking report is not ready — waiting for human review.",
+        )
+
+    overall = float(human_band)
+    ai_scores = review.get("ai_scores") if isinstance(review.get("ai_scores"), dict) else {}
+    evaluation = ai_scores.get("evaluation")
+    if evaluation is not None and not isinstance(evaluation, dict):
+        evaluation = None
+
+    audio_play_url: str | None = None
+    audio_key = review.get("audio_url")
+    if audio_key:
+        try:
+            audio_play_url = generate_signed_url(str(audio_key))
+        except Exception:
+            audio_play_url = None
+
+    meta = review.get("submission_meta") if isinstance(review.get("submission_meta"), dict) else {}
+    try:
+        part = int(meta.get("part") or attempt.get("part") or 1)
+    except (TypeError, ValueError):
+        part = 1
+
+    completed_raw = attempt.get("completed_at")
+    submitted_at = None
+    if completed_raw:
+        submitted_at = (
+            datetime.fromisoformat(str(completed_raw).replace("Z", "+00:00"))
+            if isinstance(completed_raw, str)
+            else completed_raw
+        )
+
+    notes = review.get("reviewer_notes")
+    return SpeakingReportResponse(
+        attempt_id=attempt_id,
+        status=str(attempt.get("status") or "completed"),
+        review_status=str(review.get("status") or "completed"),
+        overall_band=overall,
+        human_verified=True,
+        human_criteria_scores=_parse_human_criteria(review.get("human_criteria_scores")),
+        ai_band=_parse_optional_float(ai_scores.get("ai_band")),
+        fluency=_parse_optional_float(ai_scores.get("fluency")),
+        lexical=_parse_optional_float(ai_scores.get("lexical")),
+        grammar=_parse_optional_float(ai_scores.get("grammar")),
+        pronunciation=_parse_optional_float(ai_scores.get("pronunciation")),
+        evaluation=evaluation,
+        fluency_metrics=_parse_fluency_metrics(ai_scores.get("fluency_metrics")),
+        pause_markers=_parse_pause_markers(ai_scores),
+        transcript=(str(review["transcript"]) if review.get("transcript") else None),
+        audio_play_url=audio_play_url,
+        ai_status=(
+            str(ai_scores.get("status")) if ai_scores.get("status") else None
+        ),
+        prompt_version=(
+            str(ai_scores.get("prompt_version"))
+            if ai_scores.get("prompt_version")
+            else None
+        ),
+        provider_asr=(
+            str(ai_scores.get("provider_asr")) if ai_scores.get("provider_asr") else None
+        ),
+        provider_eval=(
+            str(ai_scores.get("provider_eval"))
+            if ai_scores.get("provider_eval")
+            else None
+        ),
+        model_asr=(
+            str(ai_scores.get("model_asr")) if ai_scores.get("model_asr") else None
+        ),
+        model_eval=(
+            str(ai_scores.get("model_eval")) if ai_scores.get("model_eval") else None
+        ),
+        submitted_at=submitted_at,
+        student_name=student_name,
+        reviewer_notes=str(notes) if notes else None,
+        part=part,
     )

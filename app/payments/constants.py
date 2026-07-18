@@ -18,6 +18,9 @@ EVENT_PAYMENT_CAPTURED = "payment.captured"
 EVENT_PAYMENT_FAILED = "payment.failed"
 EVENT_REFUND_CREATED = "refund.created"
 
+# Ops recovery (payment_events.event_type)
+EVENT_BACKFILL = "bandforge.backfill"
+
 # payment_events.processing_status
 EVENT_PENDING = "pending"
 EVENT_PROCESSED = "processed"

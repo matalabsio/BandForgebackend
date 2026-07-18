@@ -48,6 +48,7 @@ async def submit_diagnostic_review(
         "email": body.email.strip().lower() if body.email else None,
         "goal_label": body.goal_label,
         "target_band": body.target_band,
+        "exam_date": body.exam_date,
         "listening_band": body.listening_band,
         "reading_band": body.reading_band,
         "writing_band": writing_band,

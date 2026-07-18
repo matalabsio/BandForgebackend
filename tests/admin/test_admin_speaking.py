@@ -208,6 +208,32 @@ def test_patch_request_accepts_draft_status():
     assert body.status == "in_review"
 
 
+def test_ai_scores_to_criteria_from_phase_c_payload():
+    payload = {
+        "fluency": 6.5,
+        "lexical": 6.0,
+        "grammar": 5.5,
+        "pronunciation": 6.5,
+        "status": "ai_complete",
+        "evaluation": {
+            "band_scores": {
+                "FC": 6.5,
+                "LR": 6.0,
+                "GRA": 5.5,
+                "P": 6.5,
+                "overall": 6.0,
+            }
+        },
+    }
+    criteria = ai_scores_to_criteria(payload)
+    assert criteria == {
+        "fluency": 6.5,
+        "lexical": 6.0,
+        "grammar": 5.5,
+        "pronunciation": 6.5,
+    }
+
+
 def test_speaking_review_detail_schema_includes_evaluator_fields():
     now = datetime.now(UTC)
     detail = SpeakingReviewDetail(

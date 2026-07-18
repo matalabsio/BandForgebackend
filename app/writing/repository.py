@@ -199,6 +199,21 @@ def get_writing_review_for_attempt(attempt_id: UUID) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def get_writing_review_by_id(review_id: UUID) -> dict[str, Any] | None:
+    client = get_supabase()
+    result = _exec(
+        client.table("writing_reviews")
+        .select(
+            "id, attempt_id, status, human_band, ai_scores, submission_meta, "
+            "created_at, reviewer_notes"
+        )
+        .eq("id", str(review_id))
+        .limit(1)
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
 def insert_writing_review(
     *,
     attempt_id: UUID,

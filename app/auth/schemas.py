@@ -97,16 +97,17 @@ class UpdateProfileRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=120)
     phone: str | None = None
     target_band: float | None = Field(default=None, ge=4.0, le=9.0)
+    exam_date: str | None = Field(default=None, max_length=10)
 
     @field_validator("phone")
     @classmethod
     def validate_phone_optional(cls, v: str | None) -> str | None:
-        if v is None or v.strip() == "":
+        # Format / uniqueness are handled in the service as per-field warnings
+        # so they never block full_name / target_band / exam_date.
+        if v is None:
             return None
-        digits = normalize_india_phone(v)
-        if not is_valid_india_phone(digits):
-            raise ValueError("Enter a valid 10-digit Indian mobile number.")
-        return digits
+        trimmed = v.strip()
+        return trimmed or None
 
     @field_validator("target_band")
     @classmethod
@@ -114,6 +115,11 @@ class UpdateProfileRequest(BaseModel):
         if v is None:
             return None
         return round(v * 2) / 2
+
+
+class UpdateProfileResponse(BaseModel):
+    user: UserPublic
+    warnings: dict[str, str] = Field(default_factory=dict)
 
 
 class AuthResponse(BaseModel):

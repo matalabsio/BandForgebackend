@@ -35,6 +35,8 @@ def ai_scores_to_criteria(ai_scores: dict[str, Any] | None) -> dict[str, float] 
     if not ai_scores:
         return None
     nested = ai_scores.get("criteria_scores")
+    if not isinstance(nested, dict):
+        nested = ai_scores.get("criteria")
     if isinstance(nested, dict):
         ai_scores = nested
     mapped = {

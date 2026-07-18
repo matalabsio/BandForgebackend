@@ -144,10 +144,26 @@ def get_speaking_review_for_attempt(attempt_id: UUID) -> dict[str, Any] | None:
     result = _exec(
         client.table("speaking_reviews")
         .select(
-            "id, status, human_band, ai_scores, submission_meta, created_at, reviewer_notes"
+            "id, status, human_band, human_criteria_scores, ai_scores, submission_meta, "
+            "created_at, reviewer_notes, transcript, audio_url, attempt_id"
         )
         .eq("attempt_id", str(attempt_id))
         .order("created_at", desc=True)
+        .limit(1)
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def get_speaking_review_by_id(review_id: UUID) -> dict[str, Any] | None:
+    client = get_supabase()
+    result = _exec(
+        client.table("speaking_reviews")
+        .select(
+            "id, status, human_band, human_criteria_scores, ai_scores, submission_meta, "
+            "created_at, reviewer_notes, transcript, audio_url, attempt_id"
+        )
+        .eq("id", str(review_id))
         .limit(1)
     )
     rows = result.data or []
@@ -165,27 +181,44 @@ def update_speaking_review_ai_scores(
     )
 
 
+def update_speaking_review_evaluation(
+    *,
+    review_id: UUID,
+    transcript: str | None,
+    ai_scores: dict[str, Any],
+) -> None:
+    client = get_supabase()
+    payload: dict[str, Any] = {"ai_scores": ai_scores}
+    if transcript is not None:
+        payload["transcript"] = transcript
+    _exec(
+        client.table("speaking_reviews")
+        .update(payload)
+        .eq("id", str(review_id))
+    )
+
+
 def insert_speaking_review(
     *,
     attempt_id: UUID,
     audio_key: str,
     submission_meta: dict[str, Any],
     student_name: str | None,
+    ai_scores: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     client = get_supabase()
     meta = {**submission_meta}
     if student_name:
         meta["student_display_name"] = student_name
-    insert = _exec(
-        client.table("speaking_reviews").insert(
-            {
-                "attempt_id": str(attempt_id),
-                "status": "pending",
-                "audio_url": audio_key,
-                "submission_meta": meta,
-            }
-        )
-    )
+    row: dict[str, Any] = {
+        "attempt_id": str(attempt_id),
+        "status": "pending",
+        "audio_url": audio_key,
+        "submission_meta": meta,
+    }
+    if ai_scores is not None:
+        row["ai_scores"] = ai_scores
+    insert = _exec(client.table("speaking_reviews").insert(row))
     if not insert.data:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,

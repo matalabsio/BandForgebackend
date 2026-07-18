@@ -39,6 +39,11 @@ def clear_credentials_probe() -> None:
     _env_mtime_at_probe = None
 
 
+def get_cached_credentials_probe() -> bool | None:
+    """Return cached probe result, or None if never probed this process."""
+    return _credentials_probe_ok
+
+
 def credentials_ready() -> bool:
     """True when Razorpay is configured and the credential probe did not fail."""
     settings = get_settings()
@@ -151,6 +156,38 @@ def create_order(payload: RazorpayOrderPayload) -> dict[str, Any]:
     except Exception as exc:
         _raise_on_auth_failure(exc)
         raise
+
+
+def list_recent_payments(
+    *,
+    from_ts: int,
+    to_ts: int | None = None,
+    page_size: int = 100,
+    max_items: int = 500,
+) -> list[dict[str, Any]]:
+    """List Razorpay payments in a Unix-second window (paginated)."""
+    client = _client()
+    items: list[dict[str, Any]] = []
+    skip = 0
+    while len(items) < max_items:
+        count = min(page_size, max_items - len(items))
+        params: dict[str, Any] = {"from": from_ts, "count": count, "skip": skip}
+        if to_ts is not None:
+            params["to"] = to_ts
+        try:
+            raw = client.payment.all(params)
+        except Exception as exc:
+            _raise_on_auth_failure(exc)
+            raise
+        batch = raw.get("items") if isinstance(raw, dict) else raw
+        batch_list = list(batch or [])
+        if not batch_list:
+            break
+        items.extend(batch_list)
+        if len(batch_list) < count:
+            break
+        skip += len(batch_list)
+    return items
 
 
 def verify_payment_signature(

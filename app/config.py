@@ -92,19 +92,115 @@ class Settings(BaseSettings):
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", validation_alias="OPENAI_MODEL")
+    openai_whisper_model: str = Field(
+        default="whisper-1",
+        validation_alias="OPENAI_WHISPER_MODEL",
+    )
+
+    anthropic_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY", "CLAUDE_API_KEY"),
+    )
+    anthropic_aws_api_key: str = Field(
+        default="",
+        validation_alias="ANTHROPIC_AWS_API_KEY",
+    )
+    anthropic_aws_workspace_id: str = Field(
+        default="",
+        validation_alias="ANTHROPIC_AWS_WORKSPACE_ID",
+    )
+    aws_region: str = Field(
+        default="eu-north-1",
+        validation_alias=AliasChoices("AWS_REGION", "AWS_DEFAULT_REGION"),
+    )
+    anthropic_provider: str = Field(
+        default="auto",
+        validation_alias="ANTHROPIC_PROVIDER",
+        description="auto | direct | aws — auto prefers Claude Platform on AWS when ANTHROPIC_AWS_API_KEY is set.",
+    )
+    anthropic_model: str = Field(
+        default="claude-sonnet-4-6",
+        validation_alias="ANTHROPIC_MODEL",
+    )
+
+    speaking_eval_stub: bool = Field(
+        default=False,
+        validation_alias="SPEAKING_EVAL_STUB",
+    )
+    writing_eval_stub: bool = Field(
+        default=False,
+        validation_alias="WRITING_EVAL_STUB",
+    )
+    speaking_eval_timeout_sec: int = Field(
+        default=120,
+        validation_alias="SPEAKING_EVAL_TIMEOUT_SEC",
+    )
+    writing_eval_timeout_sec: int = Field(
+        default=120,
+        validation_alias="WRITING_EVAL_TIMEOUT_SEC",
+    )
+    asr_provider: str = Field(
+        default="openai",
+        validation_alias="ASR_PROVIDER",
+    )
+    llm_provider: str = Field(
+        default="claude",
+        validation_alias="LLM_PROVIDER",
+    )
+    writing_llm_primary: str = Field(
+        default="claude",
+        validation_alias="WRITING_LLM_PRIMARY",
+    )
+    writing_llm_fallback: str = Field(
+        default="groq",
+        validation_alias="WRITING_LLM_FALLBACK",
+    )
+
+    # Phase 3 — AI ops (budget, circuit, cost estimate)
+    claude_daily_limit: int = Field(default=200, validation_alias="CLAUDE_DAILY_LIMIT")
+    claude_monthly_limit: int = Field(
+        default=2000, validation_alias="CLAUDE_MONTHLY_LIMIT"
+    )
+    claude_warning_at: int = Field(
+        default=0,
+        validation_alias="CLAUDE_WARNING_AT",
+        description="Warn when daily Claude evals reach this count (0 = 80% of daily limit).",
+    )
+    ai_circuit_fail_threshold: int = Field(
+        default=5, validation_alias="AI_CIRCUIT_FAIL_THRESHOLD"
+    )
+    ai_circuit_cooldown_sec: int = Field(
+        default=300, validation_alias="AI_CIRCUIT_COOLDOWN_SEC"
+    )
+    ai_budget_fallback_stub: bool = Field(
+        default=True, validation_alias="AI_BUDGET_FALLBACK_STUB"
+    )
+    ai_input_usd_per_mtok: float = Field(
+        default=3.0, validation_alias="AI_INPUT_USD_PER_MTOK"
+    )
+    ai_output_usd_per_mtok: float = Field(
+        default=15.0, validation_alias="AI_OUTPUT_USD_PER_MTOK"
+    )
 
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     groq_model: str = Field(
         default="llama-3.3-70b-versatile",
         validation_alias="GROQ_MODEL",
     )
+    groq_whisper_model: str = Field(
+        default="whisper-large-v3-turbo",
+        validation_alias="GROQ_WHISPER_MODEL",
+    )
     groq_api_base: str = Field(
         default="https://api.groq.com/openai/v1",
         validation_alias="GROQ_API_BASE",
     )
-    diagnostic_writing_prompt_version: str = Field(
-        default="v1",
-        validation_alias="DIAGNOSTIC_WRITING_PROMPT_VERSION",
+    writing_prompt_version: str = Field(
+        default="v5",
+        validation_alias=AliasChoices(
+            "WRITING_PROMPT_VERSION",
+            "DIAGNOSTIC_WRITING_PROMPT_VERSION",
+        ),
     )
 
     razorpay_key_id: str = Field(default="", validation_alias="RAZORPAY_KEY_ID")
@@ -155,6 +251,9 @@ class Settings(BaseSettings):
         "phone_otp_enabled",
         "auth_skip_email_verify",
         "razorpay_enabled",
+        "speaking_eval_stub",
+        "writing_eval_stub",
+        "ai_budget_fallback_stub",
         mode="before",
     )
     @classmethod
@@ -167,6 +266,10 @@ class Settings(BaseSettings):
         "google_redirect_uri",
         "resend_api_key",
         "openai_api_key",
+        "anthropic_api_key",
+        "anthropic_aws_api_key",
+        "anthropic_aws_workspace_id",
+        "aws_region",
         "groq_api_key",
         "razorpay_key_id",
         "razorpay_key_secret",
