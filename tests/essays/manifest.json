@@ -1,0 +1,265 @@
+{
+  "essays": [
+    {
+      "file": "task1_chart.txt",
+      "label": "task1_chart",
+      "task_part": 1,
+      "question": "The bar chart below shows the proportion of workers who used four different modes of transport to travel to work in Tokyo, Berlin, São Paulo, and Toronto in 2022. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 5.0,
+      "expected_criteria": {
+        "task_achievement": 5.0,
+        "coherence": 5.0,
+        "lexical_resource": 5.0,
+        "grammar": 4.5
+      }
+    },
+    {
+      "file": "task1_process.txt",
+      "label": "task1_process",
+      "task_part": 1,
+      "question": "The diagram below shows how coffee is produced and prepared for sale. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 6.0,
+      "tolerance": 0.5,
+      "expected_criteria": {
+        "task_achievement": 6.0,
+        "coherence": 6.0,
+        "lexical_resource": 6.0,
+        "grammar": 6.0
+      }
+    },
+    {
+      "file": "task1_band5.txt",
+      "label": "task1_band5",
+      "task_part": 1,
+      "question": "The pie charts below show energy production from five sources in a country in 2010 and 2020. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 5.0,
+      "expected_criteria": {
+        "task_achievement": 5.0,
+        "coherence": 5.0,
+        "lexical_resource": 5.0,
+        "grammar": 5.0
+      }
+    },
+    {
+      "file": "task1_band6_5.txt",
+      "label": "task1_band6_5",
+      "task_part": 1,
+      "question": "The pie charts below show energy production from five sources in a country in 2010 and 2020. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 6.5,
+      "expected_criteria": {
+        "task_achievement": 6.5,
+        "coherence": 6.5,
+        "lexical_resource": 6.5,
+        "grammar": 6.5
+      }
+    },
+    {
+      "file": "task1_map.txt",
+      "label": "task1_map",
+      "task_part": 1,
+      "question": "The maps below show a coastal town in 1990 and in 2020. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 6.5,
+      "expected_criteria": {
+        "task_achievement": 6.5,
+        "coherence": 6.5,
+        "lexical_resource": 6.5,
+        "grammar": 6.5
+      }
+    },
+    {
+      "file": "task1_table.txt",
+      "label": "task1_table",
+      "task_part": 1,
+      "question": "The table below shows average monthly household spending on food, housing, and transport in four countries in 2023. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 6.0,
+      "expected_criteria": {
+        "task_achievement": 6.0,
+        "coherence": 6.0,
+        "lexical_resource": 6.0,
+        "grammar": 6.0
+      }
+    },
+    {
+      "file": "task1_line.txt",
+      "label": "task1_line",
+      "task_part": 1,
+      "question": "The line graph below shows average daily temperatures in two cities over a year. Summarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+      "expected_overall": 6.0,
+      "expected_criteria": {
+        "task_achievement": 6.0,
+        "coherence": 6.0,
+        "lexical_resource": 6.0,
+        "grammar": 6.0
+      }
+    },
+    {
+      "file": "task2_band4_5.txt",
+      "label": "task2_band4_5",
+      "task_part": 2,
+      "question": "Some people prefer to live in a city, while others prefer to live in the countryside. Discuss both views and give your own opinion.",
+      "expected_overall": 4.5,
+      "expected_criteria": {
+        "task_achievement": 4.5,
+        "coherence": 4.5,
+        "lexical_resource": 4.5,
+        "grammar": 4.5
+      }
+    },
+    {
+      "file": "task2_band5.txt",
+      "label": "task2_band5",
+      "task_part": 2,
+      "question": "Some people believe that technology has made our lives more complicated. Others think it has made life easier. Discuss both views and give your own opinion.",
+      "expected_overall": 5.0,
+      "expected_criteria": {
+        "task_achievement": 5.0,
+        "coherence": 5.0,
+        "lexical_resource": 5.0,
+        "grammar": 4.5
+      }
+    },
+    {
+      "file": "task2_band5_5.txt",
+      "label": "task2_band5_5",
+      "task_part": 2,
+      "question": "Some people think governments should invest more in public transport, while others believe roads for private cars are more important. Discuss both views and give your own opinion.",
+      "expected_overall": 5.5,
+      "expected_criteria": {
+        "task_achievement": 5.5,
+        "coherence": 5.5,
+        "lexical_resource": 5.5,
+        "grammar": 5.5
+      }
+    },
+    {
+      "file": "task2_band5_crime.txt",
+      "label": "task2_band5_crime",
+      "task_part": 2,
+      "question": "Some people believe that longer prison sentences are the best way to reduce crime. Others think education and job opportunities are more effective. Discuss both views and give your own opinion.",
+      "expected_overall": 5.0,
+      "expected_criteria": {
+        "task_achievement": 5.0,
+        "coherence": 5.0,
+        "lexical_resource": 5.0,
+        "grammar": 5.0
+      }
+    },
+    {
+      "file": "task2_band6.txt",
+      "label": "task2_band6",
+      "task_part": 2,
+      "question": "Some people believe that technology has made our lives more complicated. Others think it has made life easier. Discuss both views and give your own opinion.",
+      "expected_overall": 6.0,
+      "expected_criteria": {
+        "task_achievement": 6.0,
+        "coherence": 6.0,
+        "lexical_resource": 6.0,
+        "grammar": 6.0
+      }
+    },
+    {
+      "file": "task2_band6_5.txt",
+      "label": "task2_band6_5",
+      "task_part": 2,
+      "question": "Some people prefer to live in a city, while others prefer to live in the countryside. Discuss both views and give your own opinion.",
+      "expected_overall": 6.5,
+      "expected_criteria": {
+        "task_achievement": 6.5,
+        "coherence": 6.5,
+        "lexical_resource": 6.5,
+        "grammar": 6.5
+      }
+    },
+    {
+      "file": "task2_band6_edu.txt",
+      "label": "task2_band6_edu",
+      "task_part": 2,
+      "question": "Online education is becoming increasingly popular. Some people think traditional classroom learning will eventually disappear. To what extent do you agree or disagree?",
+      "expected_overall": 6.0,
+      "expected_criteria": {
+        "task_achievement": 6.0,
+        "coherence": 6.0,
+        "lexical_resource": 6.0,
+        "grammar": 6.0
+      }
+    },
+    {
+      "file": "task2_band6_health.txt",
+      "label": "task2_band6_health",
+      "task_part": 2,
+      "question": "Some people think governments should tax junk food to reduce obesity. Others say this unfairly affects poorer families. Discuss both views and give your own opinion.",
+      "expected_overall": 6.0,
+      "expected_criteria": {
+        "task_achievement": 6.0,
+        "coherence": 6.0,
+        "lexical_resource": 6.0,
+        "grammar": 6.0
+      }
+    },
+    {
+      "file": "task2_band6_env.txt",
+      "label": "task2_band6_env",
+      "task_part": 2,
+      "question": "Some people believe individuals should take responsibility for environmental problems. Others think only governments and large companies can make a real difference. Discuss both views and give your own opinion.",
+      "expected_overall": 6.5,
+      "expected_criteria": {
+        "task_achievement": 6.5,
+        "coherence": 6.5,
+        "lexical_resource": 6.5,
+        "grammar": 6.5
+      }
+    },
+    {
+      "file": "task2_band7.txt",
+      "label": "task2_band7",
+      "task_part": 2,
+      "question": "Some people believe that technology has made our lives more complicated. Others think it has made life easier. Discuss both views and give your own opinion.",
+      "expected_overall": 7.0,
+      "expected_criteria": {
+        "task_achievement": 7.0,
+        "coherence": 7.0,
+        "lexical_resource": 7.0,
+        "grammar": 7.0
+      }
+    },
+    {
+      "file": "task2_band7_5.txt",
+      "label": "task2_band7_5",
+      "task_part": 2,
+      "question": "Some people prefer to live in a city, while others prefer to live in the countryside. Discuss both views and give your own opinion.",
+      "expected_overall": 7.5,
+      "expected_criteria": {
+        "task_achievement": 7.5,
+        "coherence": 7.5,
+        "lexical_resource": 7.5,
+        "grammar": 7.5
+      }
+    },
+    {
+      "file": "task2_band7_work.txt",
+      "label": "task2_band7_work",
+      "task_part": 2,
+      "question": "Some people believe remote work should become the default for most office jobs. To what extent do you agree or disagree?",
+      "expected_overall": 7.0,
+      "expected_criteria": {
+        "task_achievement": 7.0,
+        "coherence": 7.0,
+        "lexical_resource": 7.0,
+        "grammar": 7.0
+      }
+    },
+    {
+      "file": "task2_band8.txt",
+      "label": "task2_band8",
+      "task_part": 2,
+      "question": "Some people believe university education should be free for everyone. Others think students should pay tuition fees. Discuss both views and give your own opinion.",
+      "expected_overall": 8.0,
+      "expected_criteria": {
+        "task_achievement": 8.0,
+        "coherence": 8.0,
+        "lexical_resource": 8.0,
+        "grammar": 8.0
+      }
+    }
+  ]
+}

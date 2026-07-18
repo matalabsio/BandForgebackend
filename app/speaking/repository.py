@@ -144,8 +144,8 @@ def get_speaking_review_for_attempt(attempt_id: UUID) -> dict[str, Any] | None:
     result = _exec(
         client.table("speaking_reviews")
         .select(
-            "id, status, human_band, ai_scores, submission_meta, created_at, "
-            "reviewer_notes, transcript, audio_url, attempt_id"
+            "id, status, human_band, human_criteria_scores, ai_scores, submission_meta, "
+            "created_at, reviewer_notes, transcript, audio_url, attempt_id"
         )
         .eq("attempt_id", str(attempt_id))
         .order("created_at", desc=True)
@@ -160,8 +160,8 @@ def get_speaking_review_by_id(review_id: UUID) -> dict[str, Any] | None:
     result = _exec(
         client.table("speaking_reviews")
         .select(
-            "id, status, human_band, ai_scores, submission_meta, created_at, "
-            "reviewer_notes, transcript, audio_url, attempt_id"
+            "id, status, human_band, human_criteria_scores, ai_scores, submission_meta, "
+            "created_at, reviewer_notes, transcript, audio_url, attempt_id"
         )
         .eq("id", str(review_id))
         .limit(1)

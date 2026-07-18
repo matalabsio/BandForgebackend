@@ -21,11 +21,19 @@ from app.auth.schemas import (
     MessageResponse,
     SessionUser,
     UpdateProfileRequest,
+    UpdateProfileResponse,
     UserPublic,
 )
 from app.storage.r2 import delete_object, upload_object
 from app.auth.security import hash_password, verify_password
-from app.auth.utils import generate_opaque_token, hash_token, phone_e164, utcnow
+from app.auth.utils import (
+    generate_opaque_token,
+    hash_token,
+    is_valid_india_phone,
+    normalize_india_phone,
+    phone_e164,
+    utcnow,
+)
 from app.config import get_settings
 from app.db.supabase_client import get_supabase
 
@@ -631,34 +639,50 @@ async def update_user_profile(
     *,
     user_id: UUID,
     body: UpdateProfileRequest,
-) -> UserPublic:
+) -> UpdateProfileResponse:
     sb = get_supabase()
-    e164: str | None = None
-    if body.phone:
-        e164 = phone_e164(body.phone)
-        clash = (
-            sb.table("users")
-            .select("id")
-            .eq("phone", e164)
-            .neq("id", str(user_id))
-            .limit(1)
-            .execute()
-        )
-        if clash.data:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "This phone number is already linked to another account.",
-            )
-
+    warnings: dict[str, str] = {}
     payload: dict[str, Any] = {
         "full_name": body.full_name.strip(),
         "target_band": body.target_band,
-        "phone": e164,
         "updated_at": utcnow().isoformat(),
     }
+    if body.exam_date is not None:
+        payload["exam_date"] = body.exam_date.strip() or None
+
+    raw_phone = (body.phone or "").strip()
+    if not raw_phone:
+        payload["phone"] = None  # preserve current clear-on-empty behavior
+    else:
+        digits = normalize_india_phone(raw_phone)
+        if not is_valid_india_phone(digits):
+            warnings["phone"] = "Enter a valid 10-digit Indian mobile number."
+        else:
+            e164 = phone_e164(digits)
+            clash = (
+                sb.table("users")
+                .select("id")
+                .eq("phone", e164)
+                .neq("id", str(user_id))
+                .limit(1)
+                .execute()
+            )
+            if clash.data:
+                warnings["phone"] = (
+                    "This phone number is already linked to another account."
+                )
+                logger.info(
+                    "PROFILE_PHONE_CONFLICT user_id=%s phone=%s",
+                    user_id,
+                    e164,
+                )
+            else:
+                payload["phone"] = e164
+    # on a warning, phone key is omitted -> existing value untouched
 
     sb.table("users").update(payload).eq("id", str(user_id)).execute()
-    return await get_user_by_id(user_id)
+    user = await get_user_by_id(user_id)
+    return UpdateProfileResponse(user=user, warnings=warnings)
 
 
 async def upload_user_avatar(

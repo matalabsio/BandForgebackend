@@ -71,20 +71,43 @@ def _count_pending(sb: Any) -> int:
     return int(mock_pending) + int(diag_pending)
 
 
+def _ai_status_label(ai_scores: dict[str, Any] | None) -> str | None:
+    if not isinstance(ai_scores, dict) or not ai_scores.get("status"):
+        return None
+    return str(ai_scores["status"])
+
+
+def _ai_error_message(ai_scores: dict[str, Any] | None) -> str | None:
+    if not isinstance(ai_scores, dict) or not ai_scores.get("error"):
+        return None
+    return str(ai_scores["error"])
+
+
 def _ai_overall_band(ai_scores: dict[str, Any] | None) -> float | None:
+    if not ai_scores:
+        return None
+    status = ai_scores.get("status")
+    # Prefer persisted AI band once evaluation finished.
+    if status in ("ai_complete", "ai_stub") and ai_scores.get("ai_band") is not None:
+        try:
+            return float(ai_scores["ai_band"])
+        except (TypeError, ValueError):
+            pass
     criteria = ai_scores_to_criteria(ai_scores)
-    if not criteria:
-        estimate = (ai_scores or {}).get("word_count_estimate")
+    if criteria:
+        try:
+            return compute_overall_band(criteria)
+        except ValueError:
+            pass
+    # Only fall back to word-count estimate when AI has not completed yet.
+    if status not in ("ai_complete", "ai_stub"):
+        estimate = ai_scores.get("word_count_estimate")
         if estimate is not None:
             try:
                 return float(estimate)
             except (TypeError, ValueError):
                 return None
-        return None
-    try:
-        return compute_overall_band(criteria)
-    except ValueError:
-        return None
+    return None
 
 
 def _parse_submission_meta(raw: Any) -> WritingSubmissionMeta | None:
@@ -148,6 +171,9 @@ def _mock_queue_rows(
                     float(row["human_band"]) if row.get("human_band") is not None else None
                 ),
                 ai_overall_band=_ai_overall_band(row.get("ai_scores")),
+                ai_status=_ai_status_label(
+                    row.get("ai_scores") if isinstance(row.get("ai_scores"), dict) else None
+                ),
                 task_label=_mock_task_label(meta),
                 created_at=_parse_dt(row["created_at"]),
             )
@@ -259,6 +285,12 @@ def _mock_detail(sb: Any, review_id: UUID) -> WritingReviewDetail:
         reviewer_notes=row.get("reviewer_notes"),
         ai_scores=row.get("ai_scores"),
         ai_feedback=None,
+        ai_status=_ai_status_label(
+            row.get("ai_scores") if isinstance(row.get("ai_scores"), dict) else None
+        ),
+        ai_error=_ai_error_message(
+            row.get("ai_scores") if isinstance(row.get("ai_scores"), dict) else None
+        ),
         student_name=user.get("full_name"),
         student_email=user.get("email"),
         student_target_band=student_target,
@@ -311,6 +343,8 @@ def _diagnostic_detail(sb: Any, review_id: UUID) -> WritingReviewDetail:
         reviewer_notes=row.get("reviewer_notes"),
         ai_scores=ai_scores,
         ai_feedback=eval_row.get("feedback") if isinstance(eval_row.get("feedback"), dict) else None,
+        ai_status="ai_complete" if ai_scores else None,
+        ai_error=None,
         student_name=row.get("full_name"),
         student_email=row.get("email"),
         student_target_band=float(target_raw) if target_raw is not None else None,
@@ -386,7 +420,11 @@ def approve_writing_review(
     sb = get_supabase()
     table = "writing_reviews" if source == "mock" else "diagnostic_review_submissions"
     existing = (
-        sb.table(table).select("id, status").eq("id", str(review_id)).limit(1).execute()
+        sb.table(table)
+        .select("id, status, ai_scores")
+        .eq("id", str(review_id))
+        .limit(1)
+        .execute()
     ).data
     if not existing:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Review not found.")
@@ -399,6 +437,10 @@ def approve_writing_review(
 
     scores = body.human_criteria_scores.model_dump()
     human_band = compute_overall_band(scores)
+    raw_ai = existing[0].get("ai_scores")
+    ai_scores = raw_ai if isinstance(raw_ai, dict) else None
+    ai_criteria = ai_scores_to_criteria(ai_scores)
+    ai_band = compute_overall_band(ai_criteria) if ai_criteria else None
     now = datetime.now(UTC).isoformat()
     final_status = "completed" if source == "mock" else "reviewed"
 
@@ -455,6 +497,12 @@ def approve_writing_review(
 
                     user_id = PyUUID(str(attempt_row[0]["user_id"]))
                     delete_many([f"dashboard_summary:{user_id}"])
+                    try:
+                        from app.learning.service import schedule_profile_refresh
+
+                        schedule_profile_refresh(user_id)
+                    except Exception:
+                        pass
                     mock_attempt_raw = attempt_row[0].get("mock_attempt_id")
                     mock_test_raw = attempt_row[0].get("mock_test_id")
                     if mock_attempt_raw and mock_test_raw:
@@ -470,16 +518,70 @@ def approve_writing_review(
                             mock_test_id=mock_test_id,
                         )
 
+    from app.admin.review_comparison import approve_audit_metadata
+
     log_admin_action(
         admin_id=admin_id,
         action="writing.approve",
         resource_type="writing_review",
         resource_id=review_id,
-        metadata={
-            "source": source,
-            "human_band": human_band,
-            "human_criteria_scores": scores,
-        },
+        metadata=approve_audit_metadata(
+            human_band=human_band,
+            human_criteria=scores,
+            ai_band=ai_band,
+            ai_criteria=ai_criteria,
+            extra={"source": source},
+        ),
     )
 
+    return get_writing_detail(review_id=review_id, source=source)
+
+
+def retry_writing_ai_evaluation(
+    *,
+    review_id: UUID,
+    source: Literal["mock", "diagnostic"],
+    admin_id: UUID,
+) -> WritingReviewDetail:
+    """Re-enqueue mock writing AI eval for pending/failed rows."""
+    if source != "mock":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="AI retry is only available for mock writing reviews.",
+        )
+    sb = get_supabase()
+    existing = (
+        sb.table("writing_reviews")
+        .select("id, ai_scores")
+        .eq("id", str(review_id))
+        .limit(1)
+        .execute()
+    ).data
+    if not existing:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Review not found.")
+
+    raw_ai = existing[0].get("ai_scores")
+    ai_scores = raw_ai if isinstance(raw_ai, dict) else {}
+    status_label = str(ai_scores.get("status") or "")
+    if status_label in ("ai_complete", "ai_stub"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="AI evaluation already completed for this review.",
+        )
+
+    from app.writing.ai_evaluator import AI_STATUS_PENDING, run_writing_evaluation
+
+    merged = {**ai_scores, "status": AI_STATUS_PENDING, "error": None}
+    sb.table("writing_reviews").update({"ai_scores": merged}).eq(
+        "id", str(review_id)
+    ).execute()
+    run_writing_evaluation(review_id)
+
+    log_admin_action(
+        admin_id=admin_id,
+        action="writing.ai_retry",
+        resource_type="writing_review",
+        resource_id=review_id,
+        metadata={"previous_status": status_label or None},
+    )
     return get_writing_detail(review_id=review_id, source=source)

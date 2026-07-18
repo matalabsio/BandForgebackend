@@ -1,0 +1,7 @@
+The table compares average monthly spend on food, housing, and transport in four countries in 2023. Overall, housing was the largest expense in every country, while transport was the smallest in most cases.
+
+In Country A, residents spent $1,200 on housing, $450 on food, and $220 on transport. Country B showed a similar pattern, with housing at $980, food at $510, and transport at $190. Country C had the highest housing cost at $1,450, but relatively low food spending of $380. Country D spent the least on housing ($720) yet had the highest transport costs at $310.
+
+Food spending was fairly close across the four countries, ranging from $380 to $510. By contrast, housing varied more widely, suggesting differences in property markets rather than daily living costs alone.
+
+Overall, the data highlight housing as the dominant household expense, with transport remaining a smaller share of monthly budgets.

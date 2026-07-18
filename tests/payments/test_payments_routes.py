@@ -94,17 +94,38 @@ def test_create_order_requires_auth(client: TestClient):
     assert res.status_code == 401
 
 
+def _persisted_payment(order_id: str) -> dict:
+    return {
+        "id": str(PAYMENT_ID),
+        "user_id": str(USER_ID),
+        "plan_id": str(PLAN_ID),
+        "status": "created",
+        "amount": 99900,
+        "currency": "INR",
+        "razorpay_order_id": order_id,
+    }
+
+
 def test_create_order_happy_path(authed_client: TestClient):
+    order_id = "order_route_test"
     with (
         patch("app.payments.service.get_settings", return_value=_fake_settings()),
         patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
         patch(
             "app.payments.service.razorpay_client.create_order",
-            return_value={"id": "order_route_test"},
+            return_value={"id": order_id},
         ),
         patch(
             "app.payments.service.repository.insert_payment",
             return_value={"id": str(PAYMENT_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.count_payments_by_order_id",
+            return_value=1,
+        ),
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_persisted_payment(order_id),
         ),
         patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
     ):
@@ -114,7 +135,7 @@ def test_create_order_happy_path(authed_client: TestClient):
         )
     assert res.status_code == 200
     body = res.json()
-    assert body["order_id"] == "order_route_test"
+    assert body["order_id"] == order_id
     assert body["key_id"] == "rzp_test_key"
     assert body["checkout_contact"]["contact"] == "+919876543210"
     assert body["amount"] == 99900
@@ -122,6 +143,7 @@ def test_create_order_happy_path(authed_client: TestClient):
 
 
 def test_create_order_includes_checkout_config_id_in_response(authed_client: TestClient):
+    order_id = "order_route_config"
     with (
         patch(
             "app.payments.service.get_settings",
@@ -130,11 +152,19 @@ def test_create_order_includes_checkout_config_id_in_response(authed_client: Tes
         patch("app.payments.service.repository.get_plan_by_slug", return_value=_plan()),
         patch(
             "app.payments.service.razorpay_client.create_order",
-            return_value={"id": "order_route_config"},
+            return_value={"id": order_id},
         ),
         patch(
             "app.payments.service.repository.insert_payment",
             return_value={"id": str(PAYMENT_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.count_payments_by_order_id",
+            return_value=1,
+        ),
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_persisted_payment(order_id),
         ),
         patch("app.payments.service.secrets.token_hex", return_value="a" * 32),
     ):

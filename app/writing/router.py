@@ -7,11 +7,12 @@ from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.diagnostic.access import assert_mock_access
+from app.skill_program_gate import assert_skill_program_module_start
 from app.writing import service
 from app.writing.schemas import (
     AutosaveRequest,
@@ -58,8 +59,16 @@ def start_writing(
         UUID | None,
         Query(description="Parent full-mock attempt for orchestration."),
     ] = None,
+    skill_context: Annotated[
+        str | None,
+        Query(description="Skill-program mock gate (listening|reading|writing|speaking)."),
+    ] = None,
 ) -> StartWritingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    assert_skill_program_module_start(
+        user_id=current_user.id,
+        skill_context=skill_context,
+    )
     started = perf_counter()
     timing = WritingStartTiming()
     try:
@@ -126,6 +135,7 @@ def submit_writing(
     attempt_id: UUID,
     body: SubmitWritingRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
 ) -> SubmitWritingResponse:
     started = perf_counter()
     timing = WritingSubmitTiming()
@@ -139,6 +149,7 @@ def submit_writing(
             user_id=current_user.id,
             answers=payload,
             timing=timing,
+            background_tasks=background_tasks,
         )
         _timing_log(
             "/api/writing/attempts/{attempt_id}/submit",

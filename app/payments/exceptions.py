@@ -36,11 +36,34 @@ class WebhookVerificationError(HTTPException):
         )
 
 
+class WebhookEventIdRequiredError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Webhook event id is required.",
+        )
+
+
+class WebhookTransientError(HTTPException):
+    """503 — ask Razorpay to retry; fulfillment may succeed on a later delivery."""
+
+    def __init__(self, detail: str = "Webhook fulfillment temporarily unavailable.") -> None:
+        super().__init__(status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+
+
 class PaymentAmountMismatchError(HTTPException):
     def __init__(self) -> None:
         super().__init__(
             status.HTTP_400_BAD_REQUEST,
             detail="Payment amount does not match the order.",
+        )
+
+
+class PaymentConsistencyError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment record could not be confirmed. Please try again.",
         )
 
 

@@ -116,3 +116,14 @@ class PaymentHistoryResponse(BaseModel):
 
 class WebhookResponse(BaseModel):
     ok: bool = True
+
+
+class OpsStatusResponse(BaseModel):
+    """Non-secret payments readiness flags for ops / dashboards."""
+
+    razorpay_enabled: bool
+    mode: str  # TEST | LIVE | UNKNOWN
+    key_id_prefix: str
+    webhook_secret_configured: bool
+    credentials_probe_ok: bool
+    app_env: str

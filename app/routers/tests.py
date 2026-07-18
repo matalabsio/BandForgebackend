@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.skill_program_gate import assert_skill_program_module_start
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.config import get_settings, settings_diagnostics
@@ -169,6 +170,11 @@ def start_test_attempt(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> StartAttemptResponse:
     """Create an in-progress test attempt for the given mock test and module."""
+    if body.skill_context:
+        assert_skill_program_module_start(
+            user_id=current_user.id,
+            skill_context=body.skill_context,
+        )
     return test_engine.start_attempt(
         mock_test_id,
         body.module,

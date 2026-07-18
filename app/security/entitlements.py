@@ -23,6 +23,28 @@ def has_active_subscription(user_id: UUID) -> bool:
     return repository.get_active_subscription(user_id) is not None
 
 
+def has_full_skill_program(user_id: UUID) -> bool:
+    sub = repository.get_active_subscription(user_id)
+    if not sub:
+        return False
+    plans = sub.get("plans")
+    if isinstance(plans, dict):
+        return plans.get("slug") == "full_skill_program"
+    return False
+
+
+async def require_full_skill_program(
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> UserPublic:
+    """Dependency that gates practice hub routes behind Full Skill Program."""
+    if not has_full_skill_program(current_user.id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Full Skill Program is required to access practice hubs.",
+        )
+    return current_user
+
+
 def get_subscription_status(user_id: UUID) -> SubscriptionOut:
     return get_subscription(user_id=user_id)
 
@@ -37,6 +59,13 @@ async def require_active_subscription(
             detail="An active subscription is required to access this resource.",
         )
     return current_user
+
+
+def assert_skill_mock_access(*, user_id: UUID, skill: str) -> None:
+    """Raise 403 if the skill full mock is not unlocked via hub progress."""
+    from app.practice.service import assert_skill_mock_access as _assert
+
+    _assert(user_id=user_id, skill=skill)
 
 
 def assert_premium_mock_access(*, user: UserPublic, mock_test_id: UUID) -> None:

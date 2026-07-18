@@ -7,18 +7,24 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
+from app.admin.dependencies import require_admin
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.payments import service, webhook
 from app.payments.schemas import (
     CreateOrderRequest,
     CreateOrderResponse,
+    OpsStatusResponse,
     PaymentHistoryResponse,
     PlansResponse,
     SubscriptionOut,
     VerifyPaymentRequest,
     VerifyPaymentResponse,
     WebhookResponse,
+)
+from app.security.rate_limit import (
+    enforce_create_order_rate_limit,
+    enforce_verify_rate_limit,
 )
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
@@ -34,6 +40,7 @@ def create_order(
     body: CreateOrderRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> CreateOrderResponse:
+    enforce_create_order_rate_limit(user_id=str(current_user.id))
     return service.create_order(user=current_user, plan_slug=body.plan_slug)
 
 
@@ -42,6 +49,7 @@ def verify_payment(
     body: VerifyPaymentRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> VerifyPaymentResponse:
+    enforce_verify_rate_limit(user_id=str(current_user.id))
     return service.verify_payment(user=current_user, body=body)
 
 
@@ -57,6 +65,13 @@ def payment_history(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> PaymentHistoryResponse:
     return service.get_payment_history(user_id=current_user.id)
+
+
+@router.get("/ops-status", response_model=OpsStatusResponse)
+def ops_status(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> OpsStatusResponse:
+    return service.get_ops_status()
 
 
 @router.post("/webhook", response_model=WebhookResponse)

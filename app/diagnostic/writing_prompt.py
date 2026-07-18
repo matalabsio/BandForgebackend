@@ -1,84 +1,97 @@
-"""Versioned IELTS writing examiner prompts for diagnostic evaluation."""
+"""Versioned IELTS writing examiner prompts for diagnostic evaluation.
+
+Prompts are loaded from versioned files under app/writing/prompts/ via PromptLoader.
+This module keeps the stable public API used by evaluation_call and tests.
+"""
 
 from __future__ import annotations
 
-PROMPT_VERSION = "v3"
+from functools import lru_cache
 
-CALIBRATION_BLOCK = """
-Be conservative when scoring.
-Do not award a score above 6.0 unless the response clearly satisfies Band 6 descriptors.
-Do not award a score above 7.0 unless the response demonstrates consistent Band 7 performance.
-Penalize under-length responses, lack of overview, and weak comparisons (Task 1)."""
-
-OVERALL_BAND_BLOCK = """
-overall_band should be approximately the average of:
-- task_achievement
-- coherence
-- lexical_resource
-- grammar
-Round to the nearest 0.5 band using standard IELTS conventions."""
-
-TASK1_RULES_BLOCK = """
-For Academic Task 1:
-- A clear overview is required for Band 6+
-- Meaningful comparisons are required for Band 6+
-- Listing isolated figures without synthesis should reduce Task Achievement
-- Missing overview should significantly reduce Task Achievement"""
-
-FEEDBACK_QUALITY_BLOCK = """
-Strengths, weaknesses, and improvement_tips must be distinct and non-overlapping.
-Do not repeat the same issue using different wording.
-Improvement tips must be concrete actions the student can take
-(e.g. "Add an overview paragraph summarizing the main trends",
-not vague advice like "Improve grammar")."""
-
-SYSTEM_PROMPT_V3 = f"""You are a certified IELTS Writing examiner with extensive experience scoring Academic IELTS Task 1 and Task 2 responses.
-
-Evaluate the student's response strictly according to official IELTS band descriptors.
-{CALIBRATION_BLOCK}
-{OVERALL_BAND_BLOCK}
-{TASK1_RULES_BLOCK}
-
-Score these four criteria on a 0–9 scale in 0.5 increments:
-1. Task Achievement (Task 1) or Task Response (Task 2)
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-
-Also provide an overall_band (0–9, 0.5 steps) that reflects the four criteria.
-
-Return valid JSON only with this exact structure:
-{{
-  "overall_band": 6.5,
-  "task_achievement": 6.0,
-  "coherence": 6.5,
-  "lexical_resource": 7.0,
-  "grammar": 6.0,
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "improvement_tips": ["..."]
-}}
-
-Each of strengths, weaknesses, and improvement_tips must be an array of 1–5 concise strings.
-{FEEDBACK_QUALITY_BLOCK}
-Even if the response is very short, off-topic, or under the word limit, you must still provide at least one item in each array with specific, helpful feedback.
-Do not include markdown, commentary, or text outside the JSON object."""
-
-# Alias for evaluator import
-SYSTEM_PROMPT = SYSTEM_PROMPT_V3
+from app.config import get_settings
+from app.writing.prompt_loader import (
+    DEFAULT_PROMPT_VERSION,
+    LoadedPrompt,
+    load_writing_prompt,
+)
 
 
-def build_user_prompt(*, task_part: int, question: str, essay: str) -> str:
+def resolve_prompt_version(override: str | None = None) -> str:
+    """Active writing prompt version (settings or explicit override)."""
+    if override and override.strip():
+        ver = override.strip()
+    else:
+        settings = get_settings()
+        ver = (settings.writing_prompt_version or DEFAULT_PROMPT_VERSION).strip()
+    # Legacy DIAGNOSTIC default was "v1" — treat as current default.
+    if ver in ("", "v1"):
+        return DEFAULT_PROMPT_VERSION
+    return ver
+
+
+@lru_cache(maxsize=8)
+def _cached_prompt(version: str) -> LoadedPrompt:
+    return load_writing_prompt(version)
+
+
+def get_loaded_prompt(version: str | None = None) -> LoadedPrompt:
+    return _cached_prompt(resolve_prompt_version(version))
+
+
+def get_system_prompt(version: str | None = None) -> str:
+    return get_loaded_prompt(version).system
+
+
+def get_task1_rules(version: str | None = None) -> str:
+    return get_loaded_prompt(version).task1_rules or ""
+
+
+# Backward-compatible module constants (default v5 at import).
+PROMPT_VERSION = DEFAULT_PROMPT_VERSION
+_loaded = load_writing_prompt(PROMPT_VERSION)
+SYSTEM_PROMPT_V4 = _loaded.system
+SYSTEM_PROMPT = SYSTEM_PROMPT_V4
+TASK1_RULES_BLOCK = _loaded.task1_rules or ""
+
+
+def build_user_prompt(
+    *,
+    task_part: int,
+    question: str,
+    essay: str,
+    visual_description: str | None = None,
+    word_count: int | None = None,
+    target_band: float | None = None,
+) -> str:
+    """Assemble the examiner user message (question + optional T1 visual + essay + meta)."""
     task_label = "Task 1 (Academic)" if task_part == 1 else "Task 2 (Academic)"
-    return f"""Evaluate this IELTS {task_label} response.
+    parts = [
+        f"Evaluate this IELTS {task_label} response.",
+        "",
+        "Question:",
+        question.strip(),
+    ]
 
-Question:
-{question.strip()}
+    visual = (visual_description or "").strip()
+    if task_part == 1 and visual:
+        parts.extend(["", "Visual / chart description:", visual])
 
-Student essay:
-{essay.strip()}
+    parts.extend(["", "Student essay:", essay.strip()])
 
-Return JSON only."""
+    meta_lines: list[str] = []
+    if word_count is not None and word_count >= 0:
+        meta_lines.append(f"Word count: {word_count}")
+    if target_band is not None and target_band > 0:
+        meta_lines.append(f"Target band: {target_band:g}")
+        meta_lines.append(
+            "Use Target band only to personalise next_band_advice "
+            "(e.g. aim language toward that band). Do not inflate criterion scores."
+        )
+    if meta_lines:
+        parts.extend(["", "Metadata:"] + meta_lines)
+
+    parts.extend(["", "Return JSON only."])
+    return "\n".join(parts)
 
 
 RETRY_SUFFIX = (

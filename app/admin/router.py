@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app.admin import (
+    ai_ops as admin_ai_ops,
     audit_routes,
     dashboard,
     diagnostics,
@@ -15,6 +16,7 @@ from app.admin import (
     mocks_ingest,
     payments as admin_payments,
     questions,
+    review_analytics as admin_review_analytics,
     speaking,
     users,
     writing,
@@ -24,7 +26,7 @@ from app.admin.payments import (
     AdminPaymentsResponse,
     AdminSubscriptionsResponse,
 )
-from app.admin.dependencies import require_admin, require_super_admin
+from app.admin.dependencies import require_admin
 from app.admin.schemas import (
     AdminMockDetail,
     AdminMockListItem,
@@ -47,6 +49,8 @@ from app.admin.schemas import (
     IngestPublishResponse,
     IngestValidateRequest,
     IngestValidateResponse,
+    ReviewAnalyticsResponse,
+    ReviewHistoryResponse,
     PatchAdminUserRequest,
     PatchDiagnosticSpeakingRequest,
     PatchMockStatusRequest,
@@ -63,6 +67,20 @@ from app.listening.service import invalidate_listening_audio_caches
 from app.storage.r2 import object_exists, object_head, upload_object
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.get("/ai/metrics", response_model=admin_ai_ops.AiMetricsResponse)
+def get_ai_metrics_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> admin_ai_ops.AiMetricsResponse:
+    return admin_ai_ops.get_ai_metrics()
+
+
+@router.get("/ai/health", response_model=admin_ai_ops.AiHealthResponse)
+def get_ai_health_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> admin_ai_ops.AiHealthResponse:
+    return admin_ai_ops.get_ai_health()
 
 
 @router.get("/dashboard/metrics", response_model=DashboardMetrics)
@@ -318,6 +336,18 @@ def approve_speaking_route(
     )
 
 
+@router.get("/speaking/{review_id}/history", response_model=ReviewHistoryResponse)
+def speaking_history_route(
+    review_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> ReviewHistoryResponse:
+    return audit_routes.get_review_history(
+        resource_type="speaking_review",
+        resource_id=review_id,
+        actions=["speaking.draft", "speaking.approve"],
+    )
+
+
 @router.get("/writing", response_model=WritingQueueResponse)
 def list_writing_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
@@ -366,6 +396,33 @@ def approve_writing_route(
         source=source,  # type: ignore[arg-type]
         body=body,
         admin_id=admin.id,
+    )
+
+
+@router.post("/writing/{review_id}/retry-ai", response_model=WritingReviewDetail)
+def retry_writing_ai_route(
+    review_id: UUID,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")] = "mock",
+) -> WritingReviewDetail:
+    return writing.retry_writing_ai_evaluation(
+        review_id=review_id,
+        source=source,  # type: ignore[arg-type]
+        admin_id=admin.id,
+    )
+
+
+@router.get("/writing/{review_id}/history", response_model=ReviewHistoryResponse)
+def writing_history_route(
+    review_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    source: Annotated[str, Query(pattern="^(mock|diagnostic)$")] = "mock",
+) -> ReviewHistoryResponse:
+    _ = source  # resource_id is unique; source kept for API symmetry with detail
+    return audit_routes.get_review_history(
+        resource_type="writing_review",
+        resource_id=review_id,
+        actions=["writing.draft", "writing.approve"],
     )
 
 
@@ -445,10 +502,37 @@ def list_subscriptions_route(
     )
 
 
+@router.get("/review-analytics", response_model=ReviewAnalyticsResponse)
+def review_analytics_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    module: Annotated[str, Query(pattern="^(speaking|writing|all)$")] = "all",
+    days: int = Query(30, ge=1, le=365),
+) -> ReviewAnalyticsResponse:
+    return admin_review_analytics.get_review_analytics(
+        module=module,  # type: ignore[arg-type]
+        days=days,
+    )
+
+
 @router.get("/audit", response_model=AuditLogResponse)
 def list_audit_route(
-    _super: Annotated[UserPublic, Depends(require_super_admin)],
+    admin: Annotated[UserPublic, Depends(require_admin)],
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    resource_type: str | None = None,
+    resource_id: UUID | None = None,
+    action: str | None = None,
 ) -> AuditLogResponse:
-    return audit_routes.list_audit_logs(page=page, page_size=page_size)
+    filtered = bool(resource_type or resource_id or action)
+    if not filtered and admin.role != "super_admin":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Global audit log requires super_admin.",
+        )
+    return audit_routes.list_audit_logs(
+        page=page,
+        page_size=page_size,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        action=action,
+    )

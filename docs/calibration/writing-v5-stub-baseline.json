@@ -1,0 +1,378 @@
+{
+  "fixtures": [
+    {
+      "label": "task1_chart",
+      "file": "task1_chart.txt",
+      "expected_overall": 5.0,
+      "ai_overall": 6.0,
+      "delta_overall": 1.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 1.0,
+        "coherence": 1.0,
+        "lexical_resource": 1.0,
+        "grammar": 1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task1_process",
+      "file": "task1_process.txt",
+      "expected_overall": 6.0,
+      "ai_overall": 6.0,
+      "delta_overall": 0.0,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.0,
+        "coherence": 0.0,
+        "lexical_resource": 0.0,
+        "grammar": -0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task1_band5",
+      "file": "task1_band5.txt",
+      "expected_overall": 5.0,
+      "ai_overall": 6.0,
+      "delta_overall": 1.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 1.0,
+        "coherence": 1.0,
+        "lexical_resource": 1.0,
+        "grammar": 0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task1_band6_5",
+      "file": "task1_band6_5.txt",
+      "expected_overall": 6.5,
+      "ai_overall": 6.0,
+      "delta_overall": -0.5,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -0.5,
+        "coherence": -0.5,
+        "lexical_resource": -0.5,
+        "grammar": -1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task1_map",
+      "file": "task1_map.txt",
+      "expected_overall": 6.5,
+      "ai_overall": 6.0,
+      "delta_overall": -0.5,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -0.5,
+        "coherence": -0.5,
+        "lexical_resource": -0.5,
+        "grammar": -1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task1_table",
+      "file": "task1_table.txt",
+      "expected_overall": 6.0,
+      "ai_overall": 6.0,
+      "delta_overall": 0.0,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.0,
+        "coherence": 0.0,
+        "lexical_resource": 0.0,
+        "grammar": -0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task1_line",
+      "file": "task1_line.txt",
+      "expected_overall": 6.0,
+      "ai_overall": 6.0,
+      "delta_overall": 0.0,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.0,
+        "coherence": 0.0,
+        "lexical_resource": 0.0,
+        "grammar": -0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band4_5",
+      "file": "task2_band4_5.txt",
+      "expected_overall": 4.5,
+      "ai_overall": 6.0,
+      "delta_overall": 1.5,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 1.5,
+        "coherence": 1.5,
+        "lexical_resource": 1.5,
+        "grammar": 1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band5",
+      "file": "task2_band5.txt",
+      "expected_overall": 5.0,
+      "ai_overall": 6.0,
+      "delta_overall": 1.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 1.0,
+        "coherence": 1.0,
+        "lexical_resource": 1.0,
+        "grammar": 1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band5_5",
+      "file": "task2_band5_5.txt",
+      "expected_overall": 5.5,
+      "ai_overall": 6.0,
+      "delta_overall": 0.5,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.5,
+        "coherence": 0.5,
+        "lexical_resource": 0.5,
+        "grammar": 0.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band5_crime",
+      "file": "task2_band5_crime.txt",
+      "expected_overall": 5.0,
+      "ai_overall": 6.0,
+      "delta_overall": 1.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 1.0,
+        "coherence": 1.0,
+        "lexical_resource": 1.0,
+        "grammar": 0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band6",
+      "file": "task2_band6.txt",
+      "expected_overall": 6.0,
+      "ai_overall": 6.0,
+      "delta_overall": 0.0,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.0,
+        "coherence": 0.0,
+        "lexical_resource": 0.0,
+        "grammar": -0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band6_5",
+      "file": "task2_band6_5.txt",
+      "expected_overall": 6.5,
+      "ai_overall": 6.0,
+      "delta_overall": -0.5,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -0.5,
+        "coherence": -0.5,
+        "lexical_resource": -0.5,
+        "grammar": -1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band6_edu",
+      "file": "task2_band6_edu.txt",
+      "expected_overall": 6.0,
+      "ai_overall": 6.0,
+      "delta_overall": 0.0,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.0,
+        "coherence": 0.0,
+        "lexical_resource": 0.0,
+        "grammar": -0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band6_health",
+      "file": "task2_band6_health.txt",
+      "expected_overall": 6.0,
+      "ai_overall": 6.0,
+      "delta_overall": 0.0,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": 0.0,
+        "coherence": 0.0,
+        "lexical_resource": 0.0,
+        "grammar": -0.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band6_env",
+      "file": "task2_band6_env.txt",
+      "expected_overall": 6.5,
+      "ai_overall": 6.0,
+      "delta_overall": -0.5,
+      "within_tolerance": true,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -0.5,
+        "coherence": -0.5,
+        "lexical_resource": -0.5,
+        "grammar": -1.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band7",
+      "file": "task2_band7.txt",
+      "expected_overall": 7.0,
+      "ai_overall": 6.0,
+      "delta_overall": -1.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -1.0,
+        "coherence": -1.0,
+        "lexical_resource": -1.0,
+        "grammar": -1.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band7_5",
+      "file": "task2_band7_5.txt",
+      "expected_overall": 7.5,
+      "ai_overall": 6.0,
+      "delta_overall": -1.5,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -1.5,
+        "coherence": -1.5,
+        "lexical_resource": -1.5,
+        "grammar": -2.0
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band7_work",
+      "file": "task2_band7_work.txt",
+      "expected_overall": 7.0,
+      "ai_overall": 6.0,
+      "delta_overall": -1.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -1.0,
+        "coherence": -1.0,
+        "lexical_resource": -1.0,
+        "grammar": -1.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    },
+    {
+      "label": "task2_band8",
+      "file": "task2_band8.txt",
+      "expected_overall": 8.0,
+      "ai_overall": 6.0,
+      "delta_overall": -2.0,
+      "within_tolerance": false,
+      "json_valid": true,
+      "criterion_deltas": {
+        "task_achievement": -2.0,
+        "coherence": -2.0,
+        "lexical_resource": -2.0,
+        "grammar": -2.5
+      },
+      "error": null,
+      "prompt_version": "v5",
+      "model_name": "stub"
+    }
+  ],
+  "overall_mae": 0.675,
+  "agreement_rate": 0.55,
+  "band_consistency": 0.55,
+  "json_validity_rate": 1.0,
+  "criterion_mae": {
+    "task_achievement": 0.675,
+    "coherence": 0.675,
+    "lexical_resource": 0.675,
+    "grammar": 0.925
+  },
+  "prompt_version": "v5",
+  "model_name": "stub",
+  "gate_bands": false,
+  "passed": true
+}

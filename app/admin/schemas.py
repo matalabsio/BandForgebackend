@@ -418,6 +418,7 @@ class WritingQueueItem(BaseModel):
     status: str
     human_band: float | None = None
     ai_overall_band: float | None = None
+    ai_status: str | None = None
     task_label: str | None = None
     created_at: datetime
 
@@ -445,6 +446,8 @@ class WritingReviewDetail(BaseModel):
     reviewer_notes: str | None = None
     ai_scores: dict[str, Any] | None = None
     ai_feedback: dict[str, Any] | None = None
+    ai_status: str | None = None
+    ai_error: str | None = None
     student_name: str | None = None
     student_email: str | None = None
     student_target_band: float | None = None
@@ -483,6 +486,38 @@ class AuditLogResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ReviewHistoryItem(BaseModel):
+    id: UUID
+    action: str
+    admin_email: str | None = None
+    summary: str
+    metadata: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class ReviewHistoryResponse(BaseModel):
+    items: list[ReviewHistoryItem]
+
+
+class CriterionMaeItem(BaseModel):
+    key: str
+    label: str
+    mae: float | None = None
+    sample_count: int = 0
+
+
+class ReviewAnalyticsResponse(BaseModel):
+    module: str
+    days: int
+    completed: int
+    with_ai: int
+    without_ai: int
+    agreement_rate: float | None = None
+    override_rate: float | None = None
+    overall_mae: float | None = None
+    criterion_mae: list[CriterionMaeItem] = Field(default_factory=list)
 
 
 class DiagnosticSpeakingPart1Item(BaseModel):

@@ -1,226 +1,131 @@
-"""Diagnostic writing evaluation — Groq, cache, and retry."""
+"""Diagnostic writing evaluation — stub / Claude / Groq, shared cache, retry.
+
+Supports synchronous evaluation (tests / legacy) and background enqueue + status
+polling for the diagnostic funnel UX.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
+import asyncio
 import logging
-import re
-from typing import Any
+import time
+from typing import Any, Literal
 
-from fastapi import HTTPException, Request, status
-from pydantic import ValidationError
+from fastapi import BackgroundTasks, HTTPException, Request, status
 
 from app.config import get_settings
-from app.db.supabase_client import get_supabase
 from app.diagnostic.evaluation_schemas import (
+    DiagnosticEvaluateWritingFailedResponse,
+    DiagnosticEvaluateWritingPendingResponse,
     DiagnosticEvaluateWritingRequest,
     DiagnosticEvaluateWritingResponse,
-    EvaluationResponse,
-    criteria_from_evaluation,
-    feedback_from_evaluation,
-    reconcile_overall_band,
+    DiagnosticWritingEvalStartResponse,
+    DiagnosticWritingEvalStatusResponse,
     row_to_public_response,
 )
-from app.diagnostic.groq_client import chat_completion_json, groq_configured
 from app.diagnostic.rate_limit import record_evaluate_writing_rate_limit
-from app.diagnostic.writing_prompt import (
-    PROMPT_VERSION,
-    RETRY_SUFFIX,
-    SYSTEM_PROMPT,
-    build_user_prompt,
+from app.writing.eval_cache import (
+    EVALUATION_SOURCE_AI,
+    EVALUATION_SOURCE_STUB,
+    EVALUATION_TYPE,
+    is_cache_valid,
+    lookup_by_client_attempt,
+    lookup_by_essay_hash,
+    persist_evaluation,
 )
-from app.writing.evaluation import min_words_for_part, word_count
+from app.writing.eval_utils import (
+    MIN_WORDS_FOR_AI,
+    compute_essay_hash,
+    count_paragraphs,
+    count_sentences,
+    sanitize_essay,
+    word_count,
+    writing_cache_model_key,
+)
+from app.diagnostic.writing_prompt import resolve_prompt_version
+from app.writing.providers.factory import evaluate_writing_essay, writing_eval_configured
 
 logger = logging.getLogger(__name__)
 
-EVALUATION_TYPE = "writing"
-MIN_WORDS_FOR_AI = 30
+# Backward-compatible aliases for tests and callers.
+_is_cache_valid = is_cache_valid
+_lookup_by_essay_hash = lookup_by_essay_hash
+_lookup_by_client_attempt = lookup_by_client_attempt
+_persist_evaluation = persist_evaluation
 
+PendingStatus = Literal["pending", "failed"]
 
-def normalize_text(text: str) -> str:
-    return " ".join(text.strip().split())
-
-
-def sanitize_essay(essay: str, question: str) -> str:
-    """Strip pasted task instructions so word count and scoring target the response."""
-    text = essay.strip()
-    if not text:
-        return text
-
-    question_text = question.strip()
-    if question_text and question_text in text:
-        text = text.replace(question_text, "", 1).strip()
-
-    boilerplate_patterns = [
-        r"You should spend about \d+ minutes on this task\.?\s*",
-        r"Summarise the information by selecting and reporting the main features.*?\.\s*",
-        r"Write at least \d+ words\.?\s*",
-        r"The (?:bar chart|chart|graph|table|diagram) below shows.*?\.\s*",
-    ]
-    for pattern in boilerplate_patterns:
-        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
-
-    return text.strip() or essay.strip()
-
-
-def _coerce_parsed_evaluation(parsed: dict[str, Any], *, words: int, task_part: int) -> dict[str, Any]:
-    """Ensure Groq JSON has non-empty feedback lists before Pydantic validation."""
-    min_words = min_words_for_part(task_part)
-    data = dict(parsed)
-
-    if not data.get("strengths"):
-        data["strengths"] = (
-            ["You attempted to respond to the task."]
-            if words > 0
-            else ["No substantive response was provided."]
-        )
-    if not data.get("weaknesses"):
-        if words < min_words:
-            data["weaknesses"] = [
-                f"The response is only {words} words — Task {task_part} requires at least {min_words}.",
-            ]
-        else:
-            data["weaknesses"] = ["The response needs clearer task coverage and development."]
-    if not data.get("improvement_tips"):
-        data["improvement_tips"] = [
-            f"Write a complete answer of at least {min_words} words with an overview, key features, and comparisons.",
-        ]
-
-    return data
-
-
-def compute_essay_hash(*, task_part: int, question: str, essay: str) -> str:
-    payload = f"{task_part}\n{normalize_text(question)}\n{normalize_text(essay)}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def count_sentences(text: str) -> int:
-    stripped = text.strip()
-    if not stripped:
-        return 0
-    parts = re.split(r"[.!?]+", stripped)
-    return max(1, sum(1 for part in parts if part.strip()))
-
-
-def count_paragraphs(text: str) -> int:
-    if not text.strip():
-        return 0
-    paras = [p.strip() for p in text.split("\n") if p.strip()]
-    return max(1, len(paras))
-
-
-def _parse_json_content(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    parsed = json.loads(stripped)
-    if not isinstance(parsed, dict):
-        raise ValueError("Expected JSON object")
-    return parsed
-
-
-def _is_cache_valid(row: dict[str, Any] | None) -> bool:
-    """Only AI evaluations are cached; legacy fallback rows are never served."""
-    if not row:
-        return False
-    return row.get("evaluation_source") == "ai"
-
-
-def _lookup_by_essay_hash(essay_hash: str) -> dict[str, Any] | None:
-    sb = get_supabase()
-    result = (
-        sb.table("diagnostic_ai_evaluations")
-        .select("*")
-        .eq("essay_hash", essay_hash)
-        .eq("evaluation_type", EVALUATION_TYPE)
-        .maybe_single()
-        .execute()
-    )
-    row = getattr(result, "data", None)
-    return row if isinstance(row, dict) else None
-
-
-def _lookup_by_client_attempt(client_attempt_id: str) -> dict[str, Any] | None:
-    sb = get_supabase()
-    result = (
-        sb.table("diagnostic_ai_evaluations")
-        .select("*")
-        .eq("client_attempt_id", client_attempt_id)
-        .eq("evaluation_type", EVALUATION_TYPE)
-        .maybe_single()
-        .execute()
-    )
-    row = getattr(result, "data", None)
-    return row if isinstance(row, dict) else None
+# In-process registry for jobs that have not yet persisted a cache row.
+# Keyed by client_attempt_id. Completed results live in diagnostic_ai_evaluations.
+_eval_jobs: dict[str, dict[str, Any]] = {}
 
 
 def _resolve_cached_row(
     *,
     essay_hash: str,
     client_attempt_id: str,
-) -> dict[str, Any] | None:
+):
+    # Use module aliases so tests can patch _lookup_by_essay_hash / _lookup_by_client_attempt
     for row in (_lookup_by_essay_hash(essay_hash), _lookup_by_client_attempt(client_attempt_id)):
         if _is_cache_valid(row):
             return row
     return None
 
 
-async def _call_groq_evaluation(
+def _mark_job(
+    client_attempt_id: str,
     *,
-    task_part: int,
-    question: str,
-    essay: str,
-) -> tuple[EvaluationResponse, dict[str, Any], str, str]:
-    settings = get_settings()
-    model_name = settings.groq_model
-    user_prompt = build_user_prompt(task_part=task_part, question=question, essay=essay)
-    raw_store: dict[str, Any] | str | None = None
-    last_error: Exception | None = None
-
-    logger.info("Calling Groq model: %s", model_name)
-
-    for attempt in range(2):
-        prompt = user_prompt if attempt == 0 else user_prompt + RETRY_SUFFIX
-        try:
-            content, raw_response = await chat_completion_json(
-                system=SYSTEM_PROMPT,
-                user=prompt,
-                model=model_name,
-            )
-            logger.info("Groq response received (attempt %s)", attempt + 1)
-            raw_store = {"content": content, "response": raw_response}
-            parsed = _coerce_parsed_evaluation(
-                _parse_json_content(content),
-                words=word_count(essay),
-                task_part=task_part,
-            )
-            evaluation = EvaluationResponse.model_validate(parsed)
-            ai_overall = evaluation.overall_band
-            evaluation, reconciled = reconcile_overall_band(evaluation)
-            if reconciled and isinstance(raw_store, dict):
-                raw_store["overall_band_reconciled"] = True
-                raw_store["ai_overall_band"] = ai_overall
-                raw_store["calculated_overall_band"] = evaluation.overall_band
-                logger.info(
-                    "Overall band reconciled: ai=%s calculated=%s",
-                    ai_overall,
-                    evaluation.overall_band,
-                )
-            return evaluation, raw_store, PROMPT_VERSION, model_name
-        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-            last_error = exc
-            logger.warning("Groq evaluation validation failed (attempt %s): %s", attempt + 1, exc)
-        except Exception as exc:
-            last_error = exc
-            logger.warning("Groq evaluation call failed (attempt %s): %s", attempt + 1, exc)
-            break
-
-    raise RuntimeError(str(last_error) if last_error else "Groq evaluation failed")
+    job_status: PendingStatus,
+    essay_hash: str,
+    error: str | None = None,
+) -> None:
+    _eval_jobs[client_attempt_id] = {
+        "status": job_status,
+        "essay_hash": essay_hash,
+        "error": error,
+        "ts": time.time(),
+    }
 
 
-def _persist_evaluation(
+def _clear_job(client_attempt_id: str) -> None:
+    _eval_jobs.pop(client_attempt_id, None)
+
+
+def _prepare_evaluation_inputs(
+    body: DiagnosticEvaluateWritingRequest,
+) -> tuple[str, str, str, float | None, str, int, str]:
+    """Sanitize + validate inputs. Returns cleaned fields and essay_hash."""
+    original_essay = body.essay.strip()
+    question = body.question.strip()
+    visual_description = (body.visual_description or "").strip()
+    target_band = body.target_band
+    cleaned_essay = sanitize_essay(original_essay, question)
+    words = word_count(cleaned_essay)
+    if words < MIN_WORDS_FOR_AI:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Response too short for IELTS evaluation.",
+        )
+    essay_hash = compute_essay_hash(
+        task_part=body.task_part,
+        question=question,
+        essay=cleaned_essay,
+        prompt_version=resolve_prompt_version(),
+        model_name=writing_cache_model_key(),
+        visual_description=visual_description,
+    )
+    return (
+        original_essay,
+        question,
+        visual_description,
+        target_band,
+        cleaned_essay,
+        words,
+        essay_hash,
+    )
+
+
+async def _persist_ai_result(
     *,
     client_attempt_id: str,
     essay_hash: str,
@@ -228,72 +133,271 @@ def _persist_evaluation(
     question: str,
     original_essay: str,
     cleaned_essay: str,
-    evaluation: EvaluationResponse,
     words: int,
-    sentences: int,
-    paragraphs: int,
-    raw_ai_response: dict[str, Any] | str | None,
-    prompt_version: str,
-    model_name: str | None,
-    evaluation_source: str,
+    visual_description: str,
+    target_band: float | None,
 ) -> dict[str, Any]:
-    sb = get_supabase()
-    row = {
-        "evaluation_type": EVALUATION_TYPE,
-        "client_attempt_id": client_attempt_id,
-        "essay_hash": essay_hash,
-        "task_part": task_part,
-        "question_text": question,
-        "essay_text": cleaned_essay,
-        "original_essay_text": original_essay,
-        "cleaned_essay_text": cleaned_essay,
-        "word_count": words,
-        "sentence_count": sentences,
-        "paragraph_count": paragraphs,
-        "overall_band": evaluation.overall_band,
-        "criteria_scores": criteria_from_evaluation(evaluation),
-        "feedback": feedback_from_evaluation(evaluation),
-        "raw_ai_response": raw_ai_response,
-        "prompt_version": prompt_version,
-        "model_name": model_name,
-        "evaluation_source": evaluation_source,
-    }
-    inserted = sb.table("diagnostic_ai_evaluations").insert(row).execute()
-    rows = inserted.data or []
-    if rows:
-        return rows[0]
+    sentences = count_sentences(cleaned_essay)
+    paragraphs = count_paragraphs(cleaned_essay)
+    result = await evaluate_writing_essay(
+        task_part=task_part,
+        question=question,
+        essay=cleaned_essay,
+        visual_description=visual_description or None,
+        target_band=target_band,
+    )
+    evaluation_source = (
+        EVALUATION_SOURCE_STUB
+        if get_settings().writing_eval_stub
+        else EVALUATION_SOURCE_AI
+    )
+    row = _persist_evaluation(
+        client_attempt_id=client_attempt_id,
+        essay_hash=essay_hash,
+        task_part=task_part,
+        question=question,
+        original_essay=original_essay,
+        cleaned_essay=cleaned_essay,
+        evaluation=result.evaluation,
+        words=words,
+        sentences=sentences,
+        paragraphs=paragraphs,
+        raw_ai_response=result.raw_store,
+        prompt_version=result.prompt_version,
+        model_name=result.model_name,
+        evaluation_source=evaluation_source,
+    )
+    logger.info(
+        "Evaluation persisted (id=%s, source=%s, band=%s, model=%s, provider=%s)",
+        row.get("id"),
+        evaluation_source,
+        result.evaluation.overall_band,
+        result.model_name or "-",
+        result.provider_used,
+    )
+    return row
 
-    existing = _lookup_by_essay_hash(essay_hash) or _lookup_by_client_attempt(client_attempt_id)
-    if existing:
-        return existing
-    raise RuntimeError("Could not persist diagnostic writing evaluation.")
+
+async def _run_diagnostic_writing_eval_async(
+    *,
+    client_attempt_id: str,
+    essay_hash: str,
+    task_part: int,
+    question: str,
+    original_essay: str,
+    cleaned_essay: str,
+    words: int,
+    visual_description: str,
+    target_band: float | None,
+) -> None:
+    try:
+        # Another request may have already cached this essay.
+        cached = _resolve_cached_row(
+            essay_hash=essay_hash,
+            client_attempt_id=client_attempt_id,
+        )
+        if cached:
+            _clear_job(client_attempt_id)
+            return
+        await _persist_ai_result(
+            client_attempt_id=client_attempt_id,
+            essay_hash=essay_hash,
+            task_part=task_part,
+            question=question,
+            original_essay=original_essay,
+            cleaned_essay=cleaned_essay,
+            words=words,
+            visual_description=visual_description,
+            target_band=target_band,
+        )
+        _clear_job(client_attempt_id)
+    except Exception as exc:
+        logger.exception(
+            "Background writing evaluation failed (attempt=%s)",
+            client_attempt_id,
+        )
+        _mark_job(
+            client_attempt_id,
+            job_status="failed",
+            essay_hash=essay_hash,
+            error=str(exc) or "AI evaluation failed.",
+        )
+
+
+def _run_diagnostic_writing_eval(
+    *,
+    client_attempt_id: str,
+    essay_hash: str,
+    task_part: int,
+    question: str,
+    original_essay: str,
+    cleaned_essay: str,
+    words: int,
+    visual_description: str,
+    target_band: float | None,
+) -> None:
+    """Sync entry for FastAPI BackgroundTasks; never raises to callers."""
+    try:
+        asyncio.run(
+            _run_diagnostic_writing_eval_async(
+                client_attempt_id=client_attempt_id,
+                essay_hash=essay_hash,
+                task_part=task_part,
+                question=question,
+                original_essay=original_essay,
+                cleaned_essay=cleaned_essay,
+                words=words,
+                visual_description=visual_description,
+                target_band=target_band,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "_run_diagnostic_writing_eval failed for attempt %s",
+            client_attempt_id,
+        )
+        _mark_job(
+            client_attempt_id,
+            job_status="failed",
+            essay_hash=essay_hash,
+            error="AI evaluation failed.",
+        )
+
+
+async def start_diagnostic_writing_evaluation(
+    body: DiagnosticEvaluateWritingRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> DiagnosticWritingEvalStartResponse:
+    """Enqueue evaluation (or return cache hit). Never blocks on the LLM call."""
+    (
+        original_essay,
+        question,
+        visual_description,
+        target_band,
+        cleaned_essay,
+        words,
+        essay_hash,
+    ) = _prepare_evaluation_inputs(body)
+
+    logger.info(
+        "Writing evaluation requested (attempt=%s, task_part=%s, cleaned_words=%s)",
+        body.client_attempt_id,
+        body.task_part,
+        words,
+    )
+
+    cached = _resolve_cached_row(
+        essay_hash=essay_hash,
+        client_attempt_id=body.client_attempt_id,
+    )
+    if cached:
+        logger.info(
+            "Evaluation cache hit (source=%s, id=%s)",
+            cached.get("evaluation_source"),
+            cached.get("id"),
+        )
+        _clear_job(body.client_attempt_id)
+        return row_to_public_response(cached)
+
+    # Already running for this attempt — return pending without re-enqueueing.
+    existing = _eval_jobs.get(body.client_attempt_id)
+    if existing and existing.get("status") == "pending":
+        return DiagnosticEvaluateWritingPendingResponse(
+            essay_hash=str(existing.get("essay_hash") or essay_hash),
+            client_attempt_id=body.client_attempt_id,
+        )
+
+    record_evaluate_writing_rate_limit(request)
+
+    if not writing_eval_configured():
+        logger.error("No writing LLM provider configured")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI writing evaluation is not configured. Please try again later.",
+        )
+
+    _mark_job(
+        body.client_attempt_id,
+        job_status="pending",
+        essay_hash=essay_hash,
+    )
+    background_tasks.add_task(
+        _run_diagnostic_writing_eval,
+        client_attempt_id=body.client_attempt_id,
+        essay_hash=essay_hash,
+        task_part=body.task_part,
+        question=question,
+        original_essay=original_essay,
+        cleaned_essay=cleaned_essay,
+        words=words,
+        visual_description=visual_description,
+        target_band=target_band,
+    )
+    logger.info(
+        "Writing evaluation enqueued (attempt=%s, essay_hash=%s)",
+        body.client_attempt_id,
+        essay_hash[:12],
+    )
+    return DiagnosticEvaluateWritingPendingResponse(
+        essay_hash=essay_hash,
+        client_attempt_id=body.client_attempt_id,
+    )
+
+
+def get_diagnostic_writing_status(
+    *,
+    client_attempt_id: str,
+    essay_hash: str | None = None,
+) -> DiagnosticWritingEvalStatusResponse:
+    """Poll evaluation status for a diagnostic attempt."""
+    cached = None
+    if essay_hash:
+        row = _lookup_by_essay_hash(essay_hash)
+        if _is_cache_valid(row):
+            cached = row
+    if cached is None:
+        row = _lookup_by_client_attempt(client_attempt_id)
+        if _is_cache_valid(row):
+            cached = row
+    if cached:
+        _clear_job(client_attempt_id)
+        return row_to_public_response(cached)
+
+    job = _eval_jobs.get(client_attempt_id)
+    if job and job.get("status") == "failed":
+        return DiagnosticEvaluateWritingFailedResponse(
+            client_attempt_id=client_attempt_id,
+            essay_hash=job.get("essay_hash") or essay_hash,
+            error=str(job.get("error") or "AI evaluation failed."),
+        )
+
+    return DiagnosticEvaluateWritingPendingResponse(
+        essay_hash=str((job or {}).get("essay_hash") or essay_hash or ""),
+        client_attempt_id=client_attempt_id,
+    )
 
 
 async def evaluate_diagnostic_writing(
     body: DiagnosticEvaluateWritingRequest,
     request: Request,
 ) -> DiagnosticEvaluateWritingResponse:
-    original_essay = body.essay.strip()
-    question = body.question.strip()
-    cleaned_essay = sanitize_essay(original_essay, question)
+    """Synchronous evaluation (tests / legacy callers). Blocks until LLM returns."""
+    (
+        original_essay,
+        question,
+        visual_description,
+        target_band,
+        cleaned_essay,
+        words,
+        essay_hash,
+    ) = _prepare_evaluation_inputs(body)
+
     logger.info(
         "Writing evaluation requested (attempt=%s, task_part=%s, cleaned_words=%s)",
         body.client_attempt_id,
         body.task_part,
-        word_count(cleaned_essay),
-    )
-
-    words = word_count(cleaned_essay)
-    if words < MIN_WORDS_FOR_AI:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Response too short for IELTS evaluation.",
-        )
-
-    essay_hash = compute_essay_hash(
-        task_part=body.task_part,
-        question=question,
-        essay=cleaned_essay,
+        words,
     )
 
     cached = _resolve_cached_row(
@@ -310,52 +414,44 @@ async def evaluate_diagnostic_writing(
 
     record_evaluate_writing_rate_limit(request)
 
-    if not groq_configured():
-        logger.error("GROQ_API_KEY missing — cannot evaluate diagnostic writing")
+    if not writing_eval_configured():
+        logger.error("No writing LLM provider configured")
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI writing evaluation is not configured. Please try again later.",
         )
 
-    sentences = count_sentences(cleaned_essay)
-    paragraphs = count_paragraphs(cleaned_essay)
-
     try:
-        evaluation, raw_ai_response, prompt_version, model_name = await _call_groq_evaluation(
+        row = await _persist_ai_result(
+            client_attempt_id=body.client_attempt_id,
+            essay_hash=essay_hash,
             task_part=body.task_part,
             question=question,
-            essay=cleaned_essay,
+            original_essay=original_essay,
+            cleaned_essay=cleaned_essay,
+            words=words,
+            visual_description=visual_description,
+            target_band=target_band,
         )
     except Exception as exc:
-        logger.exception("Groq evaluation failed for diagnostic writing")
+        logger.exception("Writing evaluation failed for diagnostic")
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI evaluation is temporarily unavailable. Please try again.",
         ) from exc
 
-    evaluation_source = "ai"
-
-    row = _persist_evaluation(
-        client_attempt_id=body.client_attempt_id,
-        essay_hash=essay_hash,
-        task_part=body.task_part,
-        question=question,
-        original_essay=original_essay,
-        cleaned_essay=cleaned_essay,
-        evaluation=evaluation,
-        words=words,
-        sentences=sentences,
-        paragraphs=paragraphs,
-        raw_ai_response=raw_ai_response,
-        prompt_version=prompt_version,
-        model_name=model_name,
-        evaluation_source=evaluation_source,
-    )
-    logger.info(
-        "Evaluation persisted (id=%s, source=%s, band=%s, model=%s)",
-        row.get("id"),
-        evaluation_source,
-        evaluation.overall_band,
-        model_name or "-",
-    )
     return row_to_public_response(row)
+
+
+# Re-export for backward-compatible imports in tests and callers.
+__all__ = [
+    "EVALUATION_TYPE",
+    "MIN_WORDS_FOR_AI",
+    "compute_essay_hash",
+    "count_paragraphs",
+    "count_sentences",
+    "evaluate_diagnostic_writing",
+    "get_diagnostic_writing_status",
+    "sanitize_essay",
+    "start_diagnostic_writing_evaluation",
+]

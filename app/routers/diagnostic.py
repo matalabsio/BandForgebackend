@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 
 from app.auth.constants import (
     ACCESS_TOKEN_COOKIE,
@@ -20,15 +20,22 @@ from app.diagnostic.complete import complete_diagnostic
 from app.diagnostic.schemas import (
     DiagnosticCompleteRequest,
     DiagnosticCompleteResponse,
+    DiagnosticLatestResponse,
     DiagnosticReviewSubmitRequest,
     DiagnosticReviewSubmitResponse,
 )
 from app.diagnostic.evaluation_schemas import (
+    DiagnosticEvaluateWritingPendingResponse,
     DiagnosticEvaluateWritingRequest,
-    DiagnosticEvaluateWritingResponse,
+    DiagnosticWritingEvalStartResponse,
+    DiagnosticWritingEvalStatusResponse,
 )
 from app.diagnostic.submit_review import submit_diagnostic_review
-from app.diagnostic.writing_evaluator import evaluate_diagnostic_writing
+from app.diagnostic.writing_evaluator import (
+    get_diagnostic_writing_status,
+    start_diagnostic_writing_evaluation,
+)
+from app.services import user_activity
 
 router = APIRouter(prefix="/api/diagnostic", tags=["diagnostic"])
 
@@ -59,6 +66,29 @@ def _set_auth_cookies(response: Response, *, access_token: str, refresh_token: s
     )
 
 
+@router.get("/latest", response_model=DiagnosticLatestResponse)
+def diagnostic_latest(
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> DiagnosticLatestResponse:
+    """Return the student's most recent completed diagnostic attempt."""
+    rows = user_activity.list_user_diagnostics(current_user.id)
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No diagnostic found.")
+    row = rows[0]
+    return DiagnosticLatestResponse(
+        id=str(row["id"]),
+        client_attempt_id=row.get("client_attempt_id"),
+        status=row.get("status"),
+        listening_band=row.get("listening_band"),
+        reading_band=row.get("reading_band"),
+        writing_band=row.get("writing_band"),
+        speaking_band=row.get("speaking_band"),
+        aggregate_band=row.get("aggregate_band"),
+        completed_at=row.get("completed_at"),
+        pack_version=row.get("pack_version"),
+    )
+
+
 @router.post("/complete", response_model=DiagnosticCompleteResponse)
 async def diagnostic_complete(
     body: DiagnosticCompleteRequest,
@@ -81,13 +111,44 @@ async def diagnostic_submit_review(
     return await submit_diagnostic_review(body)
 
 
-@router.post("/evaluate-writing", response_model=DiagnosticEvaluateWritingResponse)
+@router.post("/evaluate-writing", response_model=None)
 async def diagnostic_evaluate_writing(
     body: DiagnosticEvaluateWritingRequest,
     request: Request,
-) -> DiagnosticEvaluateWritingResponse:
-    """Evaluate diagnostic Writing via Groq (cached per essay / attempt)."""
-    return await evaluate_diagnostic_writing(body, request)
+    response: Response,
+    background_tasks: BackgroundTasks,
+) -> DiagnosticWritingEvalStartResponse:
+    """Enqueue diagnostic Writing AI evaluation (or return cache hit).
+
+    Returns 200 with a completed evaluation on cache hit, otherwise 202 pending.
+    Poll GET /evaluate-writing/status for the finished band.
+    """
+    result = await start_diagnostic_writing_evaluation(
+        body, request, background_tasks
+    )
+    if isinstance(result, DiagnosticEvaluateWritingPendingResponse):
+        response.status_code = status.HTTP_202_ACCEPTED
+    else:
+        response.status_code = status.HTTP_200_OK
+    return result
+
+
+@router.get("/evaluate-writing/status", response_model=None)
+async def diagnostic_evaluate_writing_status(
+    response: Response,
+    client_attempt_id: Annotated[str, Query(min_length=1, max_length=128)],
+    essay_hash: Annotated[str | None, Query(max_length=128)] = None,
+) -> DiagnosticWritingEvalStatusResponse:
+    """Poll diagnostic Writing evaluation status for an attempt."""
+    result = get_diagnostic_writing_status(
+        client_attempt_id=client_attempt_id,
+        essay_hash=essay_hash,
+    )
+    if isinstance(result, DiagnosticEvaluateWritingPendingResponse):
+        response.status_code = status.HTTP_202_ACCEPTED
+    else:
+        response.status_code = status.HTTP_200_OK
+    return result
 
 
 @router.post("/guest-session", response_model=AuthResponse)

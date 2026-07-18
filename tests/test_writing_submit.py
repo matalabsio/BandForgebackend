@@ -74,11 +74,15 @@ def test_submit_queues_review_without_module_score():
         ),
         patch("app.writing.service.repo.get_mock_test", return_value=mock_test),
         patch("app.writing.service.repo.upsert_answer") as upsert,
-        patch("app.writing.service.repo.insert_writing_review") as insert_review,
+        patch(
+            "app.writing.service.repo.insert_writing_review",
+            return_value={"id": "00000000-0000-4000-8000-000000000055"},
+        ) as insert_review,
         patch(
             "app.writing.service.repo.mark_attempt_completed",
             return_value={"completed_at": "2026-05-27T12:00:00+00:00"},
         ) as complete,
+        patch("app.writing.service.run_writing_evaluation") as run_eval,
     ):
         res = submit_attempt(
             attempt_id=ATTEMPT,
@@ -88,6 +92,9 @@ def test_submit_queues_review_without_module_score():
 
     upsert.assert_called_once()
     insert_review.assert_called_once()
+    ai_scores = insert_review.call_args.kwargs["ai_scores"]
+    assert ai_scores["status"] == "pending"
+    run_eval.assert_called_once()
     complete.assert_called_once()
     assert res.status == "completed"
     assert res.saved_for_review is True

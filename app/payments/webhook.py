@@ -3,22 +3,37 @@
 The webhook is the authoritative, server-to-server confirmation of payment
 state. It is idempotent via ``payment_events.razorpay_event_id`` and only acts
 after the raw-body signature is verified.
+
+Failed/pending events are reprocessed on Razorpay retry. Transient fulfillment
+errors return 503 so the provider retries; permanent business errors do not.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from fastapi import HTTPException
+
 from app.payments import razorpay_client, repository, service
 from app.payments.constants import (
+    EVENT_FAILED,
     EVENT_PAYMENT_CAPTURED,
     EVENT_PAYMENT_FAILED,
+    EVENT_PENDING,
+    EVENT_PROCESSED,
     EVENT_REFUND_CREATED,
     PAYMENT_FAILED,
     PAYMENT_PAID,
     PAYMENT_REFUNDED,
 )
-from app.payments.exceptions import WebhookVerificationError
+from app.payments.exceptions import (
+    PaymentAmountMismatchError,
+    PaymentNotFoundError,
+    PlanNotFoundError,
+    WebhookEventIdRequiredError,
+    WebhookTransientError,
+    WebhookVerificationError,
+)
 from app.payments.logging import payment_log
 
 
@@ -51,6 +66,16 @@ def _sanitize_headers(headers: dict[str, str] | None) -> dict[str, Any]:
     return out
 
 
+def _is_permanent_fulfillment_error(exc: Exception) -> bool:
+    if isinstance(
+        exc, (PaymentNotFoundError, PaymentAmountMismatchError, PlanNotFoundError)
+    ):
+        return True
+    if isinstance(exc, HTTPException) and exc.status_code in (400, 404):
+        return True
+    return False
+
+
 def handle_webhook(
     *,
     raw_body: bytes,
@@ -63,6 +88,10 @@ def handle_webhook(
         raw_body=raw_body, signature=signature
     ):
         raise WebhookVerificationError()
+
+    if not (event_id and str(event_id).strip()):
+        raise WebhookEventIdRequiredError()
+    event_id = str(event_id).strip()
 
     event_type = str(payload.get("event") or "")
     entity = _payment_entity(payload)
@@ -80,15 +109,46 @@ def handle_webhook(
         payload=payload,
         headers=_sanitize_headers(headers),
     )
+    reprocess = False
     if event_row is None:
-        payment_log(
-            "webhook",
-            event_id=event_id,
-            event_type=event_type,
-            duplicate=True,
-            processed=False,
-        )
-        return {"ok": True, "duplicate": True}
+        existing = repository.get_payment_event_by_razorpay_event_id(event_id)
+        if existing and str(existing.get("processing_status") or "") == EVENT_PROCESSED:
+            payment_log(
+                "webhook",
+                user_id=None,
+                plan_id=None,
+                order_id=order_id,
+                payment_id=razorpay_payment_id,
+                success=True,
+                event_id=event_id,
+                event_type=event_type,
+                duplicate=True,
+                processed=True,
+            )
+            return {"ok": True, "duplicate": True}
+        if not existing:
+            raise WebhookTransientError(
+                detail="Webhook event conflict; retry shortly."
+            )
+        status_val = str(existing.get("processing_status") or "")
+        if status_val in (EVENT_FAILED, EVENT_PENDING):
+            event_row = repository.claim_payment_event_for_retry(existing["id"])
+            reprocess = True
+            payment_log(
+                "webhook",
+                user_id=None,
+                plan_id=None,
+                order_id=order_id,
+                payment_id=razorpay_payment_id,
+                success=True,
+                event_id=event_id,
+                event_type=event_type,
+                duplicate=True,
+                reprocess=True,
+                retry_count=event_row.get("retry_count"),
+            )
+        else:
+            return {"ok": True, "duplicate": True}
 
     event_db_id = event_row.get("id")
     try:
@@ -109,24 +169,39 @@ def handle_webhook(
 
         payment_log(
             "webhook",
+            user_id=None,
+            plan_id=None,
+            order_id=order_id,
+            payment_id=razorpay_payment_id,
+            success=True,
             event_id=event_id,
             event_type=event_type,
             processed=True,
-            duplicate=False,
+            duplicate=reprocess,
+            reprocess=reprocess,
         )
     except Exception as exc:
         if event_db_id:
             repository.mark_event_failed(event_db_id, error=str(exc))
         payment_log(
             "webhook",
+            user_id=None,
+            plan_id=None,
+            order_id=order_id,
+            payment_id=razorpay_payment_id,
+            success=False,
             event_id=event_id,
             event_type=event_type,
             processed=False,
             error=str(exc),
+            reprocess=reprocess,
         )
-        return {"ok": True, "processing_failed": True}
+        if _is_permanent_fulfillment_error(exc):
+            return {"ok": True, "processing_failed": True}
+        detail = str(exc).strip()[:200] or "Webhook fulfillment temporarily unavailable."
+        raise WebhookTransientError(detail=detail) from exc
 
-    return {"ok": True}
+    return {"ok": True, "reprocess": reprocess} if reprocess else {"ok": True}
 
 
 def _on_payment_failed(*, order_id: str) -> None:

@@ -38,6 +38,7 @@ class StartAttemptRequest(BaseModel):
     module: TestModule
     """When true, abandon any in-progress attempt and create a new one."""
     force_new: bool = False
+    skill_context: TestModule | None = None
 
 
 class StartAttemptResponse(BaseModel):

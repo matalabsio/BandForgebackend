@@ -56,6 +56,13 @@ def complete_diagnostic(
             raise RuntimeError("Could not save diagnostic attempt.")
         row_id = str(inserted.data[0]["id"])
 
+    try:
+        from app.learning.service import schedule_profile_refresh
+
+        schedule_profile_refresh(user_id)
+    except Exception:
+        pass
+
     return DiagnosticCompleteResponse(
         id=row_id,
         client_attempt_id=payload["client_attempt_id"],

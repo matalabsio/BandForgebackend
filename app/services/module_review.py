@@ -35,9 +35,12 @@ from app.schemas.mock_orchestrator import (
 )
 from app.services import mock_orchestrator
 from app.speaking import repository as speaking_repo
-from app.speaking.ai_evaluator import ai_evaluation_available, run_speaking_evaluation
+from app.speaking.ai_evaluator import (
+    ai_evaluation_available as speaking_ai_available,
+    run_speaking_evaluation,
+)
 from app.writing import repository as writing_repo
-from app.writing.ai_evaluator import ai_evaluation_available, evaluate_mock_essay
+from app.writing.ai_evaluator import ai_evaluation_available as writing_ai_available
 
 _READING_SECTION_LABELS: dict[str, str] = {
     "tfng": "True / False / Not Given",
@@ -375,20 +378,30 @@ async def get_writing_module_review(
         prompt = str(meta.get("question") or "")
         words = int(meta.get("word_count") or 0)
 
-        ai_band = ai_scores.get("ai_band")
-        criteria = ai_scores.get("criteria")
-        if ai_band is None and essay:
-            evaluation = await evaluate_mock_essay(part=part, question=prompt, essay=essay)
-            if evaluation is not None:
-                merged = {**ai_scores, **evaluation}
-                review_id = review.get("id")
-                if review_id:
-                    writing_repo.update_writing_review_ai_scores(
-                        review_id=UUID(str(review_id)), ai_scores=merged
-                    )
-                ai_band = evaluation.get("ai_band")
-                criteria = evaluation.get("criteria")
-                ai_scores = merged
+        ai_band = ai_scores.get("ai_band") if isinstance(ai_scores, dict) else None
+        criteria = ai_scores.get("criteria") if isinstance(ai_scores, dict) else None
+        ai_status = (
+            str(ai_scores.get("status"))
+            if isinstance(ai_scores, dict) and ai_scores.get("status")
+            else None
+        )
+        # Legacy safety: only backfill pending/missing AI once via background thread.
+        if (
+            ai_band is None
+            and essay
+            and ai_status in (None, "pending", "ai_failed")
+            and review.get("id")
+        ):
+            from app.writing.ai_evaluator import run_writing_evaluation
+            import threading
+
+            review_id = UUID(str(review["id"]))
+            threading.Thread(
+                target=run_writing_evaluation,
+                args=(review_id,),
+                daemon=True,
+                name=f"writing-module-review-eval-{review_id}",
+            ).start()
 
         task = WritingTaskReview(
             attempt_id=attempt_id,
@@ -397,9 +410,9 @@ async def get_writing_module_review(
             essay=essay,
             word_count=words,
             ai_band=float(ai_band) if ai_band is not None else None,
-            criteria={k: float(v) for k, v in (criteria or {}).items()},
-            strengths=list(ai_scores.get("strengths") or []),
-            improvements=list(ai_scores.get("improvements") or []),
+            criteria={k: float(v) for k, v in (criteria or {}).items()} if isinstance(criteria, dict) else {},
+            strengths=list(ai_scores.get("strengths") or []) if isinstance(ai_scores, dict) else [],
+            improvements=list(ai_scores.get("improvements") or []) if isinstance(ai_scores, dict) else [],
         )
         if task.ai_band is not None:
             ai_bands.append(task.ai_band)
@@ -421,7 +434,7 @@ async def get_writing_module_review(
         tasks=tasks,
         ai_band=module_ai_band,
         persona_message=_writing_persona(tasks, module_ai_band),
-        ai_available=ai_evaluation_available(),
+        ai_available=writing_ai_available(),
         next_module=progress.next_module,
         next_part=progress.next_part,
     )
@@ -510,7 +523,7 @@ def get_speaking_module_review(
     elif (
         review.get("id")
         and ai_status == "pending"
-        and ai_evaluation_available()
+        and speaking_ai_available()
     ):
         run_speaking_evaluation(UUID(str(review["id"])))
         review = speaking_repo.get_speaking_review_for_attempt(attempt_id) or {}

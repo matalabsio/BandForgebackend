@@ -13,6 +13,35 @@ class FluencyMetrics(TypedDict):
     questions_asked: int
 
 
+def long_pause_markers(
+    words: list[dict[str, Any]],
+    *,
+    threshold_sec: float = 2.0,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Compact pause markers from consecutive word gaps (> threshold_sec)."""
+    if len(words) < 2:
+        return []
+    markers: list[dict[str, Any]] = []
+    for prev, nxt in zip(words, words[1:]):
+        try:
+            gap = float(nxt["start"]) - float(prev["end"])
+            after_word = str(prev.get("word") or "").strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if gap <= threshold_sec or not after_word:
+            continue
+        markers.append(
+            {
+                "after_word": after_word,
+                "gap_sec": round(gap, 1),
+            }
+        )
+        if len(markers) >= limit:
+            break
+    return markers
+
+
 def long_pauses(words: list[dict[str, Any]], threshold_sec: float = 2.0) -> int:
     """Count gaps between consecutive words longer than threshold_sec."""
     if len(words) < 2:

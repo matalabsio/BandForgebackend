@@ -10,9 +10,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Uplo
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.diagnostic.access import assert_mock_access
+from app.skill_program_gate import assert_skill_program_module_start
 from app.speaking import service
 from app.speaking.schemas import (
     SpeakingPendingResponse,
+    SpeakingReportResponse,
     StartSpeakingResponse,
     SubmitSpeakingResponse,
 )
@@ -30,8 +32,16 @@ def start_speaking(
         UUID | None,
         Query(description="Parent full-mock attempt for orchestration."),
     ] = None,
+    skill_context: Annotated[
+        str | None,
+        Query(description="Skill-program mock gate (listening|reading|writing|speaking)."),
+    ] = None,
 ) -> StartSpeakingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    assert_skill_program_module_start(
+        user_id=current_user.id,
+        skill_context=skill_context,
+    )
     return service.start_attempt(
         mock_test_id=mock_test_id,
         user_id=current_user.id,
@@ -69,6 +79,18 @@ def speaking_pending(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> SpeakingPendingResponse:
     return service.get_pending_status(
+        attempt_id=attempt_id,
+        user_id=current_user.id,
+        student_name=current_user.full_name,
+    )
+
+
+@router.get("/attempts/{attempt_id}/report", response_model=SpeakingReportResponse)
+def speaking_report(
+    attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> SpeakingReportResponse:
+    return service.get_speaking_report(
         attempt_id=attempt_id,
         user_id=current_user.id,
         student_name=current_user.full_name,

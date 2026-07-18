@@ -63,6 +63,28 @@ uvicorn app.main:app --reload --port 8000
 
 Uses `backend/.env.local` to override cloud `SUPABASE_URL` without editing `.env`.
 
+## AI evaluation (writing + speaking) — offline by default
+
+See **[docs/ai-eval-local.md](docs/ai-eval-local.md)**.
+
+```bash
+# Recommended local flags (already in .env.example / .env.local)
+WRITING_EVAL_STUB=true
+SPEAKING_EVAL_STUB=true
+WRITING_LLM_PRIMARY=none
+WRITING_LLM_FALLBACK=none
+CLAUDE_DAILY_LIMIT=20
+CLAUDE_MONTHLY_LIMIT=100
+
+python scripts/writing_eval_smoke.py
+python scripts/evaluate_fixture.py --all
+python scripts/speaking_eval_smoke.py
+```
+
+Live Claude: set `WRITING_EVAL_STUB=false` and `WRITING_LLM_PRIMARY=claude`, then run `python scripts/evaluate_fixture.py <fixture> --live`.
+
+Admin AI ops dashboard: `/admin/ai` (budget, cost estimate, latency, circuit, failures).
+
 ## Phase 2 — fewer DB round-trips
 
 See **[docs/PHASE2.md](docs/PHASE2.md)**. Migrations:

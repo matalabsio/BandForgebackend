@@ -14,12 +14,17 @@ from app.services.mock_progress_timing import MockProgressTiming
 from app.speaking import repository as repo
 from app.speaking.constants import SPEAKING_DURATION_MINUTES, SPEAKING_PART1_RECORD_SECONDS
 from app.speaking.schemas import (
+    SpeakingFluencyMetrics,
+    SpeakingHumanCriteria,
+    SpeakingPauseMarker,
     SpeakingPendingResponse,
     SpeakingQuestionPublic,
+    SpeakingReportResponse,
     StartSpeakingResponse,
     SubmitSpeakingResponse,
 )
-from app.storage.r2 import upload_object
+from app.speaking.fluency_metrics import long_pause_markers
+from app.storage.r2 import generate_signed_url, upload_object
 from app.speaking.ai_evaluator import run_speaking_evaluation
 
 
@@ -330,4 +335,166 @@ def get_pending_status(
         submitted_at=submitted_at,
         student_name=student_name,
         message=message,
+    )
+
+
+def _parse_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_human_criteria(raw: Any) -> SpeakingHumanCriteria | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SpeakingHumanCriteria(
+            fluency=float(raw["fluency"]),
+            lexical=float(raw["lexical"]),
+            grammar=float(raw["grammar"]),
+            pronunciation=float(raw["pronunciation"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_fluency_metrics(raw: Any) -> SpeakingFluencyMetrics | None:
+    if not isinstance(raw, dict):
+        return None
+    return SpeakingFluencyMetrics(
+        words_per_minute=_parse_optional_float(raw.get("words_per_minute")),
+        total_speaking_seconds=_parse_optional_float(raw.get("total_speaking_seconds")),
+        long_pauses=_parse_optional_int(raw.get("long_pauses")),
+        response_count=_parse_optional_int(raw.get("response_count")),
+        questions_asked=_parse_optional_int(raw.get("questions_asked")),
+    )
+
+
+def _parse_pause_markers(ai_scores: dict[str, Any]) -> list[SpeakingPauseMarker]:
+    words = ai_scores.get("words")
+    if not isinstance(words, list):
+        return []
+    markers = long_pause_markers(words)
+    out: list[SpeakingPauseMarker] = []
+    for item in markers:
+        try:
+            out.append(
+                SpeakingPauseMarker(
+                    after_word=str(item["after_word"]),
+                    gap_sec=float(item["gap_sec"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def get_speaking_report(
+    *,
+    attempt_id: UUID,
+    user_id: UUID,
+    student_name: str | None = None,
+) -> SpeakingReportResponse:
+    """Return rich speaking report only after human band release."""
+    attempt = repo.get_attempt(attempt_id)
+    _ensure_owner(attempt, user_id)
+    if attempt.get("module") != "speaking":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not a speaking attempt.")
+
+    review = repo.get_speaking_review_for_attempt(attempt_id)
+    if not review:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No speaking submission found.")
+
+    human_band = review.get("human_band")
+    if human_band is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Speaking report is not ready — waiting for human review.",
+        )
+
+    overall = float(human_band)
+    ai_scores = review.get("ai_scores") if isinstance(review.get("ai_scores"), dict) else {}
+    evaluation = ai_scores.get("evaluation")
+    if evaluation is not None and not isinstance(evaluation, dict):
+        evaluation = None
+
+    audio_play_url: str | None = None
+    audio_key = review.get("audio_url")
+    if audio_key:
+        try:
+            audio_play_url = generate_signed_url(str(audio_key))
+        except Exception:
+            audio_play_url = None
+
+    meta = review.get("submission_meta") if isinstance(review.get("submission_meta"), dict) else {}
+    try:
+        part = int(meta.get("part") or attempt.get("part") or 1)
+    except (TypeError, ValueError):
+        part = 1
+
+    completed_raw = attempt.get("completed_at")
+    submitted_at = None
+    if completed_raw:
+        submitted_at = (
+            datetime.fromisoformat(str(completed_raw).replace("Z", "+00:00"))
+            if isinstance(completed_raw, str)
+            else completed_raw
+        )
+
+    notes = review.get("reviewer_notes")
+    return SpeakingReportResponse(
+        attempt_id=attempt_id,
+        status=str(attempt.get("status") or "completed"),
+        review_status=str(review.get("status") or "completed"),
+        overall_band=overall,
+        human_verified=True,
+        human_criteria_scores=_parse_human_criteria(review.get("human_criteria_scores")),
+        ai_band=_parse_optional_float(ai_scores.get("ai_band")),
+        fluency=_parse_optional_float(ai_scores.get("fluency")),
+        lexical=_parse_optional_float(ai_scores.get("lexical")),
+        grammar=_parse_optional_float(ai_scores.get("grammar")),
+        pronunciation=_parse_optional_float(ai_scores.get("pronunciation")),
+        evaluation=evaluation,
+        fluency_metrics=_parse_fluency_metrics(ai_scores.get("fluency_metrics")),
+        pause_markers=_parse_pause_markers(ai_scores),
+        transcript=(str(review["transcript"]) if review.get("transcript") else None),
+        audio_play_url=audio_play_url,
+        ai_status=(
+            str(ai_scores.get("status")) if ai_scores.get("status") else None
+        ),
+        prompt_version=(
+            str(ai_scores.get("prompt_version"))
+            if ai_scores.get("prompt_version")
+            else None
+        ),
+        provider_asr=(
+            str(ai_scores.get("provider_asr")) if ai_scores.get("provider_asr") else None
+        ),
+        provider_eval=(
+            str(ai_scores.get("provider_eval"))
+            if ai_scores.get("provider_eval")
+            else None
+        ),
+        model_asr=(
+            str(ai_scores.get("model_asr")) if ai_scores.get("model_asr") else None
+        ),
+        model_eval=(
+            str(ai_scores.get("model_eval")) if ai_scores.get("model_eval") else None
+        ),
+        submitted_at=submitted_at,
+        student_name=student_name,
+        reviewer_notes=str(notes) if notes else None,
+        part=part,
     )

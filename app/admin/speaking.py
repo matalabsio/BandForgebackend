@@ -253,7 +253,7 @@ def approve_speaking_review(
     sb = get_supabase()
     existing = (
         sb.table("speaking_reviews")
-        .select("id, status")
+        .select("id, status, ai_scores")
         .eq("id", str(review_id))
         .limit(1)
         .execute()
@@ -268,6 +268,10 @@ def approve_speaking_review(
 
     scores = body.human_criteria_scores.model_dump()
     human_band = compute_overall_band(scores)
+    raw_ai = existing[0].get("ai_scores")
+    ai_scores = raw_ai if isinstance(raw_ai, dict) else None
+    ai_criteria = ai_scores_to_criteria(ai_scores)
+    ai_band = compute_overall_band(ai_criteria) if ai_criteria else None
     now = datetime.now(UTC).isoformat()
 
     sb.table("speaking_reviews").update(
@@ -322,6 +326,12 @@ def approve_speaking_review(
 
                 user_id = PyUUID(str(attempt_row[0]["user_id"]))
                 delete_many([f"dashboard_summary:{user_id}"])
+                try:
+                    from app.learning.service import schedule_profile_refresh
+
+                    schedule_profile_refresh(user_id)
+                except Exception:
+                    pass
                 mock_attempt_raw = attempt_row[0].get("mock_attempt_id")
                 mock_test_raw = attempt_row[0].get("mock_test_id")
                 if mock_attempt_raw and mock_test_raw:
@@ -337,12 +347,19 @@ def approve_speaking_review(
                         mock_test_id=mock_test_id,
                     )
 
+    from app.admin.review_comparison import approve_audit_metadata
+
     log_admin_action(
         admin_id=admin_id,
         action="speaking.approve",
         resource_type="speaking_review",
         resource_id=review_id,
-        metadata={"human_band": human_band, "human_criteria_scores": scores},
+        metadata=approve_audit_metadata(
+            human_band=human_band,
+            human_criteria=scores,
+            ai_band=ai_band,
+            ai_criteria=ai_criteria,
+        ),
     )
 
     return get_speaking_detail(review_id)
