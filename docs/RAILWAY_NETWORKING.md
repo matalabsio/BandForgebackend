@@ -44,6 +44,28 @@ GOOGLE_REDIRECT_URI=https://bandforge-web.vercel.app/api/auth/google/callback
 CORS_ORIGINS=https://bandforge-web.vercel.app
 ```
 
+#### Razorpay Test checkout (pricing page)
+
+If `/pricing` shows “Checkout unavailable”, the API is returning `payments_enabled: false`.
+Set on **Railway → adequate-surprise → Variables** (not only `backend/.env` locally):
+
+```env
+RAZORPAY_ENABLED=true
+RAZORPAY_KEY_ID=rzp_test_...          # Test mode keys from Razorpay Dashboard
+RAZORPAY_KEY_SECRET=...
+# Optional for Test on prod (/verify still works); required for rzp_live_*:
+RAZORPAY_WEBHOOK_SECRET=...
+```
+
+Redeploy, then verify:
+
+```bash
+curl -sS https://adequate-surprise-production-96bc.up.railway.app/api/payments/plans | jq '.payments_enabled'
+# true
+```
+
+Deploy logs should include `Razorpay credentials OK (API probe passed)`.
+
 Optional if port mismatch persists:
 
 ```env

@@ -50,18 +50,27 @@ async def lifespan(_app: FastAPI):
                     "set production Vercel URL (see docs/vercel-production.md)"
                 )
         if settings.razorpay_enabled:
-            missing = [
-                name
-                for name, val in (
-                    ("RAZORPAY_KEY_ID", settings.razorpay_key_id),
-                    ("RAZORPAY_KEY_SECRET", settings.razorpay_key_secret),
-                    ("RAZORPAY_WEBHOOK_SECRET", settings.razorpay_webhook_secret),
-                )
-                if not val
+            key_id = (settings.razorpay_key_id or "").strip()
+            required: list[tuple[str, str]] = [
+                ("RAZORPAY_KEY_ID", settings.razorpay_key_id),
+                ("RAZORPAY_KEY_SECRET", settings.razorpay_key_secret),
             ]
+            # Live keys must have webhook backup in production; Test mode can use /verify only.
+            if key_id.startswith("rzp_live_"):
+                required.append(
+                    ("RAZORPAY_WEBHOOK_SECRET", settings.razorpay_webhook_secret)
+                )
+            missing = [name for name, val in required if not val]
             if missing:
                 raise RuntimeError(
                     f"Payments enabled in production but missing: {', '.join(missing)}"
+                )
+            if key_id.startswith("rzp_test_") and not (
+                settings.razorpay_webhook_secret or ""
+            ).strip():
+                print(
+                    "[bandforge-api] WARNING: RAZORPAY_WEBHOOK_SECRET unset — "
+                    "Test checkout works via /verify; set webhook secret for backup fulfillment"
                 )
     elif settings.razorpay_enabled:
         missing = [
