@@ -21,12 +21,13 @@ RUN pip install --prefix=/install -r requirements-prod.txt
 
 FROM python:3.12-slim-bookworm AS runtime
 
+# Do not bake API_PORT here — it would shadow Railway's runtime PORT.
+# Entrypoint binds to PORT, then API_PORT, then 8000.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     APP_ENV=production \
     API_HOST=0.0.0.0 \
-    API_PORT=8000 \
     WEB_CONCURRENCY=2 \
     GUNICORN_TIMEOUT=120 \
     GUNICORN_GRACEFUL_TIMEOUT=30 \
@@ -58,6 +59,6 @@ USER app
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD sh -c 'curl -fsS "http://127.0.0.1:${API_PORT:-${PORT:-8000}}/health"' || exit 1
+    CMD sh -c 'curl -fsS "http://127.0.0.1:${PORT:-${API_PORT:-8000}}/health"' || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]

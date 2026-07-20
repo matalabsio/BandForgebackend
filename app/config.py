@@ -15,8 +15,11 @@ def _env_bool(v: object) -> bool:
 
 
 def _resolve_bind_port(default: int = 8000) -> int:
-    """API_PORT (explicit) → Railway PORT → default. Empty strings are ignored."""
-    for key in ("API_PORT", "PORT"):
+    """Railway PORT → API_PORT → default. Empty strings are ignored.
+
+    Prefer PORT so a Dockerfile/local API_PORT default cannot shadow Railway.
+    """
+    for key in ("PORT", "API_PORT"):
         raw = os.environ.get(key, "").strip()
         if raw:
             return int(raw)
@@ -292,7 +295,7 @@ class Settings(BaseSettings):
     )
     api_port: int = Field(
         default=8000,
-        validation_alias=AliasChoices("API_PORT", "PORT", "api_port"),
+        validation_alias=AliasChoices("PORT", "API_PORT", "api_port"),
     )
 
     @field_validator("api_port", mode="before")
