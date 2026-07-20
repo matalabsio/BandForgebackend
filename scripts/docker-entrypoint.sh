@@ -18,14 +18,19 @@ else
   BIND_PORT=8000
 fi
 
-echo "[bandforge-api] starting gunicorn on ${HOST}:${BIND_PORT} (PORT=${PORT:-unset} API_PORT=${API_PORT:-unset})" >&2
+ON_RAILWAY=false
+if [ -n "${RAILWAY_SERVICE_ID:-}" ] || [ -n "${RAILWAY_ENVIRONMENT:-}" ] || [ -n "${RAILWAY_PROJECT_ID:-}" ]; then
+  ON_RAILWAY=true
+fi
 
-# Railway public domains often target port 8000 while $PORT is 8080. Bind both in production
-# so health checks (PORT) and public ingress (8000) both reach gunicorn.
+echo "[bandforge-api] starting gunicorn on ${HOST}:${BIND_PORT} (PORT=${PORT:-unset} API_PORT=${API_PORT:-unset} railway=${ON_RAILWAY})" >&2
+
+# Railway: healthcheck uses $PORT (often 8080) but public domain Target Port may be 8000.
+# Bind both so internal health and public URL work without manual Target Port edits.
 BIND_PUBLIC_8000=false
-if [ "${APP_ENV:-production}" = "production" ] && [ -n "${PORT:-}" ] && [ "$BIND_PORT" != "8000" ]; then
+if [ "$ON_RAILWAY" = "true" ] && [ -n "${PORT:-}" ] && [ "$BIND_PORT" != "8000" ]; then
   BIND_PUBLIC_8000=true
-  echo "[bandforge-api] also binding ${HOST}:8000 for Railway public domain target port" >&2
+  echo "[bandforge-api] Railway dual-bind: ${HOST}:${BIND_PORT} + ${HOST}:8000" >&2
 fi
 
 WORKERS="${WEB_CONCURRENCY:-2}"
