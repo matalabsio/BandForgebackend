@@ -112,3 +112,41 @@ def test_empty_history_onboarding_recommendations():
     planned = apply_plan_rules(aggregate, week_start=date(2026, 7, 13))
     assert planned["study_plan"]["weeks"]
     assert planned["plan_week_start"] == "2026-07-13"
+
+
+def test_diagnostic_seeds_missing_skills_even_with_practice_history():
+    """Practice attempts must not block diagnostic bands from filling empty modules."""
+    agg = build_aggregate(
+        {
+            "target_band": 6.5,
+            "lr_scores": [
+                {
+                    "module": "reading",
+                    "band": 5.0,
+                    "skill_breakdown": {},
+                },
+                {
+                    "module": "reading",
+                    "band": 4.5,
+                    "skill_breakdown": {},
+                },
+            ],
+            "writing": [],
+            "speaking": [],
+            "diagnostic": {
+                "attempt": {
+                    "listening_band": 5.5,
+                    "reading_band": 5.5,
+                    "writing_band": 5.5,
+                    "speaking_band": 5.5,
+                },
+                "evaluations": [],
+            },
+        }
+    )
+    summary = agg["module_summary"]
+    assert summary["reading"]["latest"] == 5.0
+    assert summary["listening"]["latest"] == 5.5
+    assert summary["writing"]["latest"] == 5.5
+    assert summary["speaking"]["latest"] == 5.5
+    assert agg["current_band"] == 5.5

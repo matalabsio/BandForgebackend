@@ -288,11 +288,10 @@ def build_aggregate(sources: dict[str, Any]) -> dict[str, Any]:
     speaking = list(sources.get("speaking") or [])
     diagnostic = sources.get("diagnostic")
 
-    # Seed empty module history from diagnostic when thin
+    # Fill any missing skill from the latest completed diagnostic.
     if diagnostic and isinstance(diagnostic, dict):
         attempt = diagnostic.get("attempt") or {}
-        thin = len(lr) + len(writing) + len(speaking) < 2
-        if thin and attempt:
+        if attempt:
             for mod, key in (
                 ("listening", "listening_band"),
                 ("reading", "reading_band"),
