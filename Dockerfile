@@ -57,9 +57,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 USER app
 
 # Railway injects PORT at runtime (often 8080). Do not hardcode EXPOSE to 8000.
-EXPOSE 8080
+EXPOSE 8000 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD sh -c 'curl -fsS "http://127.0.0.1:${PORT:-${API_PORT:-8000}}/health"' || exit 1
+    CMD sh -c 'for p in ${PORT:-8080} 8000 8080; do curl -fsS "http://127.0.0.1:${p}/health" && exit 0; done; exit 1'
 
 ENTRYPOINT ["docker-entrypoint.sh"]

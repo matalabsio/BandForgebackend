@@ -1,30 +1,40 @@
-# Railway networking — fix public 502
+# Railway 502 — Application failed to respond
 
-If deploy logs show gunicorn listening (e.g. `0.0.0.0:8080`) and internal `/health` returns 200, but the public URL returns:
+Public URL returns:
 
 ```json
 {"status":"error","code":502,"message":"Application failed to respond"}
 ```
 
-with header `x-railway-fallback: true`, the edge proxy is routing to the **wrong port**.
+Header: `x-railway-fallback: true`
 
-## Fix (2 minutes)
+## Quick fix (do all steps)
 
-1. Railway → **adequate-surprise** (API service) → **Settings** → **Networking**
-2. Open the public domain (e.g. `adequate-surprise-production-0f84.up.railway.app`)
-3. **Target Port** — pick ONE of these (both work after dual-bind deploy):
-   - **Recommended:** clear Target Port (Railway routes to injected `$PORT`, e.g. `8080`)
-   - **Or** leave Target Port at `8000` (entrypoint binds `$PORT` + `8000`)
-4. Confirm deploy logs include: `Railway dual-bind: 0.0.0.0:8080 + 0.0.0.0:8000`
-5. Ensure **Public Networking** is enabled (service must not stay "Unexposed")
-6. Redeploy from latest `main` (must include dual-bind entrypoint), then:
+### 1. Redeploy latest `main`
 
-```bash
-curl -fsS https://YOUR-SERVICE.up.railway.app/health
-# {"status":"ok"}
+Railway → **adequate-surprise** → **Deployments** → **Redeploy** (or push to `main`).
+
+Deploy logs **must** show:
+
+```text
+[bandforge-api] railway=true ... bind=8080 8000
 ```
 
-## Required production variables
+(or similar with your `$PORT` plus 8000/8080)
+
+### 2. Fix Networking (most important)
+
+**Settings → Networking →** click `adequate-surprise-production-0f84.up.railway.app`
+
+| Option A (recommended) | Option B |
+|------------------------|----------|
+| **Delete** the public domain | Set **Target Port** to `8080` |
+| Click **Generate Domain** again | (match deploy log `Listening at ...:8080`) |
+| When asked for port, use **`8080`** | |
+
+Also ensure **Public Networking** is **ON** (not Unexposed).
+
+### 3. Set Railway variables
 
 ```env
 APP_ENV=production
@@ -34,4 +44,28 @@ GOOGLE_REDIRECT_URI=https://bandforge-web.vercel.app/api/auth/google/callback
 CORS_ORIGINS=https://bandforge-web.vercel.app
 ```
 
-See also: `BandForge Brand/docs/railway.md` in the monorepo.
+Optional if port mismatch persists:
+
+```env
+PORT=8000
+```
+
+Then set domain **Target Port** to `8000` to match.
+
+### 4. Verify
+
+```bash
+curl -fsS https://adequate-surprise-production-0f84.up.railway.app/health
+# {"status":"ok"}
+
+curl -fsS https://bandforge-web.vercel.app/api/health
+# {"frontend":"ok","backend":"ok",...}
+```
+
+## Why this happens
+
+Railway injects `PORT=8080` for healthchecks, but the public domain may route to port **8000**. The entrypoint binds **8080 + 8000 + $PORT** so both paths work — but only after a successful redeploy from current `main`.
+
+## Still broken?
+
+Paste deploy logs from container start through first `/health` request.
