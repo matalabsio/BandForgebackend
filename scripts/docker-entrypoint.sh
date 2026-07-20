@@ -2,8 +2,16 @@
 set -eu
 
 HOST="${API_HOST:-0.0.0.0}"
-# Empty API_PORT is ignored; Railway injects PORT at runtime.
-BIND_PORT="${API_PORT:-${PORT:-8000}}"
+# Railway injects PORT at runtime — prefer it over a baked-in API_PORT default.
+# Empty values are ignored. Local Docker/compose can still set API_PORT explicitly
+# when PORT is unset.
+if [ -n "${PORT:-}" ]; then
+  BIND_PORT="$PORT"
+elif [ -n "${API_PORT:-}" ]; then
+  BIND_PORT="$API_PORT"
+else
+  BIND_PORT=8000
+fi
 WORKERS="${WEB_CONCURRENCY:-2}"
 TIMEOUT="${GUNICORN_TIMEOUT:-120}"
 GRACEFUL="${GUNICORN_GRACEFUL_TIMEOUT:-30}"
