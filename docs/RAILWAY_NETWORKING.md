@@ -24,7 +24,7 @@ Deploy logs **must** show:
 
 ### 2. Fix Networking (most important)
 
-**Settings → Networking →** click `adequate-surprise-production-0f84.up.railway.app`
+**Settings → Networking →** click `adequate-surprise-production-96bc.up.railway.app`
 
 | Option A (recommended) | Option B |
 |------------------------|----------|
@@ -55,7 +55,7 @@ Then set domain **Target Port** to `8000` to match.
 ### 4. Verify
 
 ```bash
-curl -fsS https://adequate-surprise-production-0f84.up.railway.app/health
+curl -fsS https://adequate-surprise-production-96bc.up.railway.app/health
 # {"status":"ok"}
 
 curl -fsS https://bandforge-web.vercel.app/api/health
