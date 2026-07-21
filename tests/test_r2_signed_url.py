@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.storage.r2 import generate_signed_url
+from app.storage.r2 import generate_presigned_put_url, generate_signed_url
 
 
 def test_generate_signed_url_uses_settings_bucket():
@@ -25,4 +25,33 @@ def test_generate_signed_url_uses_settings_bucket():
         "get_object",
         Params={"Bucket": "my-bucket", "Key": "listening/m01/part-1/full.mp3"},
         ExpiresIn=60,
+    )
+
+
+def test_generate_presigned_put_url_signs_content_type():
+    with patch("app.storage.r2.get_settings") as gs, patch(
+        "app.storage.r2._s3_client"
+    ) as client_fn:
+        settings = MagicMock()
+        settings.r2_bucket_name = "my-bucket"
+        gs.return_value = settings
+        client = MagicMock()
+        client.generate_presigned_url.return_value = "https://example.com/upload"
+        client_fn.return_value = client
+
+        url = generate_presigned_put_url(
+            "speaking/attempt/response.webm",
+            content_type="audio/webm",
+            expiry=900,
+        )
+
+    assert url == "https://example.com/upload"
+    client.generate_presigned_url.assert_called_once_with(
+        "put_object",
+        Params={
+            "Bucket": "my-bucket",
+            "Key": "speaking/attempt/response.webm",
+            "ContentType": "audio/webm",
+        },
+        ExpiresIn=900,
     )

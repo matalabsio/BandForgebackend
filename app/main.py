@@ -16,6 +16,7 @@ from app.tutor import router as tutor_router
 from app.payments import router as payments_router
 from app.reading import router as reading_router
 from app.speaking import router as speaking_router
+from app.notifications.router import router as notifications_router
 from app.writing.router import router as writing_router
 from app.routers import attempts, dashboard, diagnostic, mock_attempts, status, tests
 
@@ -40,6 +41,28 @@ async def lifespan(_app: FastAPI):
         f"redis={redis_status()}"
     )
     if settings.app_env.strip().lower() == "production":
+        if not settings.resend_api_key:
+            raise RuntimeError(
+                "Speaking release email is enabled but RESEND_API_KEY is missing."
+            )
+        if "onboarding@resend.dev" in settings.email_from.lower():
+            raise RuntimeError(
+                "EMAIL_FROM must use a verified production sender, not onboarding@resend.dev."
+            )
+        if settings.meta_whatsapp_enabled:
+            required_meta = (
+                ("META_WHATSAPP_PHONE_NUMBER_ID", settings.meta_whatsapp_phone_number_id),
+                ("META_WHATSAPP_ACCESS_TOKEN", settings.meta_whatsapp_access_token),
+                ("META_WHATSAPP_TEMPLATE_NAME", settings.meta_whatsapp_template_name),
+                ("META_WHATSAPP_VERIFY_TOKEN", settings.meta_whatsapp_verify_token),
+                ("META_WHATSAPP_APP_SECRET", settings.meta_whatsapp_app_secret),
+            )
+            missing_meta = [name for name, value in required_meta if not value]
+            if missing_meta:
+                raise RuntimeError(
+                    "WhatsApp enabled in production but missing: "
+                    + ", ".join(missing_meta)
+                )
         for label, value in (
             ("FRONTEND_URL", settings.frontend_url),
             ("GOOGLE_REDIRECT_URI", settings.google_redirect_uri),
@@ -141,6 +164,7 @@ app.include_router(listening_router)
 app.include_router(reading_router)
 app.include_router(writing_router)
 app.include_router(speaking_router)
+app.include_router(notifications_router)
 app.include_router(payments_router)
 app.include_router(learning_router)
 app.include_router(practice_router)

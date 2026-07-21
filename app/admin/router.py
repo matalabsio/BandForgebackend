@@ -26,7 +26,7 @@ from app.admin.payments import (
     AdminPaymentsResponse,
     AdminSubscriptionsResponse,
 )
-from app.admin.dependencies import require_admin
+from app.admin.dependencies import require_admin, require_super_admin
 from app.admin.schemas import (
     AdminMockDetail,
     AdminMockListItem,
@@ -51,6 +51,7 @@ from app.admin.schemas import (
     IngestValidateResponse,
     ReviewAnalyticsResponse,
     ReviewHistoryResponse,
+    ReopenSpeakingReviewRequest,
     PatchAdminUserRequest,
     PatchDiagnosticSpeakingRequest,
     PatchMockStatusRequest,
@@ -336,6 +337,17 @@ def approve_speaking_route(
     )
 
 
+@router.post("/speaking/{review_id}/reopen", response_model=SpeakingReviewDetail)
+def reopen_speaking_route(
+    review_id: UUID,
+    body: ReopenSpeakingReviewRequest,
+    admin: Annotated[UserPublic, Depends(require_super_admin)],
+) -> SpeakingReviewDetail:
+    return speaking.reopen_speaking_review(
+        review_id=review_id, body=body, admin_id=admin.id
+    )
+
+
 @router.get("/speaking/{review_id}/history", response_model=ReviewHistoryResponse)
 def speaking_history_route(
     review_id: UUID,
@@ -344,7 +356,7 @@ def speaking_history_route(
     return audit_routes.get_review_history(
         resource_type="speaking_review",
         resource_id=review_id,
-        actions=["speaking.draft", "speaking.approve"],
+        actions=["speaking.draft", "speaking.approve", "speaking.reopen"],
     )
 
 

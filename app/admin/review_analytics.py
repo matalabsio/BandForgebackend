@@ -254,7 +254,21 @@ def get_review_analytics(
         ),
         overall_mae=overall_mae,
         criterion_mae=[
-            *speak["criterion_mae"],
-            *write["criterion_mae"],
+            CriterionMaeItem(
+                key=f"speaking:{item.key}",
+                label=f"Speaking · {item.label}",
+                mae=item.mae,
+                sample_count=item.sample_count,
+            )
+            for item in speak["criterion_mae"]
+        ]
+        + [
+            CriterionMaeItem(
+                key=f"writing:{item.key}",
+                label=f"Writing · {item.label}",
+                mae=item.mae,
+                sample_count=item.sample_count,
+            )
+            for item in write["criterion_mae"]
         ],
     )

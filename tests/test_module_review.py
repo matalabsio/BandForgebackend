@@ -263,3 +263,213 @@ def test_module_review_rejects_unsupported_module():
             mock_attempt_id=MOCK_ATTEMPT, module="writing", user_id=USER
         )
     assert exc.value.status_code == 400
+
+
+def test_speaking_module_review_matches_authoritative_release():
+    attempt_id = UUID(_uuid(77))
+    summary = {
+        **_attempt("speaking", 1),
+        "id": str(attempt_id),
+        "completed_at": "2026-07-21T06:00:00Z",
+    }
+    full_attempt = {
+        **summary,
+        "user_id": str(USER),
+        "mock_test_id": str(M01),
+        "mock_attempt_id": str(MOCK_ATTEMPT),
+        "speaking_manifest": [
+            {
+                "id": _uuid(901),
+                "prompt": "Tell me about your hometown.",
+                "options": {"duration_hint_sec": 45},
+            }
+        ],
+    }
+    review = {
+        "id": _uuid(902),
+        "status": "completed",
+        "human_band": 7.0,
+        "human_criteria_scores": {
+            "fluency": 7.0,
+            "lexical": 7.0,
+            "grammar": 7.0,
+            "pronunciation": 7.0,
+        },
+        "ai_scores": {"status": "ai_failed", "ai_band": 5.5},
+        "evaluation_status": "failed",
+        "released_at": "2026-07-21T06:30:00Z",
+        "approval_version": 1,
+        "reviewer_display_name": "Public Examiner",
+        "reviewer_credential_label": "Certified IELTS Examiner",
+    }
+
+    with (
+        patch.object(
+            module_review.mock_orchestrator,
+            "_load_mock_attempt_context",
+            return_value=({}, M01, [], [summary], {}),
+        ),
+        patch.object(
+            module_review.mock_orchestrator,
+            "_progress_from_context",
+            return_value=_fake_progress("speaking"),
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "get_attempt",
+            return_value=full_attempt,
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "get_speaking_review_for_attempt",
+            return_value=review,
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "list_speaking_responses",
+            return_value=[{"duration_sec": 40}],
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "transcription_progress",
+            return_value={"total": 1, "completed": 0, "failed": 1},
+        ),
+    ):
+        result = module_review.get_speaking_module_review(
+            mock_attempt_id=MOCK_ATTEMPT,
+            user_id=USER,
+        )
+
+    assert result.release_state == "released"
+    assert result.report_available is True
+    assert result.result_route == "report"
+    assert result.overall_band == 7.0
+    assert result.ai_band is None
+    assert result.score_source == "human"
+    assert result.reviewer is not None
+    assert result.reviewer.display_name == "Public Examiner"
+
+
+def test_speaking_module_review_only_exposes_completed_ai_evaluation():
+    attempt_id = UUID(_uuid(78))
+    summary = {
+        **_attempt("speaking", 1),
+        "id": str(attempt_id),
+        "completed_at": "2026-07-21T06:00:00Z",
+    }
+    full_attempt = {
+        **summary,
+        "user_id": str(USER),
+        "mock_test_id": str(M01),
+        "mock_attempt_id": str(MOCK_ATTEMPT),
+        "speaking_manifest": [
+            {
+                "id": _uuid(903),
+                "prompt": "Tell me about your hometown.",
+                "options": {"duration_hint_sec": 45},
+            }
+        ],
+    }
+    complete_review = {
+        "id": _uuid(904),
+        "status": "pending",
+        "human_band": None,
+        "ai_scores": {
+            "status": "ai_complete",
+            "ai_band": 6.5,
+            "fluency": 6.0,
+            "lexical": 6.5,
+            "grammar": 6.0,
+            "pronunciation": 6.5,
+            "evaluation": {
+                "strengths": ["Clear examples"],
+                "improvements": ["Extend Part 3 answers"],
+                "next_band_advice": "Use one example and one contrast.",
+            },
+        },
+        "evaluation_status": "completed",
+    }
+
+    with (
+        patch.object(
+            module_review.mock_orchestrator,
+            "_load_mock_attempt_context",
+            return_value=({}, M01, [], [summary], {}),
+        ),
+        patch.object(
+            module_review.mock_orchestrator,
+            "_progress_from_context",
+            return_value=_fake_progress("speaking"),
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "get_attempt",
+            return_value=full_attempt,
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "get_speaking_review_for_attempt",
+            return_value=complete_review,
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "list_speaking_responses",
+            return_value=[{"duration_sec": 40}],
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "transcription_progress",
+            return_value={"total": 1, "completed": 1, "failed": 0},
+        ),
+    ):
+        result = module_review.get_speaking_module_review(
+            mock_attempt_id=MOCK_ATTEMPT,
+            user_id=USER,
+        )
+
+    assert result.ai_band == 6.5
+    assert result.score_source == "ai_estimate"
+    assert result.criteria["fluency"] == 6.0
+    assert result.strengths == ["Clear examples"]
+    assert result.next_band_advice == "Use one example and one contrast."
+
+    stale_review = {
+        **complete_review,
+        "evaluation_status": "not_queued",
+        "ai_scores": {"status": "pending_multi_response", "ai_band": 8.0},
+    }
+    with (
+        patch.object(
+            module_review.mock_orchestrator,
+            "_load_mock_attempt_context",
+            return_value=({}, M01, [], [summary], {}),
+        ),
+        patch.object(
+            module_review.mock_orchestrator,
+            "_progress_from_context",
+            return_value=_fake_progress("speaking"),
+        ),
+        patch.object(module_review.speaking_repo, "get_attempt", return_value=full_attempt),
+        patch.object(
+            module_review.speaking_repo,
+            "get_speaking_review_for_attempt",
+            return_value=stale_review,
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "list_speaking_responses",
+            return_value=[{"duration_sec": 40}],
+        ),
+        patch.object(
+            module_review.speaking_repo,
+            "transcription_progress",
+            return_value={"total": 1, "completed": 1, "failed": 0},
+        ),
+    ):
+        stale = module_review.get_speaking_module_review(
+            mock_attempt_id=MOCK_ATTEMPT,
+            user_id=USER,
+        )
+
+    assert stale.ai_band is None
+    assert stale.score_source == "processing"

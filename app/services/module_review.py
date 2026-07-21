@@ -35,10 +35,7 @@ from app.schemas.mock_orchestrator import (
 )
 from app.services import mock_orchestrator
 from app.speaking import repository as speaking_repo
-from app.speaking.ai_evaluator import (
-    ai_evaluation_available as speaking_ai_available,
-    run_speaking_evaluation,
-)
+from app.speaking import service as speaking_service
 from app.writing import repository as writing_repo
 from app.writing.ai_evaluator import ai_evaluation_available as writing_ai_available
 
@@ -440,19 +437,6 @@ async def get_writing_module_review(
     )
 
 
-def _estimate_speaking_band(
-    *, duration_sec: int | None, hint_sec: int | None
-) -> float | None:
-    """Very rough v1 estimate from how fully the candidate used the time."""
-    if not duration_sec or duration_sec <= 0:
-        return None
-    target = hint_sec or 60
-    ratio = min(1.0, duration_sec / target)
-    # 30s of speech ≈ band 5, full time ≈ band 6.5 (placeholder until human review).
-    band = 5.0 + ratio * 1.5
-    return _round_half(band)
-
-
 def _speaking_delivery_notes(
     *, duration_sec: int | None, hint_sec: int | None
 ) -> list[str]:
@@ -495,62 +479,139 @@ def get_speaking_module_review(
             status.HTTP_409_CONFLICT,
             detail="Submit your speaking recording before viewing the review.",
         )
-    attempt = sorted(speaking_attempts, key=lambda a: int(a.get("part") or 1))[0]
+    attempt_summary = max(
+        speaking_attempts,
+        key=lambda a: str(a.get("completed_at") or a.get("started_at") or ""),
+    )
+    attempt = speaking_repo.get_attempt(UUID(str(attempt_summary["id"])))
     attempt_id = UUID(str(attempt["id"]))
     part = int(attempt.get("part") or 1)
 
     review = speaking_repo.get_speaking_review_for_attempt(attempt_id) or {}
     meta = review.get("submission_meta") or {}
     ai_scores = review.get("ai_scores") or {}
-    duration_sec = meta.get("duration_sec")
-    duration_sec = int(duration_sec) if duration_sec is not None else None
-
-    questions = speaking_repo.list_questions_for_part(
-        mock_test_id=mock_test_id, part=part
+    responses = speaking_repo.list_speaking_responses(attempt_id=attempt_id)
+    response_durations = [
+        int(item["duration_sec"])
+        for item in responses
+        if item.get("duration_sec") is not None
+    ]
+    duration_raw = meta.get("duration_sec")
+    duration_sec = (
+        sum(response_durations)
+        if response_durations
+        else int(duration_raw) if duration_raw is not None else None
     )
-    prompts = [str(q.get("prompt") or "") for q in questions if q.get("prompt")]
-    hint_sec = None
-    if questions:
-        opts = questions[0].get("options")
-        if isinstance(opts, dict) and opts.get("duration_hint_sec") is not None:
-            hint_sec = int(opts["duration_hint_sec"])
 
-    ai_band = ai_scores.get("ai_band")
-    ai_status = ai_scores.get("status") if isinstance(ai_scores, dict) else None
-
-    if ai_status in ("ai_complete", "ai_stub"):
-        ai_band = ai_scores.get("ai_band")
-    elif (
-        review.get("id")
-        and ai_status == "pending"
-        and speaking_ai_available()
-    ):
-        run_speaking_evaluation(UUID(str(review["id"])))
-        review = speaking_repo.get_speaking_review_for_attempt(attempt_id) or {}
-        ai_scores = review.get("ai_scores") or {}
-        ai_band = ai_scores.get("ai_band")
-
-    if ai_band is None:
-        ai_band = _estimate_speaking_band(duration_sec=duration_sec, hint_sec=hint_sec)
-        if ai_band is not None and review.get("id") and ai_status not in (
-            "ai_complete",
-            "ai_stub",
-        ):
-            merged = {**(ai_scores if isinstance(ai_scores, dict) else {}), "ai_band": ai_band}
-            speaking_repo.update_speaking_review_ai_scores(
-                review_id=UUID(str(review["id"])), ai_scores=merged
-            )
-    ai_band = float(ai_band) if ai_band is not None else None
-
-    persona = (
-        f"Your AI-estimated Speaking band is about {ai_band:.1f}. "
-        "A certified examiner will confirm your official band within 24 hours."
-        if ai_band is not None
-        else (
-            "Your recording is submitted. A certified examiner will send your "
-            "official Speaking band within 24 hours."
+    manifest = attempt.get("speaking_manifest")
+    questions = (
+        [item for item in manifest if isinstance(item, dict)]
+        if isinstance(manifest, list)
+        else speaking_repo.list_questions_for_part(
+            mock_test_id=mock_test_id, part=part
         )
     )
+    prompts = [str(q.get("prompt") or "") for q in questions if q.get("prompt")]
+    hints = [
+        int((q.get("options") or {}).get("duration_hint_sec"))
+        for q in questions
+        if isinstance(q.get("options"), dict)
+        and (q.get("options") or {}).get("duration_hint_sec") is not None
+    ]
+    hint_sec = sum(hints) if hints else None
+
+    transcription_progress = speaking_repo.transcription_progress(
+        attempt_id=attempt_id
+    )
+    release = speaking_service.resolve_release_state(
+        attempt=attempt,
+        review=review,
+        transcription_progress=transcription_progress,
+    )
+
+    ai_status = (
+        str(ai_scores.get("status"))
+        if isinstance(ai_scores, dict) and ai_scores.get("status")
+        else None
+    )
+    evaluation_status = (
+        str(review.get("evaluation_status"))
+        if review.get("evaluation_status")
+        else None
+    )
+    ai_complete = (
+        evaluation_status == "completed"
+        and ai_status in ("ai_complete", "ai_stub")
+    )
+    ai_band: float | None = None
+    if ai_complete:
+        try:
+            candidate_band = float(ai_scores.get("ai_band"))
+        except (TypeError, ValueError):
+            candidate_band = -1
+        if 0 <= candidate_band <= 9 and candidate_band * 2 == round(candidate_band * 2):
+            ai_band = candidate_band
+
+    evaluation = (
+        ai_scores.get("evaluation")
+        if ai_complete and isinstance(ai_scores.get("evaluation"), dict)
+        else {}
+    )
+    criteria = {
+        key: float(ai_scores[key])
+        for key in ("fluency", "lexical", "grammar", "pronunciation")
+        if isinstance(ai_scores.get(key), (int, float))
+    }
+    strengths = [
+        str(item)
+        for item in evaluation.get("strengths", [])
+        if isinstance(item, str) and item.strip()
+    ]
+    improvements = [
+        str(item)
+        for item in evaluation.get("improvements", [])
+        if isinstance(item, str) and item.strip()
+    ]
+    next_band_advice = evaluation.get("next_band_advice")
+    next_band_advice = (
+        str(next_band_advice).strip() if isinstance(next_band_advice, str) else None
+    )
+
+    human_band = (
+        float(review["human_band"])
+        if release.release_state == "released" and review.get("human_band") is not None
+        else None
+    )
+    if human_band is not None:
+        score_source = "human"
+        persona = f"Your examiner-released Speaking band is {human_band:.1f}."
+    elif release.release_state == "withdrawn":
+        score_source = "unavailable"
+        persona = (
+            "Your Speaking result was withdrawn for examiner review. "
+            "An updated result will be published when the review is complete."
+        )
+    elif ai_band is not None:
+        score_source = "ai_estimate"
+        persona = (
+            f"Your AI-estimated Speaking band is about {ai_band:.1f}. "
+            "A certified examiner will confirm your official band within 24 hours."
+        )
+    elif ai_status == "ai_failed" or evaluation_status == "failed":
+        score_source = "failed"
+        persona = (
+            "AI analysis could not finish. Your recording is safe and remains "
+            "queued for certified examiner review."
+        )
+    elif review:
+        score_source = "processing"
+        persona = (
+            "Your recording is submitted and AI analysis is still processing. "
+            "A certified examiner will confirm the official band."
+        )
+    else:
+        score_source = "unavailable"
+        persona = "Your Speaking result is not available yet."
 
     progress = mock_orchestrator._progress_from_context(
         row=row,
@@ -568,11 +629,21 @@ def get_speaking_module_review(
         duration_seconds=duration_sec,
         duration_hint_seconds=hint_sec,
         ai_band=ai_band,
+        overall_band=human_band,
+        score_source=score_source,
+        ai_status=ai_status,
+        evaluation_status=evaluation_status,
+        criteria=criteria,
+        strengths=strengths,
+        improvements=improvements,
+        next_band_advice=next_band_advice,
         prompts=prompts,
         delivery_notes=_speaking_delivery_notes(
             duration_sec=duration_sec, hint_sec=hint_sec
         ),
         persona_message=persona,
+        **release.model_dump(),
+        result_route="report" if release.report_available else "pending",
         next_module=progress.next_module,
         next_part=progress.next_part,
     )

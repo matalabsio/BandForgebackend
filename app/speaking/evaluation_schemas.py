@@ -21,6 +21,8 @@ class BandScores(BaseModel):
     GRA: float
     P: float
     P_confidence: float = Field(ge=0.0, le=1.0)
+    P_inference_source: Literal["transcript_inferred"] = "transcript_inferred"
+    P_advisory_only: Literal[True] = True
     overall: float
 
     @field_validator("FC", "LR", "GRA", "P", "overall")
@@ -47,6 +49,12 @@ class EvidenceQuote(BaseModel):
     criterion: Literal["FC", "LR", "GRA", "P"]
     polarity: Literal["strength", "weakness"]
     part: int = Field(ge=1, le=3)
+    response_id: str | None = None
+    question_id: str | None = None
+    issue: str | None = None
+    title: str | None = None
+    explanation: str | None = None
+    suggestion: str | None = None
 
 
 class RecurringPattern(BaseModel):
@@ -203,6 +211,32 @@ def validate_quotes_in_transcript(
             raise ValueError(
                 f"evidence_quotes.quote not found in transcript: {item.quote!r}"
             )
+
+
+def validate_evidence_against_responses(
+    evaluation: SpeakingEvaluation,
+    responses: list[dict[str, Any]],
+) -> None:
+    """Validate v2 evidence against its exact frozen response boundary."""
+    by_id = {str(item["response_id"]): item for item in responses}
+    for evidence in evaluation.evidence_quotes:
+        if not evidence.response_id or not evidence.question_id:
+            raise ValueError("v2 evidence requires response_id and question_id")
+        response = by_id.get(evidence.response_id)
+        if response is None:
+            raise ValueError(f"unknown evidence response_id: {evidence.response_id}")
+        if str(response.get("question_id")) != evidence.question_id:
+            raise ValueError("evidence question_id does not match referenced response")
+        if int(response.get("part") or 0) != evidence.part:
+            raise ValueError("evidence part does not match referenced response")
+        if evidence.quote not in str(response.get("transcript") or ""):
+            raise ValueError(
+                f"evidence quote not found in response {evidence.response_id}: "
+                f"{evidence.quote!r}"
+            )
+        for field in ("issue", "title", "explanation", "suggestion"):
+            if not str(getattr(evidence, field) or "").strip():
+                raise ValueError(f"v2 evidence requires {field}")
 
 
 def evaluation_to_admin_criteria(evaluation: SpeakingEvaluation) -> dict[str, float]:

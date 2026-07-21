@@ -36,6 +36,7 @@ from app.schemas.mock_orchestrator import (
     MockCatalogItem,
     MockCheckpointResponse,
     ModuleProgress,
+    ModuleResultState,
     SectionScore,
     StartMockResponse,
 )
@@ -57,8 +58,17 @@ def _first_enabled_module(modules: list[dict[str, Any]]) -> str:
     return str(ordered[0]["module"])
 
 
+def _required_attempt_parts(mock_test_id: UUID, module: str) -> list[int]:
+    question_parts = repo.live_question_parts(
+        mock_test_id=mock_test_id,
+        module=module,
+    )
+    # Speaking Parts 1–3 are captured and finalized as one durable attempt.
+    return [1] if module == "speaking" and question_parts else question_parts
+
+
 def _first_part_for_module(mock_test_id: UUID, module: str) -> int:
-    parts = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
+    parts = _required_attempt_parts(mock_test_id, module)
     return parts[0] if parts else 1
 
 
@@ -68,7 +78,7 @@ def _next_part_for_module(
     module: str,
     module_attempts: list[dict[str, Any]],
 ) -> int:
-    parts = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
+    parts = _required_attempt_parts(mock_test_id, module)
     if not parts:
         return 1
     done = {
@@ -90,7 +100,7 @@ def _module_parts_complete(
     module: str,
     module_attempts: list[dict[str, Any]],
 ) -> bool:
-    required = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
+    required = _required_attempt_parts(mock_test_id, module)
     completed_parts = {
         int(a["part"])
         for a in module_attempts
@@ -150,6 +160,184 @@ def _module_rollup_band_from_scores(
     return round(sum(bands) / len(bands), 1)
 
 
+_RESULT_MODULES = ("listening", "reading", "writing", "speaking")
+_AI_COMPLETE_STATUSES = frozenset({"ai_complete", "ai_stub"})
+_AI_FAILED_STATUSES = frozenset({"ai_failed", "failed"})
+_AI_PROCESSING_STATUSES = frozenset(
+    {"pending", "pending_multi_response", "queued", "processing", "retry_wait"}
+)
+
+
+def _latest_completed_attempts_by_part(
+    module_attempts: list[dict[str, Any]], module: str
+) -> dict[int, dict[str, Any]]:
+    completed = [
+        attempt
+        for attempt in module_attempts
+        if attempt.get("module") == module
+        and attempt.get("status") == "completed"
+        and attempt.get("part") is not None
+    ]
+    completed.sort(key=lambda attempt: str(attempt.get("completed_at") or ""), reverse=True)
+    by_part: dict[int, dict[str, Any]] = {}
+    for attempt in completed:
+        by_part.setdefault(int(attempt["part"]), attempt)
+    return by_part
+
+
+def _valid_ai_band(module: str, review: dict[str, Any]) -> float | None:
+    ai_scores = review.get("ai_scores")
+    if not isinstance(ai_scores, dict):
+        return None
+    if str(ai_scores.get("status") or "") not in _AI_COMPLETE_STATUSES:
+        return None
+    if module == "speaking" and review.get("evaluation_status") != "completed":
+        return None
+    band = ai_scores.get("ai_band")
+    try:
+        parsed = float(band) if band is not None else None
+    except (TypeError, ValueError):
+        return None
+    if parsed is None or not 0 <= parsed <= 9 or parsed * 2 != round(parsed * 2):
+        return None
+    return parsed
+
+
+def _build_provisional_result_contract(
+    *,
+    mock_test_id: UUID,
+    modules: list[dict[str, Any]],
+    module_attempts: list[dict[str, Any]],
+    scores_by_attempt: dict[str, dict[str, Any]],
+    reviews_by_attempt: dict[str, dict[str, Any]],
+    final_bands: dict[str, float | None],
+    official_aggregate_band: float | None,
+) -> tuple[dict[str, ModuleResultState], float | None, bool, bool]:
+    enabled = {
+        str(module["module"])
+        for module in modules
+        if module.get("is_enabled")
+    }
+    states: dict[str, ModuleResultState] = {}
+    has_pending_reviews = False
+
+    for module in _RESULT_MODULES:
+        if module not in enabled:
+            states[module] = ModuleResultState(source="unavailable")
+            continue
+
+        final_band = final_bands.get(module)
+        if final_band is not None:
+            states[module] = ModuleResultState(band=final_band, source="final")
+            continue
+
+        attempts = [
+            attempt
+            for attempt in module_attempts
+            if attempt.get("module") == module
+        ]
+        if module in ("listening", "reading"):
+            source = "processing" if attempts else "unavailable"
+            states[module] = ModuleResultState(source=source)
+            continue
+
+        required_parts = _required_attempt_parts(mock_test_id, module)
+        completed_by_part = _latest_completed_attempts_by_part(module_attempts, module)
+        part_bands: list[float] = []
+        used_ai = False
+        saw_processing = False
+        saw_failed = False
+        saw_review = False
+
+        for part in required_parts:
+            attempt = completed_by_part.get(part)
+            if attempt is None:
+                saw_processing = saw_processing or bool(attempts)
+                continue
+            attempt_id = str(attempt["id"])
+            score = scores_by_attempt.get(attempt_id)
+            if score and score.get("band") is not None:
+                part_bands.append(float(score["band"]))
+                continue
+
+            review = reviews_by_attempt.get(attempt_id) or {}
+            if review:
+                saw_review = True
+                review_status = str(review.get("status") or "pending")
+                if review_status in {"pending", "in_review"}:
+                    has_pending_reviews = True
+                ai_band = _valid_ai_band(module, review)
+                if ai_band is not None:
+                    part_bands.append(ai_band)
+                    used_ai = True
+                    continue
+                ai_scores = review.get("ai_scores")
+                ai_status = (
+                    str(ai_scores.get("status") or "")
+                    if isinstance(ai_scores, dict)
+                    else ""
+                )
+                evaluation_status = str(review.get("evaluation_status") or "")
+                if ai_status in _AI_FAILED_STATUSES or evaluation_status == "failed":
+                    saw_failed = True
+                elif (
+                    ai_status in _AI_PROCESSING_STATUSES
+                    or evaluation_status
+                    in {"queued", "processing", "retry_wait", "not_queued"}
+                ):
+                    saw_processing = True
+
+        if required_parts and len(part_bands) == len(required_parts):
+            source = "ai_estimate" if used_ai else "final"
+            states[module] = ModuleResultState(
+                band=round(sum(part_bands) / len(part_bands), 1),
+                source=source,
+            )
+        elif saw_processing:
+            states[module] = ModuleResultState(source="processing")
+        elif saw_failed:
+            states[module] = ModuleResultState(source="failed")
+        elif saw_review:
+            states[module] = ModuleResultState(source="awaiting_examiner")
+        else:
+            source = "processing" if attempts else "unavailable"
+            states[module] = ModuleResultState(source=source)
+
+    enabled_states = [states[module] for module in _RESULT_MODULES if module in enabled]
+    fully_final = bool(enabled_states) and all(
+        state.source == "final" for state in enabled_states
+    )
+    provisional_bands = [
+        state.band
+        for state in enabled_states
+        if state.source in {"final", "ai_estimate"} and state.band is not None
+    ]
+    provisional_aggregate = (
+        (
+            official_aggregate_band
+            if official_aggregate_band is not None
+            else (
+                round(sum(provisional_bands) / len(provisional_bands), 1)
+                if provisional_bands
+                else None
+            )
+        )
+        if fully_final
+        else (
+            round(sum(provisional_bands) / len(provisional_bands), 1)
+            if provisional_bands
+            else None
+        )
+    )
+    aggregate_is_provisional = provisional_aggregate is not None and not fully_final
+    return (
+        states,  # type: ignore[return-value]
+        provisional_aggregate,
+        aggregate_is_provisional,
+        has_pending_reviews,
+    )
+
+
 def _compute_module_statuses(
     *,
     mock_test_id: UUID,
@@ -170,7 +358,7 @@ def _compute_module_statuses(
             module=mod,
             module_attempts=mod_attempts,
         )
-        live_parts = repo.live_question_parts(mock_test_id=mock_test_id, module=mod)
+        live_parts = _required_attempt_parts(mock_test_id, mod)
         done_parts = {
             int(a["part"])
             for a in mod_attempts
@@ -502,6 +690,29 @@ def _progress_from_context(
         scores_by_attempt=scores_by_attempt if include_bands else {},
         include_bands=include_bands,
     )
+    if (
+        module_progress
+        and all(item.status == "completed" for item in module_progress)
+        and str(row.get("status")) != "completed"
+    ):
+        completed_at = max(
+            (
+                str(item.get("completed_at"))
+                for item in module_attempts
+                if item.get("completed_at")
+            ),
+            default=datetime.now(UTC).isoformat(),
+        )
+        repair = {
+            "status": "completed",
+            "completed_at": completed_at,
+            "current_module": None,
+        }
+        repo.update_mock_attempt(
+            mock_attempt_id=UUID(str(row["id"])),
+            fields=repair,
+        )
+        row = {**row, **repair}
 
     next_module: str | None = None
     next_part: int | None = None
@@ -619,6 +830,32 @@ def get_summary(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptSummary:
         module_attempts=module_attempts,
         scores_by_attempt=scores,
     )
+    review_attempt_ids = [
+        UUID(str(attempt["id"]))
+        for attempt in module_attempts
+        if attempt.get("module") in {"writing", "speaking"}
+        and attempt.get("status") == "completed"
+    ]
+    reviews = repo.list_module_reviews_by_attempt_ids(review_attempt_ids)
+    (
+        module_result_states,
+        provisional_aggregate_band,
+        aggregate_is_provisional,
+        has_pending_reviews,
+    ) = _build_provisional_result_contract(
+        mock_test_id=mock_test_id,
+        modules=modules,
+        module_attempts=module_attempts,
+        scores_by_attempt=scores,
+        reviews_by_attempt=reviews,
+        final_bands={
+            "listening": listening_band,
+            "reading": reading_band,
+            "writing": writing_band,
+            "speaking": speaking_band,
+        },
+        official_aggregate_band=progress.aggregate_band,
+    )
 
     return MockAttemptSummary(
         **progress.model_dump(),
@@ -627,6 +864,10 @@ def get_summary(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptSummary:
         listening_band=listening_band,
         writing_band=writing_band,
         speaking_band=speaking_band,
+        provisional_aggregate_band=provisional_aggregate_band,
+        aggregate_is_provisional=aggregate_is_provisional,
+        has_pending_reviews=has_pending_reviews,
+        module_result_states=module_result_states,  # type: ignore[arg-type]
     )
 
 
@@ -1406,7 +1647,7 @@ def on_module_attempt_completed(
         module_attempts=module_attempts,
     )
     if parts_incomplete:
-        parts = repo.live_question_parts(mock_test_id=mock_test_id, module=module)
+        parts = _required_attempt_parts(mock_test_id, module)
         done = {
             int(a["part"])
             for a in module_attempts

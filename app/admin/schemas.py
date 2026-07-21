@@ -335,11 +335,58 @@ class HumanCriteriaScores(BaseModel):
     pronunciation: float = Field(ge=0, le=9)
 
 
+class SpeakingAdminEvidence(BaseModel):
+    quote: str
+    criterion: Literal["FC", "LR", "GRA", "P"]
+    polarity: Literal["strength", "weakness"]
+    part: int = Field(ge=1, le=3)
+    response_id: str | None = None
+    question_id: str | None = None
+    issue: str | None = None
+    title: str | None = None
+    explanation: str | None = None
+    suggestion: str | None = None
+    advisory_only: bool = False
+    inference_source: Literal["audio", "transcript_inferred"] | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class SpeakingAdminPronunciationAdvisory(BaseModel):
+    inference_source: Literal["transcript_inferred"] = "transcript_inferred"
+    advisory_only: Literal[True] = True
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    low_confidence: bool = True
+    released_score_authority: Literal["human_examiner"] = "human_examiner"
+
+
+class SpeakingSubmissionResponseMeta(BaseModel):
+    response_id: UUID
+    question_id: UUID
+    part: int
+    sequence_number: int
+    duration_sec: int
+    audio_url: str
+    audio_play_url: str | None = None
+    prompt: str | None = None
+    status: str | None = None
+    confirmed_at: datetime | None = None
+    transcription_status: str | None = None
+    transcript: str | None = None
+    fluency_metrics: dict[str, Any] | None = None
+    ai_status: str | None = None
+    ai_evidence: list[SpeakingAdminEvidence] = Field(default_factory=list)
+    ai_result: dict[str, Any] | None = None
+
+
 class SpeakingSubmissionMeta(BaseModel):
     part: int | None = None
     part_label: str | None = None
     cue_card: str | None = None
     prompt_title: str | None = None
+    manifest_hash: str | None = None
+    response_count: int | None = None
+    responses: list[SpeakingSubmissionResponseMeta] = Field(default_factory=list)
+    parts: list[int] = Field(default_factory=list)
 
 
 class SpeakingQueueItem(BaseModel):
@@ -373,6 +420,17 @@ class SpeakingReviewDetail(BaseModel):
     audio_url: str | None = None
     audio_play_url: str | None = None
     ai_scores: dict[str, Any] | None = None
+    part_metrics: dict[str, Any] = Field(default_factory=dict)
+    attempt_metrics: dict[str, Any] | None = None
+    response_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    transcription_progress: dict[str, int] | None = None
+    ai_status: str | None = None
+    ai_evidence: list[SpeakingAdminEvidence] = Field(default_factory=list)
+    ai_pronunciation_advisory: SpeakingAdminPronunciationAdvisory | None = None
+    evaluation_status: str | None = None
+    evaluation_error: str | None = None
+    approval_version: int = 0
+    reopened_at: datetime | None = None
     student_name: str | None = None
     student_email: str | None = None
     student_target_band: float | None = None
@@ -391,6 +449,14 @@ class PatchSpeakingReviewRequest(BaseModel):
 class ApproveSpeakingRequest(BaseModel):
     human_criteria_scores: HumanCriteriaScores
     reviewer_notes: str | None = None
+    audio_confirmed: bool
+    confirmation: Literal["confirm_final_approval"]
+    idempotency_key: str = Field(min_length=16, max_length=128)
+    ai_override_note: str | None = Field(default=None, max_length=2000)
+
+
+class ReopenSpeakingReviewRequest(BaseModel):
+    reason: str = Field(min_length=10, max_length=2000)
 
 
 class WritingHumanCriteriaScores(BaseModel):

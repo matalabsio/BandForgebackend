@@ -9,9 +9,18 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.test_engine import TestSummary
+from app.speaking.schemas import ReleaseState, SpeakingReviewerPublic
 
 ModuleName = Literal["reading", "listening", "writing", "speaking"]
 ModuleProgressStatus = Literal["locked", "available", "in_progress", "completed"]
+ModuleResultSource = Literal[
+    "final",
+    "ai_estimate",
+    "processing",
+    "failed",
+    "awaiting_examiner",
+    "unavailable",
+]
 
 
 class ModuleProgress(BaseModel):
@@ -86,12 +95,23 @@ class SectionScore(BaseModel):
     band: float | None = None
 
 
+class ModuleResultState(BaseModel):
+    band: float | None = None
+    source: ModuleResultSource
+
+
 class MockAttemptSummary(MockAttemptProgress):
     sections: list[SectionScore] = Field(default_factory=list)
     reading_band: float | None = None
     listening_band: float | None = None
     writing_band: float | None = None
     speaking_band: float | None = None
+    provisional_aggregate_band: float | None = None
+    aggregate_is_provisional: bool = False
+    has_pending_reviews: bool = False
+    module_result_states: dict[ModuleName, ModuleResultState] = Field(
+        default_factory=dict
+    )
 
 
 class InProgressMockAttempt(BaseModel):
@@ -205,7 +225,7 @@ class WritingModuleReviewResponse(BaseModel):
 
 
 class SpeakingModuleReviewResponse(BaseModel):
-    """Speaking AI estimate + delivery notes before human review."""
+    """Speaking release status with authoritative human result after release."""
 
     mock_attempt_id: UUID
     attempt_id: UUID
@@ -213,8 +233,24 @@ class SpeakingModuleReviewResponse(BaseModel):
     duration_seconds: int | None = None
     duration_hint_seconds: int | None = None
     ai_band: float | None = None
+    overall_band: float | None = None
+    score_source: Literal[
+        "human", "ai_estimate", "processing", "failed", "unavailable"
+    ]
+    ai_status: str | None = None
+    evaluation_status: str | None = None
+    criteria: dict[str, float] = Field(default_factory=dict)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    next_band_advice: str | None = None
     prompts: list[str] = Field(default_factory=list)
     delivery_notes: list[str] = Field(default_factory=list)
     persona_message: str
+    release_state: ReleaseState
+    report_available: bool
+    released_at: datetime | None = None
+    approval_version: int = 0
+    reviewer: SpeakingReviewerPublic | None = None
+    result_route: Literal["pending", "report"]
     next_module: ModuleName | None = None
     next_part: int | None = None
