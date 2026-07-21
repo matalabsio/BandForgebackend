@@ -37,3 +37,10 @@ class EvaluationProvider(Protocol):
         prompts: list[str],
         part: int,
     ) -> SpeakingEvaluation: ...
+
+    async def evaluate_attempt(
+        self,
+        *,
+        responses: list[dict[str, Any]],
+        fluency_metrics: dict[str, Any],
+    ) -> SpeakingEvaluation: ...

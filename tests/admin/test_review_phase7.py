@@ -93,6 +93,8 @@ def test_approve_speaking_logs_ai_snapshot():
             {
                 "id": str(REVIEW_ID),
                 "status": "pending",
+                "attempt_id": str(ATTEMPT_ID),
+                "audio_url": "speaking/audio.webm",
                 "ai_scores": {
                     "fluency": 6.0,
                     "lexical": 6.0,
@@ -102,29 +104,23 @@ def test_approve_speaking_logs_ai_snapshot():
             }
         ]
     )
-    attempt_id_chain = _table_chain([{"attempt_id": str(ATTEMPT_ID)}])
     attempt_row_chain = _table_chain([])
-    update_chain = _table_chain()
-    upsert_chain = _table_chain()
+    responses_chain = _table_chain([{"id": str(uuid4()), "status": "confirmed"}])
 
     mock_client = MagicMock()
+    rpc_result = MagicMock()
+    rpc_result.data = {"applied": True, "attempt_id": str(ATTEMPT_ID), "version": 1}
+    mock_client.rpc.return_value.execute.return_value = rpc_result
 
     def table_side_effect(name):
         if name == "speaking_reviews":
-            calls = table_side_effect.speaking_calls
-            table_side_effect.speaking_calls += 1
-            if calls == 0:
-                return existing_chain
-            if calls == 1:
-                return update_chain
-            return attempt_id_chain
-        if name == "module_scores":
-            return upsert_chain
+            return existing_chain
+        if name == "speaking_responses":
+            return responses_chain
         if name == "test_attempts":
             return attempt_row_chain
         return _table_chain()
 
-    table_side_effect.speaking_calls = 0
     mock_client.table.side_effect = table_side_effect
 
     detail = SpeakingReviewDetail(
@@ -141,16 +137,19 @@ def test_approve_speaking_logs_ai_snapshot():
             grammar=7.0,
             pronunciation=7.0,
         ),
+        audio_confirmed=True,
+        confirmation="confirm_final_approval",
+        idempotency_key="approval-key-0001",
+        ai_override_note="Recording supports the higher human score.",
     )
 
     with (
         patch("app.admin.speaking.get_supabase", return_value=mock_client),
-        patch("app.admin.speaking.log_admin_action") as log_action,
         patch("app.admin.speaking.get_speaking_detail", return_value=detail),
     ):
         approve_speaking_review(review_id=REVIEW_ID, body=body, admin_id=ADMIN_ID)
 
-    meta = log_action.call_args.kwargs["metadata"]
+    meta = mock_client.rpc.call_args.args[1]["p_audit_metadata"]
     assert meta["ai_band"] == 6.0
     assert meta["human_band"] == 7.0
     assert meta["overridden"] is True

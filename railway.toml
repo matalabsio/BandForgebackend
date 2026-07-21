@@ -5,6 +5,9 @@ dockerfilePath = "Dockerfile"
 # API service only. For hourly payment reconcile, add a separate Railway Cron Job
 # with the same env vars and start command: bash scripts/cron_reconcile.sh
 # Schedule: 0 * * * * — see Razorpay.md → Phase 9 — Production readiness.
+# Speaking release delivery must run as a separate always-on Railway service
+# using the same image/env and start command: bash scripts/run_notification_worker.sh
+# Optional recovery cron (every 5 minutes): bash scripts/sweep_notification_outbox.sh
 
 [deploy]
 healthcheckPath = "/health"

@@ -652,7 +652,8 @@ async def update_user_profile(
 
     raw_phone = (body.phone or "").strip()
     if not raw_phone:
-        payload["phone"] = None  # preserve current clear-on-empty behavior
+        # DB trigger atomically clears verification/WhatsApp enablement iff changed.
+        payload["phone"] = None
     else:
         digits = normalize_india_phone(raw_phone)
         if not is_valid_india_phone(digits):
@@ -677,6 +678,7 @@ async def update_user_profile(
                     e164,
                 )
             else:
+                # DB trigger performs exact change detection in this same UPDATE.
                 payload["phone"] = e164
     # on a warning, phone key is omitted -> existing value untouched
 

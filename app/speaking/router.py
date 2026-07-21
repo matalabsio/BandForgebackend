@@ -13,13 +13,55 @@ from app.diagnostic.access import assert_mock_access
 from app.skill_program_gate import assert_skill_program_module_start
 from app.speaking import service
 from app.speaking.schemas import (
+    ConfirmSpeakingResponseRequest,
+    CreateSpeakingResponseSessionRequest,
+    FinalizeSpeakingRequest,
+    SpeakingEligibilityResponse,
     SpeakingPendingResponse,
     SpeakingReportResponse,
+    SpeakingResponsePublic,
+    SpeakingResponseSession,
     StartSpeakingResponse,
     SubmitSpeakingResponse,
+    NotificationPreferencesResponse,
+    PatchNotificationPreferencesRequest,
 )
+from app.notifications import preferences
 
 router = APIRouter(prefix="/api/speaking", tags=["speaking"])
+
+
+@router.get(
+    "/notification-preferences", response_model=NotificationPreferencesResponse
+)
+def notification_preferences(
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> NotificationPreferencesResponse:
+    return preferences.get_preferences(current_user.id)
+
+
+@router.patch(
+    "/notification-preferences", response_model=NotificationPreferencesResponse
+)
+def update_notification_preferences(
+    body: PatchNotificationPreferencesRequest,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> NotificationPreferencesResponse:
+    return preferences.patch_preferences(current_user.id, body)
+
+
+@router.get("/{mock_test_id}/eligibility", response_model=SpeakingEligibilityResponse)
+def speaking_eligibility(
+    mock_test_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+    mock_attempt_id: UUID | None = None,
+) -> SpeakingEligibilityResponse:
+    assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    return service.get_eligibility(
+        mock_test_id=mock_test_id,
+        user_id=current_user.id,
+        mock_attempt_id=mock_attempt_id,
+    )
 
 
 @router.post("/{mock_test_id}/start", response_model=StartSpeakingResponse)
@@ -52,6 +94,101 @@ def start_speaking(
     )
 
 
+@router.post(
+    "/attempts/{attempt_id}/responses",
+    response_model=SpeakingResponsePublic,
+)
+async def upload_speaking_response(
+    attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
+    question_id: Annotated[UUID, Form()],
+    part: Annotated[int, Form(ge=1, le=3)],
+    sequence_number: Annotated[int, Form(ge=1)],
+    duration_sec: Annotated[int, Form(ge=5)],
+    file: UploadFile = File(...),
+) -> SpeakingResponsePublic:
+    content = await file.read()
+    return service.upload_response(
+        attempt_id=attempt_id,
+        user_id=current_user.id,
+        question_id=question_id,
+        part=part,
+        sequence_number=sequence_number,
+        duration_sec=duration_sec,
+        audio_bytes=content,
+        content_type=file.content_type,
+        filename=file.filename,
+        background_tasks=background_tasks,
+    )
+
+
+@router.post(
+    "/attempts/{attempt_id}/response-sessions",
+    response_model=SpeakingResponseSession,
+)
+def create_speaking_response_session(
+    attempt_id: UUID,
+    body: CreateSpeakingResponseSessionRequest,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> SpeakingResponseSession:
+    return service.create_response_session(
+        attempt_id=attempt_id,
+        user_id=current_user.id,
+        request=body,
+    )
+
+
+@router.post(
+    "/attempts/{attempt_id}/responses/{response_id}/confirm",
+    response_model=SpeakingResponsePublic,
+)
+def confirm_speaking_response(
+    attempt_id: UUID,
+    response_id: UUID,
+    body: ConfirmSpeakingResponseRequest,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
+) -> SpeakingResponsePublic:
+    return service.confirm_response(
+        attempt_id=attempt_id,
+        response_id=response_id,
+        user_id=current_user.id,
+        request=body,
+        background_tasks=background_tasks,
+    )
+
+
+@router.get(
+    "/attempts/{attempt_id}/responses",
+    response_model=list[SpeakingResponsePublic],
+)
+def list_speaking_responses(
+    attempt_id: UUID,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> list[SpeakingResponsePublic]:
+    return service.list_responses(attempt_id=attempt_id, user_id=current_user.id)
+
+
+@router.post(
+    "/attempts/{attempt_id}/finalize",
+    response_model=SubmitSpeakingResponse,
+)
+def finalize_speaking(
+    attempt_id: UUID,
+    body: FinalizeSpeakingRequest,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
+) -> SubmitSpeakingResponse:
+    return service.finalize_attempt(
+        attempt_id=attempt_id,
+        user_id=current_user.id,
+        manifest_hash=body.manifest_hash,
+        student_name=current_user.full_name,
+        background_tasks=background_tasks,
+    )
+
+
 @router.post("/attempts/{attempt_id}/submit", response_model=SubmitSpeakingResponse)
 async def submit_speaking(
     attempt_id: UUID,
@@ -77,11 +214,13 @@ async def submit_speaking(
 def speaking_pending(
     attempt_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
 ) -> SpeakingPendingResponse:
     return service.get_pending_status(
         attempt_id=attempt_id,
         user_id=current_user.id,
         student_name=current_user.full_name,
+        background_tasks=background_tasks,
     )
 
 

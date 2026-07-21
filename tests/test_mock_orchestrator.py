@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.services.mock_orchestrator import (
     _apply_mock_attempt_patch,
+    _build_provisional_result_contract,
     _compute_module_statuses,
     _module_parts_complete,
 )
@@ -77,6 +78,22 @@ def test_module_parts_complete_test1_only_part_one_required():
             module="listening",
             module_attempts=[
                 {"module": "listening", "status": "completed", "part": 1},
+            ],
+        )
+
+
+def test_speaking_question_parts_complete_as_one_bundled_attempt():
+    from unittest.mock import patch
+
+    with patch(
+        "app.services.mock_orchestrator.repo.live_question_parts",
+        return_value=[1, 2, 3],
+    ):
+        assert _module_parts_complete(
+            mock_test_id=M01,
+            module="speaking",
+            module_attempts=[
+                {"module": "speaking", "status": "completed", "part": 1},
             ],
         )
 
@@ -568,3 +585,179 @@ def test_apply_mock_attempt_patch_merges_fields_in_memory():
     patched = _apply_mock_attempt_patch(bundle, {"current_module": "reading"})
     assert patched["mock_attempt"]["current_module"] == "reading"
     assert bundle["mock_attempt"]["current_module"] == "listening"
+
+
+def _result_modules():
+    return [
+        {
+            "module": module,
+            "sequence_order": index,
+            "duration_minutes": 30,
+            "is_enabled": True,
+        }
+        for index, module in enumerate(
+            ("listening", "reading", "writing", "speaking"), start=1
+        )
+    ]
+
+
+def _completed_attempt(module: str, part: int, suffix: int):
+    return {
+        "id": f"10000000-0000-4000-8000-{suffix:012d}",
+        "module": module,
+        "part": part,
+        "status": "completed",
+        "completed_at": f"2026-01-{suffix:02d}T00:00:00+00:00",
+    }
+
+
+def _provisional_contract(*, attempts, scores=None, reviews=None, final_bands=None):
+    from unittest.mock import patch
+
+    with patch(
+        "app.services.mock_orchestrator.repo.live_question_parts",
+        return_value=[1],
+    ):
+        return _build_provisional_result_contract(
+            mock_test_id=M01,
+            modules=_result_modules(),
+            module_attempts=attempts,
+            scores_by_attempt=scores or {},
+            reviews_by_attempt=reviews or {},
+            final_bands=final_bands
+            or {
+                "listening": None,
+                "reading": None,
+                "writing": None,
+                "speaking": None,
+            },
+            official_aggregate_band=None,
+        )
+
+
+def test_provisional_result_module_score_wins_over_ai_estimate():
+    attempt = _completed_attempt("speaking", 1, 1)
+    attempt_id = attempt["id"]
+    states, *_ = _provisional_contract(
+        attempts=[attempt],
+        scores={attempt_id: {"band": 8.0}},
+        reviews={
+            attempt_id: {
+                "status": "pending",
+                "evaluation_status": "completed",
+                "ai_scores": {"status": "ai_complete", "ai_band": 6.0},
+            }
+        },
+    )
+    assert states["speaking"].source == "final"
+    assert states["speaking"].band == 8.0
+
+
+def test_provisional_result_excludes_stale_speaking_ai_band():
+    attempt = _completed_attempt("speaking", 1, 2)
+    states, aggregate, is_provisional, pending = _provisional_contract(
+        attempts=[attempt],
+        reviews={
+            attempt["id"]: {
+                "status": "pending",
+                "evaluation_status": "processing",
+                "ai_scores": {
+                    "status": "pending_multi_response",
+                    "ai_band": 7.5,
+                },
+            }
+        },
+    )
+    assert states["speaking"].source == "processing"
+    assert states["speaking"].band is None
+    assert aggregate is None
+    assert is_provisional is False
+    assert pending is True
+
+
+def test_provisional_result_accepts_complete_speaking_ai_estimate():
+    attempt = _completed_attempt("speaking", 1, 3)
+    states, aggregate, is_provisional, pending = _provisional_contract(
+        attempts=[attempt],
+        reviews={
+            attempt["id"]: {
+                "status": "pending",
+                "evaluation_status": "completed",
+                "ai_scores": {"status": "ai_complete", "ai_band": 7.5},
+            }
+        },
+    )
+    assert states["speaking"].source == "ai_estimate"
+    assert states["speaking"].band == 7.5
+    assert aggregate == 7.5
+    assert is_provisional is True
+    assert pending is True
+
+
+def test_provisional_result_rejects_out_of_range_or_non_half_ai_band():
+    attempt = _completed_attempt("speaking", 1, 30)
+    for invalid_band in (9.5, -0.5, 7.3):
+        states, aggregate, *_ = _provisional_contract(
+            attempts=[attempt],
+            reviews={
+                attempt["id"]: {
+                    "status": "pending",
+                    "evaluation_status": "completed",
+                    "ai_scores": {
+                        "status": "ai_complete",
+                        "ai_band": invalid_band,
+                    },
+                }
+            },
+        )
+        assert states["speaking"].source == "awaiting_examiner"
+        assert states["speaking"].band is None
+        assert aggregate is None
+
+
+def test_provisional_result_reports_processing_and_failed_ai():
+    writing = _completed_attempt("writing", 1, 4)
+    speaking = _completed_attempt("speaking", 1, 5)
+    states, *_ = _provisional_contract(
+        attempts=[writing, speaking],
+        reviews={
+            writing["id"]: {
+                "status": "pending",
+                "ai_scores": {"status": "pending", "ai_band": 7.0},
+            },
+            speaking["id"]: {
+                "status": "pending",
+                "evaluation_status": "failed",
+                "ai_scores": {"status": "ai_failed", "ai_band": 8.0},
+            },
+        },
+    )
+    assert states["writing"].source == "processing"
+    assert states["speaking"].source == "failed"
+    assert states["writing"].band is None
+    assert states["speaking"].band is None
+
+
+def test_provisional_aggregate_combines_final_objective_and_valid_ai():
+    speaking = _completed_attempt("speaking", 1, 6)
+    states, aggregate, is_provisional, _ = _provisional_contract(
+        attempts=[speaking],
+        reviews={
+            speaking["id"]: {
+                "status": "pending",
+                "evaluation_status": "completed",
+                "ai_scores": {"status": "ai_stub", "ai_band": 7.0},
+            }
+        },
+        final_bands={
+            "listening": 8.0,
+            "reading": 7.0,
+            "writing": None,
+            "speaking": None,
+        },
+    )
+    assert states["listening"].source == "final"
+    assert states["reading"].source == "final"
+    assert states["speaking"].source == "ai_estimate"
+    assert aggregate == 7.3
+    assert is_provisional is True

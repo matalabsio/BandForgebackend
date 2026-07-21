@@ -388,6 +388,41 @@ def list_module_scores_by_attempt_ids(
     return {str(row["attempt_id"]): row for row in (result.data or [])}
 
 
+def list_module_reviews_by_attempt_ids(
+    attempt_ids: list[UUID],
+) -> dict[str, dict[str, Any]]:
+    """Batch-load the latest Writing and Speaking review for each attempt."""
+    if not attempt_ids:
+        return {}
+    client = get_supabase()
+    ids = [str(attempt_id) for attempt_id in attempt_ids]
+    rows: list[dict[str, Any]] = []
+    for table, columns in (
+        (
+            "writing_reviews",
+            "id, attempt_id, status, human_band, ai_scores, created_at",
+        ),
+        (
+            "speaking_reviews",
+            "id, attempt_id, status, human_band, ai_scores, evaluation_status, created_at",
+        ),
+    ):
+        result = _exec(
+            client.table(table)
+            .select(columns)
+            .in_("attempt_id", ids)
+            .order("created_at", desc=True)
+        )
+        rows.extend(result.data or [])
+
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        attempt_id = str(row.get("attempt_id") or "")
+        if attempt_id and attempt_id not in latest:
+            latest[attempt_id] = row
+    return latest
+
+
 def get_module_score_band(test_attempt_id: UUID) -> float | None:
     row = get_module_score_row(test_attempt_id)
     if not row or row.get("band") is None:

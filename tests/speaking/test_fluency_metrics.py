@@ -1,6 +1,7 @@
 """Unit tests for speaking fluency metrics."""
 
 from app.speaking.fluency_metrics import (
+    aggregate_fluency_metrics,
     compute_fluency_metrics,
     long_pauses,
     total_speaking_seconds_from_words,
@@ -49,3 +50,70 @@ def test_compute_fluency_metrics():
     assert metrics["questions_asked"] == 4
     assert metrics["words_per_minute"] > 0
     assert metrics["total_speaking_seconds"] > 0
+
+
+def _response(
+    response_id: str,
+    *,
+    part: int,
+    sequence: int,
+    words: int,
+    seconds: float,
+    pauses: int,
+) -> dict:
+    return {
+        "id": response_id,
+        "part": part,
+        "sequence_number": sequence,
+        "content_sha256": response_id.rjust(64, "0"),
+        "transcription_provider": "groq_whisper",
+        "transcription_model": "whisper-large-v3-turbo",
+        "fluency_metrics": {
+            "word_count": words,
+            "total_speaking_seconds": seconds,
+            "long_pauses": pauses,
+            "words_per_minute": 0,
+            "response_count": 1,
+            "questions_asked": 1,
+        },
+    }
+
+
+def test_weighted_attempt_and_part_metrics_use_total_words_over_total_time():
+    snapshot = aggregate_fluency_metrics(
+        [
+            _response("1", part=1, sequence=1, words=30, seconds=30, pauses=1),
+            _response("2", part=1, sequence=2, words=30, seconds=10, pauses=2),
+            _response("3", part=2, sequence=3, words=60, seconds=60, pauses=3),
+        ]
+    )
+    assert snapshot["part_metrics"]["1"]["words_per_minute"] == 90.0
+    assert snapshot["attempt_metrics"]["words_per_minute"] == 72.0
+    assert snapshot["attempt_metrics"]["long_pauses"] == 6
+
+
+def test_empty_response_is_represented_without_division_error():
+    snapshot = aggregate_fluency_metrics(
+        [_response("1", part=1, sequence=1, words=0, seconds=0, pauses=0)]
+    )
+    assert snapshot["attempt_metrics"]["words_per_minute"] == 0.0
+    assert snapshot["attempt_metrics"]["response_count"] == 1
+
+
+def test_aggregation_never_creates_inter_response_pauses():
+    snapshot = aggregate_fluency_metrics(
+        [
+            _response("1", part=1, sequence=1, words=1, seconds=1, pauses=0),
+            _response("2", part=1, sequence=2, words=1, seconds=1, pauses=0),
+        ]
+    )
+    assert snapshot["attempt_metrics"]["long_pauses"] == 0
+
+
+def test_response_metrics_and_checksum_are_stable_in_sequence_order():
+    first = _response("1", part=1, sequence=1, words=10, seconds=5, pauses=0)
+    second = _response("2", part=2, sequence=2, words=20, seconds=10, pauses=0)
+    ordered = aggregate_fluency_metrics([first, second])
+    reversed_input = aggregate_fluency_metrics([second, first])
+    assert ordered["response_metrics"] == reversed_input["response_metrics"]
+    assert ordered["source_checksum"] == reversed_input["source_checksum"]

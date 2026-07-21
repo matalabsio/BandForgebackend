@@ -11,6 +11,7 @@ from app.speaking.evaluation_schemas import (
     SpeakingEvaluation,
     coerce_speaking_evaluation_payload,
     parse_json_content,
+    validate_evidence_against_responses,
     validate_quotes_in_transcript,
 )
 from app.speaking.speaking_prompt import RETRY_SUFFIX, SYSTEM_PROMPT, build_user_prompt
@@ -28,12 +29,14 @@ async def call_evaluation_with_retry(
     prompts: list[str],
     part: int,
     provider_label: str,
+    responses: list[dict] | None = None,
 ) -> SpeakingEvaluation:
     user_prompt = build_user_prompt(
         transcript=transcript,
         fluency_metrics=fluency_metrics,
         prompts=prompts,
         part=part,
+        responses=responses,
     )
     last_error: Exception | None = None
     for attempt in range(2):
@@ -45,7 +48,10 @@ async def call_evaluation_with_retry(
                 parsed, part=part, transcript=transcript
             )
             evaluation = SpeakingEvaluation.model_validate(parsed)
-            validate_quotes_in_transcript(evaluation, transcript)
+            if responses:
+                validate_evidence_against_responses(evaluation, responses)
+            else:
+                validate_quotes_in_transcript(evaluation, transcript)
             return evaluation
         except (ValueError, ValidationError) as exc:
             last_error = exc

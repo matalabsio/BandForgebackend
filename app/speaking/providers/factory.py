@@ -62,6 +62,26 @@ def get_eval_provider() -> EvaluationProvider:
     )
 
 
+def get_eval_provider_chain() -> list[EvaluationProvider]:
+    """Configured primary followed by a distinct configured fallback."""
+    settings = get_settings()
+    kinds = [
+        _parse_llm_kind(settings.llm_provider),
+        _parse_llm_kind(settings.speaking_llm_fallback),
+    ]
+    providers: list[EvaluationProvider] = []
+    for kind in dict.fromkeys(kinds):
+        provider: EvaluationProvider
+        match kind:
+            case LLMProviderKind.CLAUDE:
+                provider = ClaudeEvaluationProvider()
+            case LLMProviderKind.GROQ:
+                provider = GroqEvaluationProvider()
+        if provider.configured():
+            providers.append(provider)
+    return providers
+
+
 def asr_configured() -> bool:
     return get_asr_provider().configured()
 

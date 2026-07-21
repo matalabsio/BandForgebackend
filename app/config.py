@@ -92,6 +92,42 @@ class Settings(BaseSettings):
         default="BandForge <onboarding@resend.dev>",
         validation_alias="EMAIL_FROM",
     )
+    notification_worker_batch_size: int = Field(
+        default=20, validation_alias="NOTIFICATION_WORKER_BATCH_SIZE"
+    )
+    notification_worker_concurrency: int = Field(
+        default=5, validation_alias="NOTIFICATION_WORKER_CONCURRENCY"
+    )
+    notification_worker_lease_seconds: int = Field(
+        default=120, validation_alias="NOTIFICATION_WORKER_LEASE_SECONDS"
+    )
+    notification_worker_poll_seconds: float = Field(
+        default=2.0, validation_alias="NOTIFICATION_WORKER_POLL_SECONDS"
+    )
+    meta_whatsapp_enabled: bool = Field(
+        default=False, validation_alias="META_WHATSAPP_ENABLED"
+    )
+    meta_whatsapp_graph_version: str = Field(
+        default="v23.0", validation_alias="META_WHATSAPP_GRAPH_VERSION"
+    )
+    meta_whatsapp_phone_number_id: str = Field(
+        default="", validation_alias="META_WHATSAPP_PHONE_NUMBER_ID"
+    )
+    meta_whatsapp_access_token: str = Field(
+        default="", validation_alias="META_WHATSAPP_ACCESS_TOKEN"
+    )
+    meta_whatsapp_template_name: str = Field(
+        default="", validation_alias="META_WHATSAPP_TEMPLATE_NAME"
+    )
+    meta_whatsapp_template_language: str = Field(
+        default="en", validation_alias="META_WHATSAPP_TEMPLATE_LANGUAGE"
+    )
+    meta_whatsapp_verify_token: str = Field(
+        default="", validation_alias="META_WHATSAPP_VERIFY_TOKEN"
+    )
+    meta_whatsapp_app_secret: str = Field(
+        default="", validation_alias="META_WHATSAPP_APP_SECRET"
+    )
 
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", validation_alias="OPENAI_MODEL")
@@ -149,6 +185,10 @@ class Settings(BaseSettings):
     llm_provider: str = Field(
         default="claude",
         validation_alias="LLM_PROVIDER",
+    )
+    speaking_llm_fallback: str = Field(
+        default="groq",
+        validation_alias="SPEAKING_LLM_FALLBACK",
     )
     writing_llm_primary: str = Field(
         default="claude",
@@ -257,6 +297,7 @@ class Settings(BaseSettings):
         "speaking_eval_stub",
         "writing_eval_stub",
         "ai_budget_fallback_stub",
+        "meta_whatsapp_enabled",
         mode="before",
     )
     @classmethod
@@ -268,6 +309,9 @@ class Settings(BaseSettings):
         "google_client_secret",
         "google_redirect_uri",
         "resend_api_key",
+        "meta_whatsapp_access_token",
+        "meta_whatsapp_verify_token",
+        "meta_whatsapp_app_secret",
         "openai_api_key",
         "anthropic_api_key",
         "anthropic_aws_api_key",

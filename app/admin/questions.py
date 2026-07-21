@@ -147,6 +147,68 @@ def get_question_detail(question_id: UUID) -> AdminQuestionDetail:
     )
 
 
+def _normalize_options_payload(
+    raw: list[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    if raw is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="options must be a list of {label, text} objects.",
+        )
+    if not isinstance(raw, list):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="options must be a list of {label, text} objects.",
+        )
+    if len(raw) < 2:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="MCQ options require at least 2 choices.",
+        )
+
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Each option must be an object with label and text.",
+            )
+        label = str(item.get("label") or item.get("letter") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not label:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Every option needs a non-empty label.",
+            )
+        if not text:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"Option {label} needs non-empty text.",
+            )
+        key = label.upper()
+        if key in seen:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate option label: {label}",
+            )
+        seen.add(key)
+        normalized.append({"label": label, "text": text})
+    return normalized
+
+
+def _invalidate_student_question_caches(*, module: str, mock_test_id: str) -> None:
+    if module == "listening":
+        from app.listening.service import invalidate_listening_audio_caches
+
+        invalidate_listening_audio_caches(mock_test_id=mock_test_id)
+        return
+    if module == "reading":
+        from app.cache.hybrid_cache import delete_many
+
+        delete_many([f"reading_questions:{mock_test_id}:{p}" for p in range(0, 5)])
+
+
 def patch_question(
     *,
     question_id: UUID,
@@ -165,6 +227,31 @@ def patch_question(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found.")
     row = result.data[0]
 
+    updates: dict[str, Any] = {}
+    if body.prompt is not None:
+        updates["prompt"] = body.prompt
+    if body.options is not None:
+        updates["options"] = _normalize_options_payload(body.options)
+    if body.correct_answer is not None:
+        updates["correct_answer"] = body.correct_answer
+    if body.explanation is not None:
+        updates["explanation"] = body.explanation
+
+    effective_options = updates.get("options", row.get("options"))
+    effective_answer = updates.get("correct_answer", row.get("correct_answer"))
+    if effective_options and effective_answer is not None:
+        labels = {
+            str(o.get("label") or "").strip()
+            for o in effective_options
+            if isinstance(o, dict)
+        }
+        answer = str(effective_answer).strip()
+        if answer and answer not in labels:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="correct_answer must match one of the option labels.",
+            )
+
     version = _next_version(sb, str(question_id))
     sb.table("question_versions").insert(
         {
@@ -175,18 +262,12 @@ def patch_question(
         }
     ).execute()
 
-    updates: dict[str, Any] = {}
-    if body.prompt is not None:
-        updates["prompt"] = body.prompt
-    if body.options is not None:
-        updates["options"] = body.options
-    if body.correct_answer is not None:
-        updates["correct_answer"] = body.correct_answer
-    if body.explanation is not None:
-        updates["explanation"] = body.explanation
-
     if updates:
         sb.table("questions").update(updates).eq("id", str(question_id)).execute()
+        _invalidate_student_question_caches(
+            module=str(row.get("module") or ""),
+            mock_test_id=str(row["mock_test_id"]),
+        )
 
     log_admin_action(
         admin_id=admin_id,

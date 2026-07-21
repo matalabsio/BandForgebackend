@@ -71,7 +71,7 @@ def _mock_eval_provider(transcript: str) -> MagicMock:
 
 
 def test_evaluate_review_live_mocked_providers():
-    from app.speaking.speaking_evaluator import _evaluate_review_async
+    from app.speaking.speaking_evaluator import process_speaking_review_async
 
     transcript = "I come from a small city and I enjoy living there."
     words = [
@@ -114,8 +114,8 @@ def test_evaluate_review_live_mocked_providers():
             return_value=mock_asr,
         ),
         patch(
-            "app.speaking.speaking_evaluator.get_eval_provider",
-            return_value=mock_eval,
+            "app.speaking.speaking_evaluator.get_eval_provider_chain",
+            return_value=[mock_eval],
         ),
         patch(
             "app.speaking.speaking_evaluator.repo.update_speaking_review_evaluation"
@@ -126,7 +126,7 @@ def test_evaluate_review_live_mocked_providers():
         settings.asr_provider = "openai"
         settings.llm_provider = "claude"
 
-        asyncio.run(_evaluate_review_async(REVIEW_ID))
+        asyncio.run(process_speaking_review_async(REVIEW_ID))
 
         update_eval.assert_called_once()
         ai_scores = update_eval.call_args.kwargs["ai_scores"]

@@ -13,6 +13,7 @@ from app.speaking.providers.constants import (
 from app.speaking.providers.factory import (
     get_asr_provider,
     get_eval_provider,
+    get_eval_provider_chain,
 )
 from app.speaking.providers.groq_eval import GroqEvaluationProvider
 from app.speaking.providers.groq_whisper import GroqWhisperProvider
@@ -50,6 +51,34 @@ def test_get_eval_provider_groq():
         provider = get_eval_provider()
     assert isinstance(provider, GroqEvaluationProvider)
     assert provider.name == PROVIDER_NAME_GROQ
+
+
+def test_get_eval_provider_chain_uses_distinct_configured_fallback():
+    with (
+        patch("app.speaking.providers.factory.get_settings") as mock_settings,
+        patch.object(ClaudeEvaluationProvider, "configured", return_value=True),
+        patch.object(GroqEvaluationProvider, "configured", return_value=True),
+    ):
+        mock_settings.return_value.llm_provider = "claude"
+        mock_settings.return_value.speaking_llm_fallback = "groq"
+        providers = get_eval_provider_chain()
+
+    assert [provider.name for provider in providers] == [
+        PROVIDER_NAME_ANTHROPIC_CLAUDE,
+        PROVIDER_NAME_GROQ,
+    ]
+
+
+def test_get_eval_provider_chain_deduplicates_primary_and_fallback():
+    with (
+        patch("app.speaking.providers.factory.get_settings") as mock_settings,
+        patch.object(GroqEvaluationProvider, "configured", return_value=True),
+    ):
+        mock_settings.return_value.llm_provider = "groq"
+        mock_settings.return_value.speaking_llm_fallback = "groq"
+        providers = get_eval_provider_chain()
+
+    assert [provider.name for provider in providers] == [PROVIDER_NAME_GROQ]
 
 
 def test_unknown_asr_provider_raises():
