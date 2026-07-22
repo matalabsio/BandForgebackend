@@ -15,7 +15,13 @@ from app.config import get_settings
 from app.schemas.test_engine import TestSummary
 from app.services.mock_progress_timing import MockProgressTiming
 from app.speaking import repository as repo
-from app.speaking.constants import SPEAKING_DURATION_MINUTES, SPEAKING_PART1_RECORD_SECONDS
+from app.speaking.constants import (
+    SPEAKING_DURATION_MINUTES,
+    SPEAKING_PART1_MAX_RECORDING_SECONDS,
+    SPEAKING_PART1_RECORD_SECONDS,
+    SPEAKING_PART2_MAX_RECORDING_SECONDS,
+    SPEAKING_PART3_MAX_RECORDING_SECONDS,
+)
 from app.speaking.schemas import (
     ConfirmSpeakingResponseRequest,
     CreateSpeakingResponseSessionRequest,
@@ -68,7 +74,17 @@ from app.storage.r2 import (
 from app.speaking.ai_evaluator import run_speaking_evaluation
 
 SPEAKING_UPLOAD_EXPIRY_SECONDS = 15 * 60
-SPEAKING_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+SPEAKING_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+
+def _default_max_recording_seconds(part: int) -> int:
+    if part == 2:
+        return SPEAKING_PART2_MAX_RECORDING_SECONDS
+    if part == 3:
+        return SPEAKING_PART3_MAX_RECORDING_SECONDS
+    return SPEAKING_PART1_MAX_RECORDING_SECONDS
+
+
 SPEAKING_AUDIO_CONTENT_TYPES = {
     "audio/webm",
     "audio/mp4",
@@ -158,8 +174,13 @@ def _row_to_question(row: dict[str, Any]) -> SpeakingQuestionPublic:
         opts.get("max_recording_seconds")
         or opts.get("max_record_sec")
         or opts.get("record_sec")
-        or (120 if part == 2 else 60 if part == 3 else 45)
+        or _default_max_recording_seconds(part)
     )
+    # Part 1: allow full testing window even if catalog still has a short cap.
+    if part == 1:
+        max_recording_seconds = max(
+            max_recording_seconds, SPEAKING_PART1_MAX_RECORDING_SECONDS
+        )
     return SpeakingQuestionPublic(
         id=UUID(str(row["id"])),
         question_number=int(row.get("question_number") or 1),
@@ -222,12 +243,14 @@ def _attempt_manifest(
         for item in raw:
             normalized = dict(item)
             part = int(normalized.get("part") or 1)
-            max_seconds = (
+            max_seconds = int(
                 normalized.get("max_recording_seconds")
                 or normalized.get("max_record_sec")
                 or normalized.get("record_sec")
-                or (120 if part == 2 else 60 if part == 3 else 45)
+                or _default_max_recording_seconds(part)
             )
+            if part == 1:
+                max_seconds = max(max_seconds, SPEAKING_PART1_MAX_RECORDING_SECONDS)
             normalized.setdefault(
                 "prep_seconds",
                 normalized.get("prep_sec") or (60 if part == 2 else 0),

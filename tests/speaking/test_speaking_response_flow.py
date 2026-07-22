@@ -322,7 +322,7 @@ def test_start_enforces_mock_unlock_and_returns_frozen_manifest():
     assert result.expected_response_count == 2
     assert [question.sequence_number for question in result.questions] == [1, 2]
     assert result.questions[0].prep_seconds == 0
-    assert result.questions[0].max_recording_seconds == 45
+    assert result.questions[0].max_recording_seconds == 3600
     assert result.questions[1].prep_seconds == 60
     assert result.questions[1].max_recording_seconds == 120
     assert result.manifest_hash

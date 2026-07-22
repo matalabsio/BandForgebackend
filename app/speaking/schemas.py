@@ -37,7 +37,7 @@ class SpeakingQuestionPublic(BaseModel):
     record_sec: int | None = None
     max_record_sec: int | None = None
     prep_seconds: int = 0
-    max_recording_seconds: int = 45
+    max_recording_seconds: int = 3600
     duration_hint_sec: int | None = None
     part_label: str | None = None
 
