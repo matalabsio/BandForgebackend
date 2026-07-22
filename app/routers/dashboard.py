@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Annotated, Any
@@ -45,6 +46,7 @@ class RecentAttempt(BaseModel):
     completed_at: datetime | None = None
     status: str
     band: float | None = None
+    score_source: str = "unavailable"
     raw_score: int | None = None
     total_questions: int | None = None
     part: int | None = None
@@ -164,6 +166,29 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _completed_ai_band(review: dict[str, Any] | None) -> float | None:
+    """Return only a completed, valid provisional AI band from a review."""
+    if not review:
+        return None
+    ai_scores = review.get("ai_scores")
+    if not isinstance(ai_scores, dict):
+        return None
+    ai_status = str(ai_scores.get("status") or "").lower()
+    evaluation_status = str(review.get("evaluation_status") or "").lower()
+    if ai_status not in {"ai_complete", "ai_stub"} and evaluation_status != "completed":
+        return None
+    band = _safe_float(ai_scores.get("ai_band"))
+    if (
+        band is None
+        or not math.isfinite(band)
+        or band < 0
+        or band > 9
+        or band * 2 != int(band * 2)
+    ):
+        return None
+    return band
+
+
 @router.get("/summary", response_model=DashboardSummary)
 def dashboard_summary(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
@@ -247,7 +272,9 @@ def dashboard_summary(
     if attempt_ids:
         speaking_res = execute_with_retry(lambda: (
             client.table("speaking_reviews")
-            .select("attempt_id, status, human_band, created_at")
+            .select(
+                "attempt_id, status, human_band, ai_scores, evaluation_status, created_at"
+            )
             .in_("attempt_id", attempt_ids)
             .order("created_at", desc=True)
             .execute()
@@ -303,17 +330,28 @@ def dashboard_summary(
             score = scores_by_attempt.get(str(a["id"]))
             review_writing = writing_reviews_by_attempt.get(str(a["id"]))
             review_speaking = speaking_reviews_by_attempt.get(str(a["id"]))
+            score_source = "unavailable"
             band_val = (
                 _safe_float(score.get("band")) if score else None
             )
+            if band_val is not None:
+                score_source = "module_score"
             if band_val is None and module == "writing" and review_writing:
                 band_val = _safe_float(review_writing.get("human_band"))
                 if band_val is None:
-                    ai_scores = review_writing.get("ai_scores")
-                    if isinstance(ai_scores, dict):
-                        band_val = _safe_float(ai_scores.get("word_count_estimate"))
+                    band_val = _completed_ai_band(review_writing)
+                    if band_val is not None:
+                        score_source = "ai_estimate"
+                else:
+                    score_source = "human"
             if band_val is None and module == "speaking" and review_speaking:
                 band_val = _safe_float(review_speaking.get("human_band"))
+                if band_val is None:
+                    band_val = _completed_ai_band(review_speaking)
+                    if band_val is not None:
+                        score_source = "ai_estimate"
+                else:
+                    score_source = "human"
             if band_val is not None and band_val > 0:
                 bands.append(band_val)
             part_raw = a.get("part")
@@ -327,6 +365,7 @@ def dashboard_summary(
                     completed_at=completed,
                     status="completed",
                     band=band_val,
+                    score_source=score_source,
                     raw_score=int(score["raw_score"]) if score and score.get("raw_score") is not None else None,
                     total_questions=int(score["total_count"])
                     if score and score.get("total_count") is not None
