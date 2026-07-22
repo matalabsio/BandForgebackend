@@ -1,7 +1,8 @@
-"""Exam orchestration: mock_attempt lifecycle, sequential unlock, module grouping."""
+"""Exam orchestration: mock_attempt lifecycle, module unlock, module grouping."""
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -46,6 +47,16 @@ from app.services import mock_orchestrator_repository as repo
 
 def _is_dev() -> bool:
     return get_settings().app_env.strip().lower() == "development"
+
+
+def _mock_free_module_access() -> bool:
+    """Testing mode: start any enabled module without sequential unlock.
+
+    Override with MOCK_FREE_MODULE_ACCESS=0 to restore exam-order locks.
+    Default: on (any non-falsey / unset env enables free access).
+    """
+    raw = os.environ.get("MOCK_FREE_MODULE_ACCESS", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def _first_enabled_module(modules: list[dict[str, Any]]) -> str:
@@ -389,6 +400,10 @@ def _compute_module_statuses(
         else:
             st = "locked"
 
+        # Testing mode: every unfinished enabled module is startable.
+        if st == "locked" and _mock_free_module_access():
+            st = "available"
+
         band: float | None = None
         test_attempt_id: UUID | None = None
         part: int | None = None
@@ -535,7 +550,11 @@ def _validate_unlock_from_snapshot(
     done_parts = set(snapshot.done_parts.get(module, []))
     mp_status: ModuleProgressStatus | None = snapshot.module_status.get(module)  # type: ignore[arg-type]
     has_started_module = mp_status in ("completed", "in_progress") or bool(done_parts)
-    if mp_status == "locked" and not has_started_module:
+    if (
+        mp_status == "locked"
+        and not has_started_module
+        and not _mock_free_module_access()
+    ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail="Complete the previous module before starting this one.",
@@ -1118,7 +1137,7 @@ def get_mock_session_timed(
         "find_mock_ms": 0.0,
         "progress_bundle_ms": 0.0,
     }
-    cache_key = f"mock_session:{user_id}:{mock_test_id}"
+    cache_key = f"mock_session:v2:{user_id}:{mock_test_id}"
     cached = get_json(cache_key)
     if isinstance(cached, dict):
         try:
@@ -1489,7 +1508,7 @@ def resume_mock(
         mock_attempt_id=mock_attempt_id,
         fields={"current_module": next_mod},
     )
-    invalidate_prefix(f"mock_session:{user_id}:")
+    invalidate_prefix(f"mock_session:v2:{user_id}:")
     invalidate_prefix(f"mock_progress:{mock_attempt_id}:{user_id}")
     fresh_progress = get_progress(mock_attempt_id=mock_attempt_id, user_id=user_id)
     return StartMockResponse(

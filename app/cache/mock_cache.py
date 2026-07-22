@@ -29,7 +29,8 @@ PROGRESS_CACHE_TTL_SECONDS = 30
 
 
 def progress_cache_key(*, mock_attempt_id: UUID, user_id: UUID) -> str:
-    return f"mock_progress:{mock_attempt_id}:{user_id}"
+    # v2: free-module-access statuses (busts pre-unlock locked snapshots)
+    return f"mock_progress:v2:{mock_attempt_id}:{user_id}"
 
 
 def refresh_mock_in_progress_cache(
@@ -65,7 +66,7 @@ def write_progress_cache(
 ) -> None:
     """Write combined progress+unlock payload and session progress snapshot."""
     key = progress_cache_key(mock_attempt_id=mock_attempt_id, user_id=user_id)
-    session_key = f"mock_session:{user_id}:{mock_test_id}"
+    session_key = f"mock_session:v2:{user_id}:{mock_test_id}"
 
     t0 = perf_counter()
     payload = MockProgressCachePayload(progress=progress, unlock=unlock)
@@ -151,7 +152,7 @@ def invalidate_mock_progress_caches(
         [
             f"mock_progress:{mock_attempt_id}:{user_id}",
             f"mock_in_progress:{user_id}:{mock_test_id}",
-            f"mock_session:{user_id}:{mock_test_id}",
+            f"mock_session:v2:{user_id}:{mock_test_id}",
         ]
     )
 

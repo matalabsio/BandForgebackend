@@ -60,7 +60,7 @@ def get_mock_test(mock_test_id: UUID, *, allow_unpublished: bool = False) -> dic
 def list_mock_modules(mock_test_id: UUID) -> list[dict[str, Any]]:
     from app.cache.hybrid_cache import get_json, set_json
 
-    cache_key = f"mock_modules:{mock_test_id}"
+    cache_key = f"mock_modules:v2:{mock_test_id}"
     cached = get_json(cache_key)
     if isinstance(cached, list):
         return cached

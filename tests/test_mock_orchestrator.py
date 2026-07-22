@@ -102,9 +102,15 @@ def test_compute_module_statuses_sequential_lock():
     from unittest.mock import patch
 
     modules = _modules_config()
-    with patch(
-        "app.services.mock_orchestrator.repo.live_question_parts",
-        side_effect=lambda mock_test_id, module: [1, 2] if module == "reading" else [1, 2, 3, 4],
+    with (
+        patch(
+            "app.services.mock_orchestrator._mock_free_module_access",
+            return_value=False,
+        ),
+        patch(
+            "app.services.mock_orchestrator.repo.live_question_parts",
+            side_effect=lambda mock_test_id, module: [1, 2] if module == "reading" else [1, 2, 3, 4],
+        ),
     ):
         statuses = _compute_module_statuses(
             mock_test_id=M01,
@@ -114,6 +120,31 @@ def test_compute_module_statuses_sequential_lock():
     by_mod = {s.module: s.status for s in statuses}
     assert by_mod["listening"] == "available"
     assert by_mod["reading"] == "locked"
+
+
+def test_compute_module_statuses_free_access_unlocks_all():
+    from unittest.mock import patch
+
+    modules = _modules_config()
+    with (
+        patch(
+            "app.services.mock_orchestrator._mock_free_module_access",
+            return_value=True,
+        ),
+        patch(
+            "app.services.mock_orchestrator.repo.live_question_parts",
+            side_effect=lambda mock_test_id, module: [1, 2] if module == "reading" else [1, 2, 3, 4],
+        ),
+    ):
+        statuses = _compute_module_statuses(
+            mock_test_id=M01,
+            modules=modules,
+            module_attempts=[],
+        )
+    by_mod = {s.module: s.status for s in statuses}
+    assert by_mod["listening"] == "available"
+    assert by_mod["reading"] == "available"
+    assert "writing" not in by_mod  # disabled in fixture
 
 
 def test_compute_module_statuses_unlocks_reading_after_listening_done():
