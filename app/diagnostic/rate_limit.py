@@ -17,12 +17,9 @@ _lock = Lock()
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    from app.security.rate_limit import client_ip
+
+    return client_ip(request)
 
 
 def _prune(timestamps: list[float], now: float) -> list[float]:

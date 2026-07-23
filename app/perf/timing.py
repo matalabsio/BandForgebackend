@@ -88,8 +88,8 @@ class PerfTimer:
         return ms
 
 
-def timed_supabase(step: str, fn: Callable[[], T]) -> T:
-    """Time a Supabase call, increment query count, emit step log when PERF_LOG=1."""
+def timed_call(step: str, fn: Callable[[], T], *, count_query: bool = False) -> T:
+    """Time any callable and emit a step log when PERF_LOG=1."""
     if not is_perf_enabled():
         return fn()
 
@@ -98,5 +98,11 @@ def timed_supabase(step: str, fn: Callable[[], T]) -> T:
         return fn()
     finally:
         duration_ms = round((perf_counter() - t0) * 1000, 2)
-        _increment_query_count()
+        if count_query:
+            _increment_query_count()
         perf_step_log(step, duration_ms)
+
+
+def timed_supabase(step: str, fn: Callable[[], T]) -> T:
+    """Time a Supabase call, increment query count, emit step log when PERF_LOG=1."""
+    return timed_call(step, fn, count_query=True)

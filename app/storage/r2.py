@@ -99,17 +99,21 @@ def generate_presigned_put_url(
     *,
     content_type: str,
     expiry: int = 900,
+    content_length: int | None = None,
 ) -> str:
     """Return a presigned PUT URL constrained to the declared MIME type."""
     settings = get_settings()
     client = _s3_client()
+    params: dict[str, Any] = {
+        "Bucket": settings.r2_bucket_name,
+        "Key": key,
+        "ContentType": content_type,
+    }
+    if content_length is not None and content_length > 0:
+        params["ContentLength"] = int(content_length)
     return client.generate_presigned_url(
         "put_object",
-        Params={
-            "Bucket": settings.r2_bucket_name,
-            "Key": key,
-            "ContentType": content_type,
-        },
+        Params=params,
         ExpiresIn=expiry,
     )
 

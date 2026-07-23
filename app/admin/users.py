@@ -288,9 +288,26 @@ def patch_user(
 
 
 def get_user_overview(user_id: UUID) -> AdminUserOverview:
-    profile = get_user_detail(user_id)
-    activity = user_activity.build_user_activity_stats(user_id)
+    from app.admin.parallel import run_parallel
+    from app.perf.timing import timed_call
 
+    profile = timed_call("user_overview.profile", lambda: get_user_detail(user_id))
+
+    loaded = timed_call(
+        "user_overview.sections_parallel",
+        lambda: run_parallel(
+            {
+                "activity": lambda: user_activity.build_user_activity_stats(user_id),
+                "mock_sessions": lambda: user_activity.build_user_mock_sessions(user_id),
+                "diagnostics": lambda: user_activity.list_user_diagnostics(user_id),
+                "speaking_reviews": lambda: user_activity.list_user_speaking_reviews(
+                    user_id
+                ),
+            }
+        ),
+    )
+
+    activity = loaded["activity"]
     stats = AdminUserActivityStats(
         total_attempts=activity["total_attempts"],
         completed_attempts=activity["completed_attempts"],
@@ -312,15 +329,14 @@ def get_user_overview(user_id: UUID) -> AdminUserOverview:
     ]
     mock_sessions = [
         AdminUserMockSessionItem.model_validate(row)
-        for row in user_activity.build_user_mock_sessions(user_id)
+        for row in loaded["mock_sessions"]
     ]
     diagnostics = [
-        AdminUserDiagnosticItem.model_validate(row)
-        for row in user_activity.list_user_diagnostics(user_id)
+        AdminUserDiagnosticItem.model_validate(row) for row in loaded["diagnostics"]
     ]
     speaking_reviews = [
         AdminUserSpeakingReviewItem.model_validate(row)
-        for row in user_activity.list_user_speaking_reviews(user_id)
+        for row in loaded["speaking_reviews"]
     ]
 
     return AdminUserOverview(

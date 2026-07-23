@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.diagnostic.access import assert_mock_access
+from app.security.entitlements import assert_premium_mock_access
 from app.skill_program_gate import assert_skill_program_module_start
 from app.speaking import service
 from app.speaking.schemas import (
@@ -80,6 +81,7 @@ def start_speaking(
     ] = None,
 ) -> StartSpeakingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_skill_program_module_start(
         user_id=current_user.id,
         skill_context=skill_context,
@@ -99,6 +101,7 @@ def start_speaking(
     response_model=SpeakingResponsePublic,
 )
 async def upload_speaking_response(
+    request: Request,
     attempt_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
     background_tasks: BackgroundTasks,
@@ -108,7 +111,22 @@ async def upload_speaking_response(
     duration_sec: Annotated[int, Form(ge=5)],
     file: UploadFile = File(...),
 ) -> SpeakingResponsePublic:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > service.SPEAKING_MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Recording is too large.",
+                )
+        except ValueError:
+            pass
     content = await file.read()
+    if len(content) > service.SPEAKING_MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Recording is too large.",
+        )
     return service.upload_response(
         attempt_id=attempt_id,
         user_id=current_user.id,
@@ -191,13 +209,29 @@ def finalize_speaking(
 
 @router.post("/attempts/{attempt_id}/submit", response_model=SubmitSpeakingResponse)
 async def submit_speaking(
+    request: Request,
     attempt_id: UUID,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     duration_sec: Annotated[int | None, Form()] = None,
 ) -> SubmitSpeakingResponse:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > service.SPEAKING_MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Recording is too large.",
+                )
+        except ValueError:
+            pass
     content = await file.read()
+    if len(content) > service.SPEAKING_MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Recording is too large.",
+        )
     return service.submit_attempt(
         attempt_id=attempt_id,
         user_id=current_user.id,

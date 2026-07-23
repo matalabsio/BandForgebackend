@@ -44,7 +44,13 @@ def is_claude_circuit_open() -> CircuitStatus:
 
     if client is not None:
         try:
-            open_until_raw = client.get(f"{_PREFIX}:open_until")
+            open_key = f"{_PREFIX}:open_until"
+            fail_key = f"{_PREFIX}:fails"
+            pipe = client.pipeline(transaction=False)
+            pipe.get(open_key)
+            pipe.zremrangebyscore(fail_key, 0, now - cooldown)
+            pipe.zcard(fail_key)
+            open_until_raw, _removed, failures_raw = pipe.execute()
             if open_until_raw is not None:
                 open_until = float(open_until_raw)
                 if open_until > now:
@@ -54,10 +60,7 @@ def is_claude_circuit_open() -> CircuitStatus:
                         open_until=open_until,
                         reason="circuit_open",
                     )
-            # Count recent failures in sorted set / list
-            fail_key = f"{_PREFIX}:fails"
-            client.zremrangebyscore(fail_key, 0, now - cooldown)
-            failures = int(client.zcard(fail_key) or 0)
+            failures = int(failures_raw or 0)
             return CircuitStatus(
                 open=False,
                 failures=failures,

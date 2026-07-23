@@ -150,10 +150,38 @@ def _publish_blockers(
     return blockers
 
 
+def _fetch_attempt_counts_by_mock(
+    sb: Any, mock_ids: list[str]
+) -> dict[str, int]:
+    """Per-mock attempt counts via exact count queries (no full row download)."""
+    if not mock_ids:
+        return {}
+
+    def count_one(mid: str) -> int:
+        try:
+            client = get_supabase()
+            result = _exec(
+                client.table("mock_attempts")
+                .select("id", count="exact")
+                .eq("mock_test_id", mid)
+                .limit(1)
+            )
+            return int(result.count or 0)
+        except Exception:
+            return 0
+
+    from app.admin.parallel import run_parallel
+
+    return run_parallel({mid: (lambda m=mid: count_one(m)) for mid in mock_ids})
+
+
 def _fetch_question_counts_by_mock(
     sb: Any, mock_ids: list[str]
 ) -> dict[str, dict[str, dict[int, int]]]:
-    """mock_id -> module -> part -> count."""
+    """mock_id -> module -> part -> count.
+
+    Selects only the columns needed for aggregation.
+    """
     if not mock_ids:
         return {}
     rows = (
@@ -199,30 +227,6 @@ def _module_summaries(
     return result
 
 
-def _fetch_attempt_counts_by_mock(
-    sb: Any, mock_ids: list[str]
-) -> dict[str, int]:
-    if not mock_ids:
-        return {}
-    try:
-        rows = (
-            _exec(
-                sb.table("mock_attempts")
-                .select("mock_test_id")
-                .in_("mock_test_id", mock_ids)
-            ).data
-            or []
-        )
-        out: dict[str, int] = {}
-        for row in rows:
-            mid = str(row.get("mock_test_id") or "")
-            if mid:
-                out[mid] = out.get(mid, 0) + 1
-        return out
-    except Exception:
-        return {}
-
-
 def _build_mock_list_item(
     row: dict[str, Any],
     *,
@@ -242,6 +246,7 @@ def _build_mock_list_item(
         description=row.get("description"),
         status=status_val,
         is_published=bool(row.get("is_published")),
+        is_free=bool(row.get("is_free")),
         catalog_number=(
             int(row["catalog_number"])
             if row.get("catalog_number") is not None
@@ -259,16 +264,20 @@ def _build_mock_list_item(
 
 
 _MOCK_SELECT = (
-    "id, title, description, status, is_published, created_at, catalog_number, "
+    "id, title, description, status, is_published, is_free, created_at, catalog_number, "
     "listening_parts, reading_passages, writing_tasks"
 )
 
 
 def list_mocks() -> list[AdminMockListItem]:
+    from app.admin.parallel import run_parallel
+    from app.perf.timing import timed_call, timed_supabase
+
     sb = get_supabase()
-    rows = (
-        _exec(sb.table("mock_tests").select(_MOCK_SELECT).order("created_at")).data or []
-    )
+    rows = timed_supabase(
+        "mocks.list.mock_tests",
+        lambda: _exec(sb.table("mock_tests").select(_MOCK_SELECT).order("created_at")),
+    ).data or []
     rows.sort(
         key=lambda r: (
             r.get("catalog_number") is None,
@@ -277,9 +286,22 @@ def list_mocks() -> list[AdminMockListItem]:
         )
     )
     mock_ids = [str(row["id"]) for row in rows]
-    modules_by_mock = _fetch_modules_by_mock(sb, mock_ids)
-    counts_by_mock = _fetch_question_counts_by_mock(sb, mock_ids)
-    attempt_counts = _fetch_attempt_counts_by_mock(sb, mock_ids)
+    if not mock_ids:
+        return []
+
+    fetched = timed_call(
+        "mocks.list.aggregates_parallel",
+        lambda: run_parallel(
+            {
+                "modules": lambda: _fetch_modules_by_mock(sb, mock_ids),
+                "counts": lambda: _fetch_question_counts_by_mock(sb, mock_ids),
+                "attempts": lambda: _fetch_attempt_counts_by_mock(sb, mock_ids),
+            }
+        ),
+    )
+    modules_by_mock = fetched["modules"]
+    counts_by_mock = fetched["counts"]
+    attempt_counts = fetched["attempts"]
 
     return [
         _build_mock_list_item(
@@ -438,6 +460,8 @@ def patch_mock(
         updates["reading_passages"] = body.reading_passages
     if body.writing_tasks is not None:
         updates["writing_tasks"] = body.writing_tasks
+    if body.is_free is not None:
+        updates["is_free"] = body.is_free
 
     if not updates:
         return get_mock_detail(mock_id)

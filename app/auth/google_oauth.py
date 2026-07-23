@@ -67,10 +67,30 @@ def ensure_google_configured() -> None:
         )
 
 
+def _safe_next_path(raw: str | None) -> str:
+    """Allow only same-origin relative paths (block //evil.com open redirects)."""
+    if not isinstance(raw, str):
+        return "/dashboard"
+    nxt = raw.strip()
+    if not nxt.startswith("/") or nxt.startswith("//"):
+        return "/dashboard"
+    if "\\" in nxt or "://" in nxt:
+        return "/dashboard"
+    # Reject /%2f%2f… style protocol-relative tricks after a single decode pass.
+    from urllib.parse import unquote
+
+    decoded = unquote(nxt)
+    if decoded.startswith("//") or "\\" in decoded or "://" in decoded:
+        return "/dashboard"
+    if not decoded.startswith("/"):
+        return "/dashboard"
+    return nxt
+
+
 def create_oauth_state(*, next_path: str) -> str:
     settings = get_settings()
     payload = {
-        "next": next_path if next_path.startswith("/") else "/dashboard",
+        "next": _safe_next_path(next_path),
         "n": secrets.token_urlsafe(8),
         "type": "google_oauth",
     }
@@ -85,8 +105,7 @@ def parse_oauth_state(state: str) -> str:
         )
         if payload.get("type") != "google_oauth":
             raise JWTError("invalid type")
-        nxt = payload.get("next", "/dashboard")
-        return nxt if isinstance(nxt, str) and nxt.startswith("/") else "/dashboard"
+        return _safe_next_path(payload.get("next", "/dashboard"))
     except JWTError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid OAuth state.") from exc
 

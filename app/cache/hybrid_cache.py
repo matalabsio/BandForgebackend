@@ -22,6 +22,8 @@ _memory_store: dict[str, tuple[float, str]] = {}
 _memory_lock = Lock()
 _redis_client: Any | None = None
 _redis_attempted = False
+_MEMORY_MAX_KEYS = 10_000
+_mem_write_count = 0
 
 
 def _get_redis() -> Any | None:
@@ -34,11 +36,25 @@ def _get_redis() -> Any | None:
         _redis_client = None
         return None
     try:
-        _redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+        _redis_client = Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=0.5,
+            socket_timeout=0.75,
+        )
         _redis_client.ping()
     except Exception:
         _redis_client = None
     return _redis_client
+
+
+def _mem_prune_expired(now: float) -> None:
+    doomed = [k for k, (exp, _) in _memory_store.items() if exp < now]
+    for k in doomed:
+        _memory_store.pop(k, None)
+    while len(_memory_store) > _MEMORY_MAX_KEYS:
+        # Evict arbitrary oldest-inserted key (dict preserves insertion order).
+        _memory_store.pop(next(iter(_memory_store)))
 
 
 def _mem_get(key: str) -> str | None:
@@ -55,7 +71,11 @@ def _mem_get(key: str) -> str | None:
 
 
 def _mem_set(key: str, value: str, ttl_seconds: int) -> None:
+    global _mem_write_count
     with _memory_lock:
+        _mem_write_count += 1
+        if _mem_write_count % 64 == 0 or len(_memory_store) >= _MEMORY_MAX_KEYS:
+            _mem_prune_expired(time.time())
         _memory_store[key] = (time.time() + max(1, ttl_seconds), value)
 
 

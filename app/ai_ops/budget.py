@@ -35,8 +35,7 @@ def get_budget_status() -> BudgetStatus:
     settings = get_settings()
     daily_limit = max(0, int(settings.claude_daily_limit))
     monthly_limit = max(0, int(settings.claude_monthly_limit))
-    daily_used = ai_metrics.get_counter(CLAUDE_EVALS_METRIC, period="day")
-    monthly_used = ai_metrics.get_counter(CLAUDE_EVALS_METRIC, period="month")
+    daily_used, monthly_used = ai_metrics.get_day_month_counters(CLAUDE_EVALS_METRIC)
 
     if daily_limit > 0 and daily_used >= daily_limit:
         return BudgetStatus(

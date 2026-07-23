@@ -76,6 +76,54 @@ def get_counter(metric: str, *, period: str = "day") -> int:
         return int(_mem_counters.get(key, 0))
 
 
+def get_counters(
+    metrics: list[str],
+    *,
+    period: str = "day",
+) -> dict[str, int]:
+    """Batch-read counters with a single MGET (falls back to memory)."""
+    if not metrics:
+        return {}
+    pid = _day_key() if period == "day" else _month_key()
+    keys = [_counter_key(metric, pid) for metric in metrics]
+    out: dict[str, int] = {metric: 0 for metric in metrics}
+    client = _get_redis()
+    if client is not None:
+        try:
+            raw_values = client.mget(keys)
+            for metric, raw in zip(metrics, raw_values or [], strict=False):
+                if raw is not None:
+                    out[metric] = int(raw)
+            return out
+        except Exception:
+            logger.debug("Redis MGET failed", exc_info=True)
+    with _lock:
+        for metric, key in zip(metrics, keys, strict=False):
+            out[metric] = int(_mem_counters.get(key, 0))
+    return out
+
+
+def get_day_month_counters(metric: str) -> tuple[int, int]:
+    """Read day + month counters for one metric in a single MGET."""
+    day_key = _counter_key(metric, _day_key())
+    month_key = _counter_key(metric, _month_key())
+    client = _get_redis()
+    if client is not None:
+        try:
+            raw_day, raw_month = client.mget([day_key, month_key])
+            return (
+                int(raw_day) if raw_day is not None else 0,
+                int(raw_month) if raw_month is not None else 0,
+            )
+        except Exception:
+            logger.debug("Redis day/month MGET failed", exc_info=True)
+    with _lock:
+        return (
+            int(_mem_counters.get(day_key, 0)),
+            int(_mem_counters.get(month_key, 0)),
+        )
+
+
 def record_failure(provider: str, reason: str) -> None:
     entry = {
         "provider": provider,
@@ -174,18 +222,39 @@ def record_eval_outcome(
 
 
 def snapshot_today() -> dict[str, Any]:
-    calls = get_counter("calls")
-    success = get_counter("success")
-    errors = get_counter("errors")
-    retries = get_counter("retries")
-    latency_sum = get_counter("latency_ms_sum")
-    latency_count = get_counter("latency_ms_count")
-    cost_micros = get_counter("cost_usd_micros")
+    from app.perf.timing import timed_call
+
+    metric_names = [
+        "calls",
+        "success",
+        "errors",
+        "retries",
+        "latency_ms_sum",
+        "latency_ms_count",
+        "cost_usd_micros",
+        "stub_calls",
+        "cache_hits",
+        "cache_misses",
+        "tokens_in",
+        "tokens_out",
+    ]
+    counters = timed_call(
+        "ai.snapshot.mget",
+        lambda: get_counters(metric_names, period="day"),
+    )
+    calls = counters["calls"]
+    success = counters["success"]
+    errors = counters["errors"]
+    retries = counters["retries"]
+    latency_sum = counters["latency_ms_sum"]
+    latency_count = counters["latency_ms_count"]
+    cost_micros = counters["cost_usd_micros"]
     avg_latency = (
         round(latency_sum / latency_count, 1) if latency_count > 0 else 0.0
     )
     success_rate = round((success / calls) * 100.0, 1) if calls > 0 else 100.0
     retry_rate = round((retries / calls) * 100.0, 1) if calls > 0 else 0.0
+    status = timed_call("ai.snapshot.redis_status", redis_status)
     return {
         "period": "day",
         "day": _day_key(),
@@ -193,22 +262,24 @@ def snapshot_today() -> dict[str, Any]:
         "success": success,
         "errors": errors,
         "retries": retries,
-        "stub_calls": get_counter("stub_calls"),
-        "cache_hits": get_counter("cache_hits"),
-        "cache_misses": get_counter("cache_misses"),
-        "tokens_in": get_counter("tokens_in"),
-        "tokens_out": get_counter("tokens_out"),
+        "stub_calls": counters["stub_calls"],
+        "cache_hits": counters["cache_hits"],
+        "cache_misses": counters["cache_misses"],
+        "tokens_in": counters["tokens_in"],
+        "tokens_out": counters["tokens_out"],
         "estimated_cost_usd": round(cost_micros / 1_000_000.0, 4),
         "avg_latency_ms": avg_latency,
         "success_rate_pct": success_rate,
         "retry_rate_pct": retry_rate,
-        "redis_status": redis_status(),
+        "redis_status": status,
         "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
 __all__ = [
     "get_counter",
+    "get_counters",
+    "get_day_month_counters",
     "incr",
     "recent_failures",
     "record_eval_outcome",

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.admin.parallel import run_parallel
 from app.admin.schemas import (
     DailyActivityPoint,
     DashboardMetrics,
@@ -16,6 +17,7 @@ from app.mock_catalog.constants import (
     MAX_CANDIDATE_CATALOG_NUMBER,
     is_candidate_live_catalog_number,
 )
+from app.perf.timing import timed_call, timed_supabase
 
 
 def _parse_dt(value: Any) -> datetime:
@@ -76,140 +78,247 @@ def _format_audit_message(action: str, metadata: dict[str, Any] | None) -> str:
     return f"Admin action: {action.replace('.', ' ')}"
 
 
-def get_dashboard_overview() -> DashboardOverview:
-    sb = get_supabase()
-    now = datetime.now(UTC)
-    since_7d = (now - timedelta(days=7)).isoformat()
-    since_14d = (now - timedelta(days=14)).isoformat()
-
-    users = sb.table("users").select("id", count="exact").execute()
-    total_users = users.count or 0
-
-    signups_7d = (
-        sb.table("users")
-        .select("id", count="exact")
-        .gte("created_at", since_7d)
-        .execute()
-    ).count or 0
-
-    signups_prev_7d = (
-        sb.table("users")
-        .select("id", count="exact")
-        .gte("created_at", since_14d)
-        .lt("created_at", since_7d)
-        .execute()
-    ).count or 0
-
-    mock_attempts_7d = (
-        sb.table("mock_attempts")
-        .select("id", count="exact")
-        .gte("started_at", since_7d)
-        .execute()
-    ).count or 0
-
-    mock_attempts_prev_7d = (
-        sb.table("mock_attempts")
-        .select("id", count="exact")
-        .gte("started_at", since_14d)
-        .lt("started_at", since_7d)
-        .execute()
-    ).count or 0
-
-    speaking_pending = (
-        sb.table("speaking_reviews")
-        .select("id", count="exact")
-        .eq("status", "pending")
-        .execute()
-    ).count or 0
-
-    writing_pending = 0
-    try:
-        mock_writing_pending = (
-            sb.table("writing_reviews")
-            .select("id", count="exact")
-            .eq("status", "pending")
-            .execute()
+def _fetch_counts(since_7d: str, since_14d: str) -> dict[str, int]:
+    def total_users() -> int:
+        return timed_supabase(
+            "dashboard.users.total",
+            lambda: get_supabase().table("users").select("id", count="exact").execute(),
         ).count or 0
-        diag_writing_pending = (
-            sb.table("diagnostic_review_submissions")
-            .select("id", count="exact")
-            .eq("status", "pending_review")
-            .execute()
-        ).count or 0
-        writing_pending = int(mock_writing_pending) + int(diag_writing_pending)
-    except Exception:
-        writing_pending = 0
 
-    mock_rows = (
-        sb.table("mock_tests")
-        .select("id, status, catalog_number")
-        .not_.is_("catalog_number", "null")
-        .execute()
-    ).data or []
-    live_catalog_rows = [
-        r
-        for r in mock_rows
-        if is_candidate_live_catalog_number(r.get("catalog_number"))
-    ]
-    published_mocks = sum(
-        1 for r in live_catalog_rows if r.get("status") == "published"
+    def signups_7d() -> int:
+        return timed_supabase(
+            "dashboard.users.signups_7d",
+            lambda: (
+                get_supabase()
+                .table("users")
+                .select("id", count="exact")
+                .gte("created_at", since_7d)
+                .execute()
+            ),
+        ).count or 0
+
+    def signups_prev_7d() -> int:
+        return timed_supabase(
+            "dashboard.users.signups_prev_7d",
+            lambda: (
+                get_supabase()
+                .table("users")
+                .select("id", count="exact")
+                .gte("created_at", since_14d)
+                .lt("created_at", since_7d)
+                .execute()
+            ),
+        ).count or 0
+
+    def mock_attempts_7d() -> int:
+        return timed_supabase(
+            "dashboard.mock_attempts.count_7d",
+            lambda: (
+                get_supabase()
+                .table("mock_attempts")
+                .select("id", count="exact")
+                .gte("started_at", since_7d)
+                .execute()
+            ),
+        ).count or 0
+
+    def mock_attempts_prev_7d() -> int:
+        return timed_supabase(
+            "dashboard.mock_attempts.count_prev_7d",
+            lambda: (
+                get_supabase()
+                .table("mock_attempts")
+                .select("id", count="exact")
+                .gte("started_at", since_14d)
+                .lt("started_at", since_7d)
+                .execute()
+            ),
+        ).count or 0
+
+    def speaking_pending() -> int:
+        return timed_supabase(
+            "dashboard.speaking_reviews.pending",
+            lambda: (
+                get_supabase()
+                .table("speaking_reviews")
+                .select("id", count="exact")
+                .eq("status", "pending")
+                .execute()
+            ),
+        ).count or 0
+
+    def writing_pending_mock() -> int:
+        try:
+            return timed_supabase(
+                "dashboard.writing_reviews.pending",
+                lambda: (
+                    get_supabase()
+                    .table("writing_reviews")
+                    .select("id", count="exact")
+                    .eq("status", "pending")
+                    .execute()
+                ),
+            ).count or 0
+        except Exception:
+            return 0
+
+    def writing_pending_diag() -> int:
+        try:
+            return timed_supabase(
+                "dashboard.diagnostic_reviews.pending",
+                lambda: (
+                    get_supabase()
+                    .table("diagnostic_review_submissions")
+                    .select("id", count="exact")
+                    .eq("status", "pending_review")
+                    .execute()
+                ),
+            ).count or 0
+        except Exception:
+            return 0
+
+    def published_mocks() -> int:
+        rows = timed_supabase(
+            "dashboard.mock_tests.catalog",
+            lambda: (
+                get_supabase()
+                .table("mock_tests")
+                .select("id, status, catalog_number")
+                .not_.is_("catalog_number", "null")
+                .execute()
+            ),
+        ).data or []
+        live = [
+            r for r in rows if is_candidate_live_catalog_number(r.get("catalog_number"))
+        ]
+        return sum(1 for r in live if r.get("status") == "published")
+
+    results = timed_call(
+        "dashboard.counts_parallel",
+        lambda: run_parallel(
+            {
+                "total_users": total_users,
+                "signups_7d": signups_7d,
+                "signups_prev_7d": signups_prev_7d,
+                "mock_attempts_7d": mock_attempts_7d,
+                "mock_attempts_prev_7d": mock_attempts_prev_7d,
+                "speaking_pending": speaking_pending,
+                "writing_pending_mock": writing_pending_mock,
+                "writing_pending_diag": writing_pending_diag,
+                "published_mocks": published_mocks,
+            }
+        ),
     )
-    total_mocks = MAX_CANDIDATE_CATALOG_NUMBER
+    writing_pending = int(results["writing_pending_mock"]) + int(
+        results["writing_pending_diag"]
+    )
+    return {
+        "total_users": int(results["total_users"]),
+        "signups_7d": int(results["signups_7d"]),
+        "signups_prev_7d": int(results["signups_prev_7d"]),
+        "mock_attempts_7d": int(results["mock_attempts_7d"]),
+        "mock_attempts_prev_7d": int(results["mock_attempts_prev_7d"]),
+        "speaking_pending": int(results["speaking_pending"]),
+        "writing_pending": writing_pending,
+        "published_mocks": int(results["published_mocks"]),
+    }
 
+
+def _fetch_activity_rows(since_7d: str, since_14d: str) -> dict[str, list[dict[str, Any]]]:
+    def attempt_rows() -> list[dict[str, Any]]:
+        return timed_supabase(
+            "dashboard.mock_attempts.rows_14d",
+            lambda: (
+                get_supabase()
+                .table("mock_attempts")
+                .select("user_id, started_at")
+                .gte("started_at", since_14d)
+                .execute()
+            ),
+        ).data or []
+
+    def test_attempt_rows() -> list[dict[str, Any]]:
+        return timed_supabase(
+            "dashboard.test_attempts.rows_14d",
+            lambda: (
+                get_supabase()
+                .table("test_attempts")
+                .select("user_id, started_at")
+                .gte("started_at", since_14d)
+                .execute()
+            ),
+        ).data or []
+
+    def signup_rows() -> list[dict[str, Any]]:
+        return timed_supabase(
+            "dashboard.users.signup_rows_7d",
+            lambda: (
+                get_supabase()
+                .table("users")
+                .select("created_at")
+                .gte("created_at", since_7d)
+                .execute()
+            ),
+        ).data or []
+
+    return timed_call(
+        "dashboard.activity_parallel",
+        lambda: run_parallel(
+            {
+                "attempt_rows": attempt_rows,
+                "test_attempt_rows": test_attempt_rows,
+                "signup_rows": signup_rows,
+            }
+        ),
+    )
+
+
+def _build_metrics_core(
+    *,
+    counts: dict[str, int],
+    since_7d: str,
+    since_14d: str,
+) -> tuple[DashboardMetrics, list[DailyActivityPoint]]:
+    since_7d_dt = _parse_dt(since_7d)
+    since_14d_dt = _parse_dt(since_14d)
     active_user_ids: set[str] = set()
     prev_active_user_ids: set[str] = set()
     buckets = _day_buckets()
 
-    attempt_rows = (
-        sb.table("mock_attempts")
-        .select("user_id, started_at")
-        .gte("started_at", since_14d)
-        .execute()
-    ).data or []
-    for row in attempt_rows:
+    activity = _fetch_activity_rows(since_7d, since_14d)
+
+    for row in activity["attempt_rows"]:
         uid = row.get("user_id")
         started = row.get("started_at")
         if not uid or not started:
             continue
         ts = _parse_dt(started)
         uid_str = str(uid)
-        if ts >= _parse_dt(since_7d):
+        if ts >= since_7d_dt:
             active_user_ids.add(uid_str)
             idx = _bucket_index(buckets, ts)
             if idx is not None:
                 buckets[idx]["mock_attempts"] += 1
                 buckets[idx]["active_users"].add(uid_str)
-        elif ts >= _parse_dt(since_14d):
+        elif ts >= since_14d_dt:
             prev_active_user_ids.add(uid_str)
 
-    test_attempt_rows = (
-        sb.table("test_attempts")
-        .select("user_id, started_at")
-        .gte("started_at", since_14d)
-        .execute()
-    ).data or []
-    for row in test_attempt_rows:
+    for row in activity["test_attempt_rows"]:
         uid = row.get("user_id")
         started = row.get("started_at")
         if not uid or not started:
             continue
         ts = _parse_dt(started)
         uid_str = str(uid)
-        if ts >= _parse_dt(since_7d):
+        if ts >= since_7d_dt:
             active_user_ids.add(uid_str)
             idx = _bucket_index(buckets, ts)
             if idx is not None:
                 buckets[idx]["active_users"].add(uid_str)
-        elif ts >= _parse_dt(since_14d):
+        elif ts >= since_14d_dt:
             prev_active_user_ids.add(uid_str)
 
-    signup_rows = (
-        sb.table("users")
-        .select("created_at")
-        .gte("created_at", since_7d)
-        .execute()
-    ).data or []
-    for row in signup_rows:
+    for row in activity["signup_rows"]:
         created = row.get("created_at")
         if not created:
             continue
@@ -228,16 +337,77 @@ def get_dashboard_overview() -> DashboardOverview:
         for b in buckets
     ]
 
-    activity_candidates: list[RecentActivityItem] = []
+    metrics = DashboardMetrics(
+        total_users=counts["total_users"],
+        active_users_7d=len(active_user_ids),
+        new_signups_7d=counts["signups_7d"],
+        mock_attempts_7d=counts["mock_attempts_7d"],
+        speaking_pending=counts["speaking_pending"],
+        writing_pending=counts["writing_pending"],
+        total_mocks=MAX_CANDIDATE_CATALOG_NUMBER,
+        published_mocks=counts["published_mocks"],
+        users_trend_pct=_trend_pct(len(active_user_ids), len(prev_active_user_ids)),
+        signups_trend_pct=_trend_pct(counts["signups_7d"], counts["signups_prev_7d"]),
+        mocks_trend_pct=_trend_pct(
+            counts["mock_attempts_7d"], counts["mock_attempts_prev_7d"]
+        ),
+    )
+    return metrics, weekly_activity
 
-    recent_users = (
-        sb.table("users")
-        .select("id, full_name, email, created_at")
-        .order("created_at", desc=True)
-        .limit(6)
-        .execute()
-    ).data or []
-    for row in recent_users:
+
+def _fetch_recent_activity() -> list[RecentActivityItem]:
+    def recent_users() -> list[dict[str, Any]]:
+        return timed_supabase(
+            "dashboard.users.recent",
+            lambda: (
+                get_supabase()
+                .table("users")
+                .select("id, full_name, email, created_at")
+                .order("created_at", desc=True)
+                .limit(6)
+                .execute()
+            ),
+        ).data or []
+
+    def recent_attempts() -> list[dict[str, Any]]:
+        return timed_supabase(
+            "dashboard.mock_attempts.recent",
+            lambda: (
+                get_supabase()
+                .table("mock_attempts")
+                .select("id, started_at, users(full_name, email), mock_tests(title)")
+                .order("started_at", desc=True)
+                .limit(6)
+                .execute()
+            ),
+        ).data or []
+
+    def audit_rows() -> list[dict[str, Any]]:
+        return timed_supabase(
+            "dashboard.audit.recent",
+            lambda: (
+                get_supabase()
+                .table("admin_audit_logs")
+                .select("id, action, metadata, created_at")
+                .order("created_at", desc=True)
+                .limit(6)
+                .execute()
+            ),
+        ).data or []
+
+    fetched = timed_call(
+        "dashboard.recent_parallel",
+        lambda: run_parallel(
+            {
+                "recent_users": recent_users,
+                "recent_attempts": recent_attempts,
+                "audit_rows": audit_rows,
+            }
+        ),
+    )
+
+    activity_candidates: list[RecentActivityItem] = []
+    for row in fetched["recent_users"]:
         name = row.get("full_name") or row.get("email") or "Someone"
         activity_candidates.append(
             RecentActivityItem(
@@ -247,15 +417,7 @@ def get_dashboard_overview() -> DashboardOverview:
                 created_at=_parse_dt(row["created_at"]),
             )
         )
-
-    recent_attempts = (
-        sb.table("mock_attempts")
-        .select("id, started_at, users(full_name, email), mock_tests(title)")
-        .order("started_at", desc=True)
-        .limit(6)
-        .execute()
-    ).data or []
-    for row in recent_attempts:
+    for row in fetched["recent_attempts"]:
         user = row.get("users") or {}
         mock = row.get("mock_tests") or {}
         name = user.get("full_name") or user.get("email") or "A student"
@@ -268,15 +430,7 @@ def get_dashboard_overview() -> DashboardOverview:
                 created_at=_parse_dt(row["started_at"]),
             )
         )
-
-    audit_rows = (
-        sb.table("admin_audit_logs")
-        .select("id, action, metadata, created_at")
-        .order("created_at", desc=True)
-        .limit(6)
-        .execute()
-    ).data or []
-    for row in audit_rows:
+    for row in fetched["audit_rows"]:
         activity_candidates.append(
             RecentActivityItem(
                 id=str(row["id"]),
@@ -287,21 +441,21 @@ def get_dashboard_overview() -> DashboardOverview:
         )
 
     activity_candidates.sort(key=lambda item: item.created_at, reverse=True)
-    recent_activity = activity_candidates[:8]
+    return activity_candidates[:8]
 
-    metrics = DashboardMetrics(
-        total_users=total_users,
-        active_users_7d=len(active_user_ids),
-        new_signups_7d=signups_7d,
-        mock_attempts_7d=mock_attempts_7d,
-        speaking_pending=speaking_pending,
-        writing_pending=writing_pending,
-        total_mocks=total_mocks,
-        published_mocks=published_mocks,
-        users_trend_pct=_trend_pct(len(active_user_ids), len(prev_active_user_ids)),
-        signups_trend_pct=_trend_pct(signups_7d, signups_prev_7d),
-        mocks_trend_pct=_trend_pct(mock_attempts_7d, mock_attempts_prev_7d),
+
+def get_dashboard_overview() -> DashboardOverview:
+    now = datetime.now(UTC)
+    since_7d = (now - timedelta(days=7)).isoformat()
+    since_14d = (now - timedelta(days=14)).isoformat()
+
+    counts = _fetch_counts(since_7d, since_14d)
+    metrics, weekly_activity = _build_metrics_core(
+        counts=counts,
+        since_7d=since_7d,
+        since_14d=since_14d,
     )
+    recent_activity = _fetch_recent_activity()
 
     return DashboardOverview(
         metrics=metrics,
@@ -311,5 +465,15 @@ def get_dashboard_overview() -> DashboardOverview:
 
 
 def get_dashboard_metrics() -> DashboardMetrics:
-    """Backward-compatible metrics-only accessor."""
-    return get_dashboard_overview().metrics
+    """Metrics-only path — skips recent activity feed fetches."""
+    now = datetime.now(UTC)
+    since_7d = (now - timedelta(days=7)).isoformat()
+    since_14d = (now - timedelta(days=14)).isoformat()
+
+    counts = _fetch_counts(since_7d, since_14d)
+    metrics, _weekly = _build_metrics_core(
+        counts=counts,
+        since_7d=since_7d,
+        since_14d=since_14d,
+    )
+    return metrics

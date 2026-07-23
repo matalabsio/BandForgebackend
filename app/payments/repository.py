@@ -16,6 +16,7 @@ from app.payments.constants import (
     EVENT_PENDING,
     EVENT_PROCESSED,
     PAYMENT_PAID,
+    PAYMENT_REFUNDED,
     SUBSCRIPTION_CANCELLED,
 )
 from app.payments.logging import payment_log
@@ -319,6 +320,10 @@ def confirm_payment_paid_bundle(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Payment not found.") from exc
         if "plan_not_found" in msg:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found.") from exc
+        if "payment_refunded" in msg:
+            from app.payments.exceptions import PaymentRefundedError
+
+            raise PaymentRefundedError() from exc
         payment_log(
             "RPC_FAILED",
             order=razorpay_order_id,
@@ -356,6 +361,11 @@ def _confirm_payment_paid_sequential(
     payment = get_payment_by_order_id(razorpay_order_id)
     if not payment:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Payment not found.")
+
+    if str(payment.get("status") or "") == PAYMENT_REFUNDED:
+        from app.payments.exceptions import PaymentRefundedError
+
+        raise PaymentRefundedError()
 
     existing_subs = list_subscriptions_for_payment(payment["id"])
     if existing_subs:
@@ -397,12 +407,22 @@ def _confirm_payment_paid_sequential(
             razorpay_signature=razorpay_signature,
         )
 
+    # Recompute stacking immediately before insert (best-effort if RPC unavailable).
+    plan = get_plan_by_id(payment["plan_id"])
+    if not plan:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found.")
+    from app.payments.service import _compute_subscription_dates
+
+    stacked_starts, stacked_expires = _compute_subscription_dates(
+        UUID(str(payment["user_id"])), plan
+    )
+
     sub = insert_subscription(
         user_id=UUID(str(payment["user_id"])),
         plan_id=payment["plan_id"],
         payment_id=payment["id"],
-        starts_at=starts_at,
-        expires_at=expires_at,
+        starts_at=stacked_starts,
+        expires_at=stacked_expires,
     )
     out = {
         "already_paid": payment["status"] == PAYMENT_PAID,

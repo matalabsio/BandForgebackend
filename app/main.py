@@ -41,6 +41,24 @@ async def lifespan(_app: FastAPI):
         f"redis={redis_status()}"
     )
     if settings.app_env.strip().lower() == "production":
+        weak_jwt_defaults = (
+            "dev-jwt-secret-change-in-production",
+            "dev-jwt-refresh-secret-change-in-production",
+        )
+        for label, value in (
+            ("JWT_SECRET", settings.jwt_secret),
+            ("JWT_REFRESH_SECRET", settings.jwt_refresh_secret),
+        ):
+            secret = (value or "").strip()
+            if (
+                not secret
+                or secret in weak_jwt_defaults
+                or len(secret) < 32
+            ):
+                raise RuntimeError(
+                    f"{label} is missing, uses a development default, or is shorter "
+                    "than 32 characters. Set a strong secret before running in production."
+                )
         if not settings.resend_api_key:
             raise RuntimeError(
                 "Speaking release email is enabled but RESEND_API_KEY is missing."
@@ -136,11 +154,18 @@ async def lifespan(_app: FastAPI):
     yield
 
 
+_settings = get_settings()
+_is_prod = _settings.app_env.strip().lower() == "production"
+_docs_enabled = (not _is_prod) or _settings.enable_api_docs
+
 app = FastAPI(
     title="BandForge API",
     description="bandforge-api — test engine, evaluation, async jobs",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 app.add_middleware(ApiTimingMiddleware)

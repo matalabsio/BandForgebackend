@@ -76,40 +76,57 @@ def _load_attempt_context(user_id: UUID) -> tuple[
     dict[str, dict[str, Any]],
 ]:
     """Load test attempts, mock_tests map, and module_scores for a user."""
+    from app.perf.timing import timed_supabase
+
     client = get_supabase()
     uid = str(user_id)
 
-    attempts_res = execute_with_retry(lambda: (
-        client.table("test_attempts")
-        .select("id, module, status, started_at, completed_at, mock_test_id")
-        .eq("user_id", uid)
-        .order("started_at", desc=True)
-        .limit(100)
-        .execute()
-    ))
+    attempts_res = timed_supabase(
+        "user_activity.test_attempts",
+        lambda: execute_with_retry(
+            lambda: (
+                client.table("test_attempts")
+                .select("id, module, status, started_at, completed_at, mock_test_id")
+                .eq("user_id", uid)
+                .order("started_at", desc=True)
+                .limit(100)
+                .execute()
+            )
+        ),
+    )
     attempts: list[dict[str, Any]] = list(attempts_res.data or [])
 
     mock_ids = sorted({a["mock_test_id"] for a in attempts if a.get("mock_test_id")})
     mocks_by_id: dict[str, dict[str, Any]] = {}
     if mock_ids:
-        mocks_res = execute_with_retry(lambda: (
-            client.table("mock_tests")
-            .select("id, title, catalog_number")
-            .in_("id", mock_ids)
-            .execute()
-        ))
+        mocks_res = timed_supabase(
+            "user_activity.mock_tests",
+            lambda: execute_with_retry(
+                lambda: (
+                    client.table("mock_tests")
+                    .select("id, title, catalog_number")
+                    .in_("id", mock_ids)
+                    .execute()
+                )
+            ),
+        )
         for row in mocks_res.data or []:
             mocks_by_id[str(row["id"])] = row
 
     attempt_ids = [a["id"] for a in attempts]
     scores_by_attempt: dict[str, dict[str, Any]] = {}
     if attempt_ids:
-        scores_res = execute_with_retry(lambda: (
-            client.table("module_scores")
-            .select("attempt_id, band, raw_score, total_count, module")
-            .in_("attempt_id", attempt_ids)
-            .execute()
-        ))
+        scores_res = timed_supabase(
+            "user_activity.module_scores",
+            lambda: execute_with_retry(
+                lambda: (
+                    client.table("module_scores")
+                    .select("attempt_id, band, raw_score, total_count, module")
+                    .in_("attempt_id", attempt_ids)
+                    .execute()
+                )
+            ),
+        )
         for row in scores_res.data or []:
             scores_by_attempt[str(row["attempt_id"])] = row
 

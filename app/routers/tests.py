@@ -7,12 +7,14 @@ from app.skill_program_gate import assert_skill_program_module_start
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.config import get_settings, settings_diagnostics
+from app.diagnostic.access import assert_mock_access
 from app.schemas.test_engine import (
     QuestionsResponse,
     StartAttemptRequest,
     StartAttemptResponse,
     TestSummary,
 )
+from app.security.entitlements import assert_premium_mock_access
 from app.services import test_engine
 from app.db.supabase_client import get_supabase
 from app.storage.r2_check import run_r2_check
@@ -61,6 +63,8 @@ def list_mock_tests(
 @router.get("/db-check")
 def db_check() -> dict[str, object]:
     """Postman-friendly Supabase + Phase 2 table probe (no frontend required)."""
+    if get_settings().app_env.strip().lower() == "production":
+        raise HTTPException(status_code=404, detail="Not found.")
     settings = get_settings()
     diag = settings_diagnostics()
     host_status, host_hint = probe_supabase(
@@ -170,6 +174,8 @@ def start_test_attempt(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> StartAttemptResponse:
     """Create an in-progress test attempt for the given mock test and module."""
+    assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     if body.skill_context:
         assert_skill_program_module_start(
             user_id=current_user.id,
@@ -186,6 +192,8 @@ def start_test_attempt(
 @router.get("/r2-check")
 def r2_check() -> dict[str, object]:
     """Postman-friendly R2 upload + presigned URL probe."""
+    if get_settings().app_env.strip().lower() == "production":
+        raise HTTPException(status_code=404, detail="Not found.")
     result = run_r2_check()
     ok = (
         result.get("r2_configured")

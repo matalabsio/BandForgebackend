@@ -197,6 +197,7 @@ class AdminMockListItem(BaseModel):
     description: str | None = None
     status: MockStatus
     is_published: bool
+    is_free: bool = False
     catalog_number: int | None = None
     created_at: datetime
     total_questions: int = 0
@@ -239,6 +240,7 @@ class PatchMockRequest(BaseModel):
     listening_parts: int | None = Field(default=None, ge=1, le=4)
     reading_passages: int | None = Field(default=None, ge=1, le=4)
     writing_tasks: int | None = Field(default=None, ge=1, le=2)
+    is_free: bool | None = None
 
 
 class PatchMockStatusRequest(BaseModel):
