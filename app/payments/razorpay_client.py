@@ -190,6 +190,19 @@ def list_recent_payments(
     return items
 
 
+def fetch_payment(razorpay_payment_id: str) -> dict[str, Any]:
+    """Fetch a single payment from Razorpay by payment id."""
+    client = _client()
+    try:
+        raw = client.payment.fetch(razorpay_payment_id)
+    except Exception as exc:
+        _raise_on_auth_failure(exc)
+        raise
+    if not isinstance(raw, dict):
+        raise RazorpayAuthError("Unexpected Razorpay payment response.")
+    return raw
+
+
 def verify_payment_signature(
     *,
     razorpay_order_id: str,

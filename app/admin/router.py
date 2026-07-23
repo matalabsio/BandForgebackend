@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 
 from app.admin import (
     ai_ops as admin_ai_ops,
@@ -232,14 +232,33 @@ def listening_audio_status_route(
     }
 
 
+ADMIN_AUDIO_MAX_BYTES = 200 * 1024 * 1024
+
+
 @router.post("/mocks/{mock_id}/ingest/audio")
 async def upload_audio_route(
+    request: Request,
     mock_id: UUID,
     admin: Annotated[UserPublic, Depends(require_admin)],
     part: int = Query(..., ge=1, le=4),
     file: UploadFile = File(...),
 ):
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > ADMIN_AUDIO_MAX_BYTES:
+                raise HTTPException(
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Audio file is too large.",
+                )
+        except ValueError:
+            pass
     content = await file.read()
+    if len(content) > ADMIN_AUDIO_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Audio file is too large.",
+        )
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Empty audio file.")
     key = f"listening/{mock_id}/part-{part}/full.mp3"

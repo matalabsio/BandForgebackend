@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.admin.parallel import run_parallel
 from app.ai_ops.budget import get_budget_status
 from app.ai_ops.circuit import is_claude_circuit_open
 from app.ai_ops.metrics import recent_failures, snapshot_today
-from app.cache.hybrid_cache import redis_status
+from app.cache.hybrid_cache import get_json, redis_status, set_json
 from app.config import get_settings
 from app.db.supabase_client import get_supabase
+from app.perf.timing import timed_call, timed_supabase
 from app.speaking.claude_client import claude_configured
 from app.writing.providers.groq_eval import GroqWritingProvider
+
+_AI_METRICS_CACHE_KEY = "bf:admin:ai_metrics:v1"
+_AI_METRICS_CACHE_TTL_SEC = 10
 
 
 class AiBudgetSnapshot(BaseModel):
@@ -78,13 +83,16 @@ def _speaking_ai_job_counts() -> tuple[int, int]:
     pending = 0
     failed = 0
     try:
-        sb = get_supabase()
-        result = (
-            sb.table("speaking_reviews")
-            .select("ai_scores")
-            .order("created_at", desc=True)
-            .limit(200)
-            .execute()
+        result = timed_supabase(
+            "ai.speaking_reviews.ai_scores",
+            lambda: (
+                get_supabase()
+                .table("speaking_reviews")
+                .select("ai_scores")
+                .order("created_at", desc=True)
+                .limit(200)
+                .execute()
+            ),
         )
         rows = result.data or []
         for row in rows:
@@ -102,18 +110,30 @@ def _speaking_ai_job_counts() -> tuple[int, int]:
     return pending, failed
 
 
-def get_ai_metrics() -> AiMetricsResponse:
-    snap = snapshot_today()
-    budget = get_budget_status()
-    circuit = is_claude_circuit_open()
-    pending, failed = _speaking_ai_job_counts()
+def _assemble_ai_metrics() -> AiMetricsResponse:
+    parts = timed_call(
+        "ai.metrics.parallel",
+        lambda: run_parallel(
+            {
+                "snap": snapshot_today,
+                "budget": get_budget_status,
+                "circuit": is_claude_circuit_open,
+                "speaking": _speaking_ai_job_counts,
+                "failures": lambda: recent_failures(10),
+            }
+        ),
+    )
+    snap = parts["snap"]
+    budget = parts["budget"]
+    circuit = parts["circuit"]
+    pending, failed = parts["speaking"]
     failures = [
         AiFailureItem(
             provider=str(item.get("provider") or "unknown"),
             reason=str(item.get("reason") or ""),
             at=str(item.get("at") or ""),
         )
-        for item in recent_failures(10)
+        for item in parts["failures"]
     ]
     return AiMetricsResponse(
         **snap,
@@ -138,13 +158,47 @@ def get_ai_metrics() -> AiMetricsResponse:
     )
 
 
+def get_ai_metrics() -> AiMetricsResponse:
+    cached = timed_call(
+        "ai.metrics.cache_get",
+        lambda: get_json(_AI_METRICS_CACHE_KEY),
+    )
+    if isinstance(cached, dict):
+        try:
+            return AiMetricsResponse.model_validate(cached)
+        except Exception:
+            pass
+
+    response = _assemble_ai_metrics()
+    timed_call(
+        "ai.metrics.cache_set",
+        lambda: set_json(
+            _AI_METRICS_CACHE_KEY,
+            response.model_dump(mode="json"),
+            _AI_METRICS_CACHE_TTL_SEC,
+        ),
+    )
+    return response
+
+
 def get_ai_health() -> AiHealthResponse:
     settings = get_settings()
-    budget = get_budget_status()
-    circuit = is_claude_circuit_open()
-    pending, failed = _speaking_ai_job_counts()
+    parts = timed_call(
+        "ai.health.parallel",
+        lambda: run_parallel(
+            {
+                "budget": get_budget_status,
+                "circuit": is_claude_circuit_open,
+                "speaking": _speaking_ai_job_counts,
+                "redis": redis_status,
+            }
+        ),
+    )
+    budget = parts["budget"]
+    circuit = parts["circuit"]
+    pending, failed = parts["speaking"]
     return AiHealthResponse(
-        redis_status=redis_status(),
+        redis_status=parts["redis"],
         claude_configured=claude_configured(),
         groq_configured=GroqWritingProvider().configured(),
         writing_eval_stub=bool(settings.writing_eval_stub),

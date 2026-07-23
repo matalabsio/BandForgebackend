@@ -591,6 +591,10 @@ def test_verify_delegates_to_confirm_payment_paid():
             "app.payments.razorpay_client.verify_payment_signature",
             return_value=True,
         ),
+        patch(
+            "app.payments.razorpay_client.fetch_payment",
+            return_value={"status": "captured", "captured": True, "amount": 99900},
+        ),
         patch("app.payments.service.confirm_payment_paid") as confirm,
     ):
         confirm.return_value = SubscriptionOut(is_active=True, plan_name="Premium")
@@ -604,6 +608,33 @@ def test_verify_delegates_to_confirm_payment_paid():
         )
         assert resp.subscription.is_active
         confirm.assert_called_once()
+
+
+def test_verify_rejects_authorized_only_payment():
+    from app.payments.exceptions import PaymentNotCapturedError
+
+    with (
+        patch("app.payments.service.get_settings", return_value=_fake_settings()),
+        patch(
+            "app.payments.razorpay_client.verify_payment_signature",
+            return_value=True,
+        ),
+        patch(
+            "app.payments.razorpay_client.fetch_payment",
+            return_value={"status": "authorized", "captured": False, "amount": 99900},
+        ),
+        patch("app.payments.service.confirm_payment_paid") as confirm,
+    ):
+        with pytest.raises(PaymentNotCapturedError):
+            service.verify_payment(
+                user=_user(),
+                body=VerifyPaymentRequest(
+                    razorpay_order_id="o",
+                    razorpay_payment_id="p",
+                    razorpay_signature="good",
+                ),
+            )
+        confirm.assert_not_called()
 
 
 # --- webhook ---------------------------------------------------------------
@@ -808,8 +839,8 @@ def test_webhook_marks_event_failed_on_processing_error():
         failed.assert_called_once()
 
 
-def test_webhook_permanent_error_does_not_raise_503():
-    from app.payments.exceptions import PaymentNotFoundError
+def test_webhook_payment_not_found_is_transient_503():
+    from app.payments.exceptions import PaymentNotFoundError, WebhookTransientError
 
     with (
         patch(
@@ -825,10 +856,45 @@ def test_webhook_permanent_error_does_not_raise_503():
         ),
         patch("app.payments.repository.mark_event_failed") as failed,
     ):
+        with pytest.raises(WebhookTransientError) as exc:
+            webhook.handle_webhook(
+                raw_body=b"{}",
+                signature="ok",
+                event_id="evt_nf",
+                payload={
+                    "event": "payment.captured",
+                    "payload": {
+                        "payment": {
+                            "entity": {"id": "p", "order_id": "o", "amount": 99900}
+                        }
+                    },
+                },
+            )
+        assert exc.value.status_code == 503
+        failed.assert_called_once()
+
+
+def test_webhook_permanent_error_does_not_raise_503():
+    from app.payments.exceptions import PaymentAmountMismatchError
+
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch(
+            "app.payments.repository.insert_payment_event",
+            return_value={"id": "evt_amt"},
+        ),
+        patch(
+            "app.payments.service.confirm_payment_paid",
+            side_effect=PaymentAmountMismatchError(),
+        ),
+        patch("app.payments.repository.mark_event_failed") as failed,
+    ):
         result = webhook.handle_webhook(
             raw_body=b"{}",
             signature="ok",
-            event_id="evt_nf",
+            event_id="evt_amt",
             payload={
                 "event": "payment.captured",
                 "payload": {
@@ -1017,28 +1083,154 @@ def test_get_plans_payments_disabled_without_keys():
         assert resp.payments_enabled is False
 
 
-def test_premium_mock_access_blocks_m02_without_subscription():
-    from uuid import UUID
-
+def _premium_access_user() -> "UserPublic":
     from app.auth.schemas import UserPublic
-    from app.mock_catalog.constants import M02_MOCK_TEST_ID
-    from app.security.entitlements import assert_premium_mock_access
 
-    user = UserPublic(
+    return UserPublic(
         id=USER_ID,
         email="s@example.com",
         full_name="S",
         phone=None,
         target_band=7.0,
     )
+
+
+def test_premium_mock_access_allows_diagnostic_without_subscription():
+    from app.diagnostic.constants import DIAGNOSTIC_MOCK_TEST_ID
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
     with patch(
         "app.security.entitlements.has_active_subscription", return_value=False
+    ):
+        assert_premium_mock_access(user=user, mock_test_id=DIAGNOSTIC_MOCK_TEST_ID)
+
+
+def test_premium_mock_access_blocks_m01_without_subscription():
+    from uuid import UUID
+
+    from app.mock_catalog.constants import M01_MOCK_TEST_ID
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
+    with (
+        patch(
+            "app.security.entitlements.has_active_subscription", return_value=False
+        ),
+        patch(
+            "app.security.mock_access.get_mock_access_flags",
+            return_value={"is_free": False, "is_diagnostic": False},
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            assert_premium_mock_access(
+                user=user, mock_test_id=UUID(M01_MOCK_TEST_ID)
+            )
+        assert exc.value.status_code == 402
+
+
+def test_premium_mock_access_blocks_m02_without_subscription():
+    from uuid import UUID
+
+    from app.mock_catalog.constants import M02_MOCK_TEST_ID
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
+    with (
+        patch(
+            "app.security.entitlements.has_active_subscription", return_value=False
+        ),
+        patch(
+            "app.security.mock_access.get_mock_access_flags",
+            return_value={"is_free": False, "is_diagnostic": False},
+        ),
     ):
         with pytest.raises(HTTPException) as exc:
             assert_premium_mock_access(
                 user=user, mock_test_id=UUID(M02_MOCK_TEST_ID)
             )
         assert exc.value.status_code == 402
+
+
+def test_premium_mock_access_blocks_unknown_mock_without_subscription():
+    from uuid import UUID
+
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
+    with (
+        patch(
+            "app.security.entitlements.has_active_subscription", return_value=False
+        ),
+        patch(
+            "app.security.mock_access.get_mock_access_flags",
+            return_value={"is_free": False, "is_diagnostic": False},
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            assert_premium_mock_access(
+                user=user,
+                mock_test_id=UUID("a0000000-0000-4000-8000-000000000099"),
+            )
+        assert exc.value.status_code == 402
+
+
+def test_premium_mock_access_allows_is_free_without_subscription():
+    from uuid import UUID
+
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
+    with (
+        patch(
+            "app.security.entitlements.has_active_subscription", return_value=False
+        ),
+        patch(
+            "app.security.mock_access.get_mock_access_flags",
+            return_value={"is_free": True, "is_diagnostic": False},
+        ),
+    ):
+        assert_premium_mock_access(
+            user=user,
+            mock_test_id=UUID("a0000000-0000-4000-8000-000000000099"),
+        )
+
+
+def test_premium_mock_access_missing_mock_returns_404():
+    from uuid import UUID
+
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
+    with patch(
+        "app.security.mock_access.get_mock_access_flags",
+        return_value=None,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            assert_premium_mock_access(
+                user=user,
+                mock_test_id=UUID("a0000000-0000-4000-8000-000000000099"),
+            )
+        assert exc.value.status_code == 404
+
+
+def test_premium_mock_access_allows_paid_mock_with_subscription():
+    from uuid import UUID
+
+    from app.mock_catalog.constants import M01_MOCK_TEST_ID
+    from app.security.entitlements import assert_premium_mock_access
+
+    user = _premium_access_user()
+    with (
+        patch(
+            "app.security.entitlements.has_active_subscription", return_value=True
+        ),
+        patch(
+            "app.security.mock_access.get_mock_access_flags",
+            return_value={"is_free": False, "is_diagnostic": False},
+        ),
+    ):
+        assert_premium_mock_access(user=user, mock_test_id=UUID(M01_MOCK_TEST_ID))
 
 
 def test_receipt_default_length_is_32_chars():

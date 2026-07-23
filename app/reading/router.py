@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Respons
 from app.auth.dependencies import get_current_user, get_current_user_timed
 from app.auth.schemas import UserPublic
 from app.diagnostic.access import assert_mock_access
+from app.security.entitlements import assert_premium_mock_access
 from app.skill_program_gate import assert_skill_program_module_start
 from app.perf.timing import (
     PerfTimer,
@@ -93,6 +94,7 @@ def start_reading(
     ] = None,
 ) -> StartReadingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_skill_program_module_start(
         user_id=current_user.id,
         skill_context=skill_context,

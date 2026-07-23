@@ -15,12 +15,16 @@ from app.payments import razorpay_client, repository
 from app.payments.constants import (
     PAYMENT_CREATED,
     PAYMENT_PAID,
+    PAYMENT_REFUNDED,
     SUBSCRIPTION_ACTIVE,
 )
 from app.payments.exceptions import (
     PaymentAmountMismatchError,
     PaymentConsistencyError,
+    PaymentFetchError,
+    PaymentNotCapturedError,
     PaymentNotFoundError,
+    PaymentRefundedError,
     PaymentsDisabledError,
     PlanNotFoundError,
     RazorpayAuthError,
@@ -318,6 +322,16 @@ def confirm_payment_paid(
 
     payment_user_id = UUID(str(payment["user_id"]))
 
+    if payment["status"] == PAYMENT_REFUNDED:
+        payment_log(
+            "PAYMENT_REFUNDED_BLOCKED",
+            user_id=str(payment_user_id),
+            payment_id=str(payment["id"]),
+            order=razorpay_order_id,
+            payment=razorpay_payment_id,
+        )
+        raise PaymentRefundedError()
+
     if payment["status"] == PAYMENT_PAID:
         existing_subs = repository.list_subscriptions_for_payment(payment["id"])
         if existing_subs:
@@ -410,11 +424,43 @@ def verify_payment(
         valid=True,
     )
 
+    try:
+        rzp_payment = razorpay_client.fetch_payment(body.razorpay_payment_id)
+    except RazorpayAuthError:
+        raise
+    except Exception as exc:
+        payment_log(
+            "RAZORPAY_FETCH_FAILED",
+            user_id=str(user.id),
+            order=body.razorpay_order_id,
+            payment=body.razorpay_payment_id,
+            error=str(exc)[:300],
+        )
+        raise PaymentFetchError() from exc
+
+    status_raw = str(rzp_payment.get("status") or "").lower()
+    captured = rzp_payment.get("captured") is True or status_raw == "captured"
+    if not captured:
+        payment_log(
+            "PAYMENT_NOT_CAPTURED",
+            user_id=str(user.id),
+            order=body.razorpay_order_id,
+            payment=body.razorpay_payment_id,
+            status=status_raw,
+        )
+        raise PaymentNotCapturedError()
+
+    amount_raw = rzp_payment.get("amount")
+    if amount_raw is None:
+        raise PaymentFetchError()
+    captured_amount = int(amount_raw)
+
     subscription = confirm_payment_paid(
         razorpay_order_id=body.razorpay_order_id,
         razorpay_payment_id=body.razorpay_payment_id,
         razorpay_signature=body.razorpay_signature,
         user_id=user.id,
+        captured_amount=captured_amount,
     )
     payment_log(
         "VERIFY_SUCCESS",

@@ -1,4 +1,4 @@
-"""Phase 1 performance instrumentation (measure only, no optimizations)."""
+"""Performance instrumentation helpers."""
 
 from app.perf.timing import (
     PerfTimer,
@@ -9,6 +9,8 @@ from app.perf.timing import (
     perf_summary,
     reset_perf_context,
     set_request_id,
+    timed_call,
+    timed_supabase,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "perf_summary",
     "reset_perf_context",
     "set_request_id",
+    "timed_call",
+    "timed_supabase",
 ]

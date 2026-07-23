@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     )
 
     app_env: str = Field(default="development", validation_alias="APP_ENV")
+    enable_api_docs: bool = Field(
+        default=False,
+        validation_alias="ENABLE_API_DOCS",
+        description="When true, expose /docs in production. Ignored in non-production (docs always on).",
+    )
+    trust_x_forwarded_for: bool = Field(
+        default=False,
+        validation_alias="TRUST_X_FORWARDED_FOR",
+        description="When true, use rightmost X-Forwarded-For hop; otherwise request.client.host.",
+    )
 
     supabase_url: str = Field(
         validation_alias=AliasChoices("SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"),
@@ -298,6 +308,8 @@ class Settings(BaseSettings):
         "writing_eval_stub",
         "ai_budget_fallback_stub",
         "meta_whatsapp_enabled",
+        "enable_api_docs",
+        "trust_x_forwarded_for",
         mode="before",
     )
     @classmethod

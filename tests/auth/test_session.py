@@ -144,3 +144,54 @@ def test_session_route_returns_403_inactive_user():
         assert res.status_code == 403
     finally:
         app.dependency_overrides.clear()
+
+
+def test_refresh_session_rejects_inactive_user():
+    from datetime import datetime, timedelta, timezone
+
+    from app.auth.jwt import create_refresh_token
+    from app.auth.utils import hash_token
+
+    session_id = uuid4()
+    refresh = create_refresh_token(user_id=USER_ID, session_id=session_id)
+    now = datetime.now(timezone.utc)
+    session_row = {
+        "id": str(session_id),
+        "user_id": str(USER_ID),
+        "token_hash": hash_token(refresh),
+        "revoked_at": None,
+        "expires_at": (now + timedelta(days=30)).isoformat(),
+    }
+
+    mock_sb = MagicMock()
+    session_result = MagicMock()
+    session_result.data = [session_row]
+    user_result = MagicMock()
+    user_result.data = [_user_row(is_active=False)]
+
+    table = mock_sb.table.return_value
+    # refresh_sessions select chain
+    select_chain = table.select.return_value
+    select_chain.eq.return_value.eq.return_value.is_.return_value.limit.return_value.execute.return_value = (
+        session_result
+    )
+    # users select chain (second table("users") call)
+    def _table(name: str):
+        t = MagicMock()
+        if name == "refresh_sessions":
+            t.select.return_value.eq.return_value.eq.return_value.is_.return_value.limit.return_value.execute.return_value = (
+                session_result
+            )
+        else:
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = (
+                user_result
+            )
+        return t
+
+    mock_sb.table.side_effect = _table
+
+    with patch("app.auth.service.get_supabase", return_value=mock_sb):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(service.refresh_session(refresh_token=refresh))
+    assert exc.value.status_code == 403
+    assert "deactivated" in str(exc.value.detail).lower()

@@ -479,12 +479,32 @@ async def refresh_session(*, refresh_token: str) -> tuple[AuthResponse, str, str
     if not session.data:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session revoked or invalid.")
 
+    session_row = session.data[0]
+    now = utcnow()
+    exp = session_row.get("expires_at")
+    if exp is not None:
+        if isinstance(exp, str):
+            from datetime import datetime
+
+            exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=now.tzinfo)
+        else:
+            exp_dt = exp
+        if now > exp_dt:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired.")
+
     user = sb.table("users").select("*").eq("id", str(user_id)).limit(1).execute()
     if not user.data:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found.")
 
     row = user.data[0]
-    now = utcnow()
+    _assert_user_accessible(
+        email=row.get("email"),
+        email_verified_at=row.get("email_verified_at"),
+        is_active=bool(row.get("is_active", True)),
+    )
+
     sb.table("refresh_sessions").update({"revoked_at": now.isoformat()}).eq(
         "id", str(session_id)
     ).execute()
@@ -703,6 +723,19 @@ async def upload_user_avatar(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Use JPEG, PNG, or WebP.",
+        )
+
+    sniffed: str | None = None
+    if content.startswith(b"\xff\xd8\xff"):
+        sniffed = "image/jpeg"
+    elif content.startswith(b"\x89PNG\r\n\x1a\n"):
+        sniffed = "image/png"
+    elif len(content) >= 12 and content[0:4] == b"RIFF" and content[8:12] == b"WEBP":
+        sniffed = "image/webp"
+    if sniffed is None or sniffed != content_type:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "File content does not match a JPEG, PNG, or WebP image.",
         )
 
     ext = "jpg"

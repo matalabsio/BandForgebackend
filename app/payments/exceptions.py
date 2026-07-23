@@ -59,6 +59,30 @@ class PaymentAmountMismatchError(HTTPException):
         )
 
 
+class PaymentNotCapturedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Payment has not been captured yet.",
+        )
+
+
+class PaymentRefundedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="This payment was refunded and cannot be fulfilled.",
+        )
+
+
+class PaymentFetchError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="Could not verify payment with Razorpay. Please try again.",
+        )
+
+
 class PaymentConsistencyError(HTTPException):
     def __init__(self) -> None:
         super().__init__(

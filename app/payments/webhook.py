@@ -67,12 +67,14 @@ def _sanitize_headers(headers: dict[str, str] | None) -> dict[str, Any]:
 
 
 def _is_permanent_fulfillment_error(exc: Exception) -> bool:
-    if isinstance(
-        exc, (PaymentNotFoundError, PaymentAmountMismatchError, PlanNotFoundError)
-    ):
+    # PaymentNotFound is transient — order row may lag behind Razorpay capture.
+    if isinstance(exc, PaymentNotFoundError):
+        return False
+    if isinstance(exc, (PaymentAmountMismatchError, PlanNotFoundError)):
         return True
     if isinstance(exc, HTTPException) and exc.status_code in (400, 404):
-        return True
+        # Exclude PaymentNotFoundError (already handled); other 404s stay permanent.
+        return not isinstance(exc, PaymentNotFoundError)
     return False
 
 
@@ -162,7 +164,13 @@ def handle_webhook(
             _on_payment_failed(order_id=order_id)
         elif event_type == EVENT_REFUND_CREATED:
             refund = _refund_entity(payload)
-            _on_refund(razorpay_payment_id=refund.get("payment_id"))
+            refund_amount = refund.get("amount")
+            if refund_amount is not None:
+                refund_amount = int(refund_amount)
+            _on_refund(
+                razorpay_payment_id=refund.get("payment_id"),
+                refund_amount=refund_amount,
+            )
 
         if event_db_id:
             repository.mark_event_processed(event_db_id)
@@ -211,11 +219,26 @@ def _on_payment_failed(*, order_id: str) -> None:
     repository.mark_payment_status(payment_id=payment["id"], status=PAYMENT_FAILED)
 
 
-def _on_refund(*, razorpay_payment_id: str | None) -> None:
+def _on_refund(
+    *,
+    razorpay_payment_id: str | None,
+    refund_amount: int | None = None,
+) -> None:
     if not razorpay_payment_id:
         return
     sb_payment = repository.get_payment_by_razorpay_payment_id(razorpay_payment_id)
     if not sb_payment:
+        return
+    payment_amount = int(sb_payment.get("amount") or 0)
+    if refund_amount is not None and refund_amount < payment_amount:
+        payment_log(
+            "PARTIAL_REFUND_IGNORED",
+            user_id=str(sb_payment.get("user_id") or ""),
+            payment_id=str(sb_payment["id"]),
+            order=str(sb_payment.get("razorpay_order_id") or ""),
+            refund_amount=refund_amount,
+            payment_amount=payment_amount,
+        )
         return
     repository.mark_payment_status(
         payment_id=sb_payment["id"], status=PAYMENT_REFUNDED

@@ -14,7 +14,7 @@ from threading import Lock
 
 from fastapi import HTTPException, Request, status
 
-# Defaults documented in Razorpay.md §5f.
+# Defaults documented in Payment_Pipeline.md.
 LOGIN_LIMIT = 10
 LOGIN_WINDOW_SEC = 60
 CREATE_ORDER_LIMIT = 10
@@ -27,22 +27,59 @@ _lock = Lock()
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Identify the client for rate limits.
+
+    Default: ``request.client.host`` (safe behind Railway/trusted proxies).
+    When ``TRUST_X_FORWARDED_FOR`` is enabled, use the **rightmost** XFF hop
+    (never the leftmost client-supplied value).
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    if settings.trust_x_forwarded_for:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+            if hops:
+                return hops[-1]
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+_MAX_BUCKET_KEYS = 10_000
+_PRUNE_EVERY_N = 64
+_write_count = 0
 
 
 def _prune(timestamps: list[float], now: float, window_sec: int) -> list[float]:
     return [t for t in timestamps if now - t < window_sec]
 
 
+def _prune_all_buckets(now: float) -> None:
+    """Drop expired timestamps and empty keys across the map."""
+    stale: list[str] = []
+    for key, stamps in _buckets.items():
+        # Best-effort: use max window among known limits for global prune.
+        recent = _prune(stamps, now, max(LOGIN_WINDOW_SEC, CREATE_ORDER_WINDOW_SEC, VERIFY_WINDOW_SEC))
+        if recent:
+            _buckets[key] = recent
+        else:
+            stale.append(key)
+    for key in stale:
+        _buckets.pop(key, None)
+    while len(_buckets) > _MAX_BUCKET_KEYS:
+        _buckets.pop(next(iter(_buckets)))
+
+
 def _memory_allow(key: str, *, limit: int, window_sec: int) -> bool:
     """Return True if the request is allowed (and record it)."""
+    global _write_count
     now = time.time()
     with _lock:
+        _write_count += 1
+        if _write_count % _PRUNE_EVERY_N == 0 or len(_buckets) > _MAX_BUCKET_KEYS:
+            _prune_all_buckets(now)
         recent = _prune(_buckets[key], now, window_sec)
         if len(recent) >= limit:
             _buckets[key] = recent

@@ -597,6 +597,9 @@ def create_response_session(
                 str(existing["audio_url"]),
                 content_type=content_type,
                 expiry=remaining,
+                content_length=int(existing["size_bytes"])
+                if existing.get("size_bytes") is not None
+                else request.size_bytes,
             ),
             expires_at=expires_at,
             idempotency_key=expected_key,
@@ -642,6 +645,7 @@ def create_response_session(
             audio_key,
             content_type=content_type,
             expiry=SPEAKING_UPLOAD_EXPIRY_SECONDS,
+            content_length=request.size_bytes,
         ),
         expires_at=expires_at,
         idempotency_key=idempotency_key,
@@ -750,6 +754,11 @@ def upload_response(
     filename: str | None = None,
     background_tasks: BackgroundTasks | None = None,
 ) -> SpeakingResponsePublic:
+    if len(audio_bytes) > SPEAKING_MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Recording is too large.",
+        )
     if duration_sec < 5 or len(audio_bytes) < 2000:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Recording is too short.")
 
