@@ -2,6 +2,8 @@
 
 Used by Phase 5 Core Security (S6 / 5f):
 - POST /auth/login — per IP
+- POST /auth/send-otp — per phone
+- POST /auth/verify-otp — per IP (login bucket)
 - POST /api/payments/create-order — per user
 - POST /api/payments/verify — per user
 """
@@ -144,6 +146,21 @@ def enforce_login_rate_limit(request: Request) -> None:
         limit=LOGIN_LIMIT,
         window_sec=LOGIN_WINDOW_SEC,
         detail="Too many login attempts. Please try again shortly.",
+    )
+
+
+def enforce_send_otp_rate_limit(*, phone: str) -> None:
+    from app.auth.constants import (
+        OTP_RATE_LIMIT_PER_PHONE,
+        OTP_RATE_LIMIT_WINDOW_SECONDS,
+    )
+
+    enforce_rate_limit(
+        bucket="auth:send-otp",
+        identity=phone,
+        limit=OTP_RATE_LIMIT_PER_PHONE,
+        window_sec=OTP_RATE_LIMIT_WINDOW_SECONDS,
+        detail="Too many OTP requests for this number. Please try again later.",
     )
 
 

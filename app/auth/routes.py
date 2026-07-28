@@ -43,7 +43,10 @@ from app.auth.schemas import (
 )
 from app.auth import service
 from app.config import get_settings
-from app.security.rate_limit import enforce_login_rate_limit
+from app.security.rate_limit import (
+    enforce_login_rate_limit,
+    enforce_send_otp_rate_limit,
+)
 
 router = APIRouter(prefix=AUTH_ROUTER_PREFIX, tags=["auth"])
 
@@ -124,18 +127,28 @@ async def login(
 
 @router.post("/send-otp", response_model=MessageResponse)
 async def send_otp(body: SendOtpRequest) -> MessageResponse:
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Phone OTP is temporarily disabled.",
-    )
+    enforce_send_otp_rate_limit(phone=body.phone)
+    hint = await service.send_phone_otp(phone_digits=body.phone)
+    return MessageResponse(message=hint or "OTP sent.")
 
 
 @router.post("/verify-otp", response_model=AuthResponse)
-async def verify_otp(body: VerifyOtpRequest, response: Response) -> AuthResponse:
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Phone OTP is temporarily disabled.",
+async def verify_otp(
+    body: VerifyOtpRequest,
+    request: Request,
+    response: Response,
+) -> AuthResponse:
+    enforce_login_rate_limit(request)
+    auth, new_refresh, _ = await service.verify_phone_otp(
+        phone_digits=body.phone,
+        code=body.code,
     )
+    _set_auth_cookies(
+        response,
+        access_token=auth.access_token,
+        refresh_token=new_refresh,
+    )
+    return auth.model_copy(update={"refresh_token": new_refresh})
 
 
 @router.post("/verify-email", response_model=AuthResponse)

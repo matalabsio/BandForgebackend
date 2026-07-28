@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 async def send_otp_sms(*, phone_e164: str, code: str) -> bool:
     """Send OTP via MSG91. Returns True if sent or skipped in demo; False on failure."""
     settings = get_settings()
-    if not settings.msg91_auth_key:
+    if not settings.msg91_auth_key or not settings.msg91_template_id:
         logger.info("MSG91 not configured; skipping SMS to %s", phone_e164[-4:])
+        # Never silently skip real SMS in production.
         return settings.app_env != "production"
 
     digits = phone_e164.lstrip("+")

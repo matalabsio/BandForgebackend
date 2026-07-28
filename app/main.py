@@ -7,7 +7,6 @@ from fastapi.responses import HTMLResponse
 from app.config import get_settings, razorpay_env_diagnostics, reload_settings, settings_diagnostics
 from app.cache.hybrid_cache import redis_status
 from app.middleware.timing import ApiTimingMiddleware
-from app.admin import router as admin_router
 from app.auth import router as auth_router
 from app.listening import router as listening_router
 from app.learning import router as learning_router
@@ -15,7 +14,7 @@ from app.practice import router as practice_router
 from app.tutor import router as tutor_router
 from app.payments import router as payments_router
 from app.reading import router as reading_router
-from app.speaking import router as speaking_router
+from app.speaking.router import router as speaking_router
 from app.notifications.router import router as notifications_router
 from app.writing.router import router as writing_router
 from app.routers import attempts, dashboard, diagnostic, mock_attempts, status, tests
@@ -179,7 +178,6 @@ app.add_middleware(
 
 app.include_router(status.router)
 app.include_router(auth_router)
-app.include_router(admin_router)
 app.include_router(tests.router)
 app.include_router(attempts.router)
 app.include_router(dashboard.router)

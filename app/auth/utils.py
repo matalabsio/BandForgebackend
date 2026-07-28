@@ -27,8 +27,11 @@ def phone_e164(digits10: str) -> str:
     return f"+91{digits10}"
 
 
-def generate_otp_code(length: int = 6) -> str:
-    return "".join(secrets.choice("0123456789") for _ in range(length))
+def generate_otp_code(length: int | None = None) -> str:
+    from app.auth.constants import OTP_LENGTH
+
+    n = OTP_LENGTH if length is None else length
+    return "".join(secrets.choice("0123456789") for _ in range(n))
 
 
 def hash_token(token: str) -> str:

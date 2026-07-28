@@ -30,7 +30,7 @@ class SendOtpRequest(BaseModel):
 
 class VerifyOtpRequest(BaseModel):
     phone: str
-    code: str = Field(min_length=6, max_length=6)
+    code: str = Field(min_length=4, max_length=4)
 
     @field_validator("phone")
     @classmethod
@@ -43,9 +43,11 @@ class VerifyOtpRequest(BaseModel):
     @field_validator("code")
     @classmethod
     def validate_code(cls, v: str) -> str:
+        from app.auth.constants import OTP_LENGTH
+
         digits = "".join(c for c in v if c.isdigit())
-        if len(digits) != 6:
-            raise ValueError("OTP must be 6 digits.")
+        if len(digits) != OTP_LENGTH:
+            raise ValueError(f"OTP must be {OTP_LENGTH} digits.")
         return digits
 
 
