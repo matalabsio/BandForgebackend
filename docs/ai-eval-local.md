@@ -224,6 +224,7 @@ Trainer path without rebuilding queues:
 
 ```bash
 python -m pytest tests/admin/test_review_phase7.py -q
+# (tests live in ../admin/tests; backend/tests/admin is a symlink)
 ```
 
 ### Phase 8 (AI quality assurance)

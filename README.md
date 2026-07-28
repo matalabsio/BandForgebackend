@@ -84,6 +84,7 @@ python scripts/speaking_eval_smoke.py
 Live Claude: set `WRITING_EVAL_STUB=false` and `WRITING_LLM_PRIMARY=claude`, then run `python scripts/evaluate_fixture.py <fixture> --live`.
 
 Admin AI ops dashboard: `/admin/ai` (budget, cost estimate, latency, circuit, failures).
+Admin Python package source: `../admin/api/` (symlinked as `app/admin`). Admin UI: `../admin/web`.
 
 ## Phase 2 — fewer DB round-trips
 
