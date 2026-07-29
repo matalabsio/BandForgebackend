@@ -381,7 +381,12 @@ class Settings(BaseSettings):
                 if origin and origin not in origins:
                     origins.append(origin)
         if self.app_env.strip().lower() != "production":
-            for local in ("http://localhost:3000", "http://127.0.0.1:3000"):
+            for local in (
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3001",
+            ):
                 if local not in origins:
                     origins.append(local)
         return origins

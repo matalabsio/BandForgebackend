@@ -7,7 +7,7 @@ import re
 
 from app.writing.evaluation import word_count
 
-MIN_WORDS_FOR_AI = 30
+MIN_WORDS_FOR_AI = 100
 
 
 def normalize_text(text: str) -> str:
