@@ -454,7 +454,7 @@ def test_essay_hash_cache_hit_skips_groq():
         assert result.writing_band == 7.0
 
 
-def test_rejects_essay_shorter_than_30_words_after_cleaning():
+def test_rejects_essay_shorter_than_100_words_after_cleaning():
     request = MagicMock()
     body = MagicMock(
         client_attempt_id="attempt-short",

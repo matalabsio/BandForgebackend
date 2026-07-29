@@ -87,6 +87,19 @@ def test_login_helper_uses_client_ip():
     assert exc.value.status_code == 429
 
 
+def test_send_otp_helper_per_phone():
+    from app.auth.constants import OTP_RATE_LIMIT_PER_PHONE
+
+    with patch("app.security.rate_limit._redis_allow", return_value=None):
+        for _ in range(OTP_RATE_LIMIT_PER_PHONE):
+            rl.enforce_send_otp_rate_limit(phone="9876543210")
+        with pytest.raises(HTTPException) as exc:
+            rl.enforce_send_otp_rate_limit(phone="9876543210")
+    assert exc.value.status_code == 429
+    with patch("app.security.rate_limit._redis_allow", return_value=None):
+        rl.enforce_send_otp_rate_limit(phone="9123456789")
+
+
 def test_create_order_and_verify_helpers():
     with patch("app.security.rate_limit._redis_allow", return_value=None):
         for _ in range(rl.CREATE_ORDER_LIMIT):

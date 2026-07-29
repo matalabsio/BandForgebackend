@@ -1,10 +1,11 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from app.auth.constants import (
     OTP_EXPIRE_MINUTES,
     OTP_MAX_ATTEMPTS,
     OTP_PURPOSE_LOGIN,
+    OTP_RESEND_COOLDOWN_SECONDS,
 )
 from app.auth.utils import generate_otp_code, hash_otp, utcnow
 from app.config import get_settings
@@ -24,12 +25,63 @@ def _demo_mode() -> bool:
     return get_settings().app_env != "production" or get_settings().auth_demo_otp_enabled
 
 
+def _parse_ts(value: object, *, fallback_tz: object) -> datetime:
+    if isinstance(value, datetime):
+        exp = value
+    elif isinstance(value, str) and value.endswith("Z"):
+        exp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        exp = datetime.fromisoformat(str(value))
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=fallback_tz)  # type: ignore[arg-type]
+    return exp
+
+
+def _ensure_msg91_ready_for_production() -> None:
+    settings = get_settings()
+    if settings.app_env != "production":
+        return
+    if settings.msg91_auth_key and settings.msg91_template_id:
+        return
+    raise OtpError(
+        "Phone OTP is misconfigured. MSG91 credentials are required in production.",
+        503,
+    )
+
+
+def _enforce_resend_cooldown(*, phone: str, purpose: str) -> None:
+    sb = get_supabase()
+    now = utcnow()
+    latest = (
+        sb.table("otp_verifications")
+        .select("created_at")
+        .eq("phone", phone)
+        .eq("purpose", purpose)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not latest.data:
+        return
+    created = _parse_ts(latest.data[0]["created_at"], fallback_tz=now.tzinfo)
+    elapsed = (now - created).total_seconds()
+    if elapsed < OTP_RESEND_COOLDOWN_SECONDS:
+        wait = int(OTP_RESEND_COOLDOWN_SECONDS - elapsed) + 1
+        raise OtpError(
+            f"Please wait {wait}s before requesting another OTP.",
+            429,
+        )
+
+
 async def create_and_send_otp(*, phone: str, purpose: str = OTP_PURPOSE_LOGIN) -> str | None:
     """Create OTP record; send via MSG91 when configured. Returns demo hint if applicable."""
     settings = get_settings()
     sb = get_supabase()
     now = utcnow()
     expires = now + timedelta(minutes=OTP_EXPIRE_MINUTES)
+
+    _ensure_msg91_ready_for_production()
+    _enforce_resend_cooldown(phone=phone, purpose=purpose)
 
     code = generate_otp_code()
     if settings.auth_demo_otp:
@@ -61,7 +113,7 @@ async def create_and_send_otp(*, phone: str, purpose: str = OTP_PURPOSE_LOGIN) -
 
     if _demo_mode():
         return (
-            "Demo mode: use the configured demo OTP or any 6-digit code if open OTP is enabled."
+            "Demo mode: use the configured demo OTP or any 4-digit code if open OTP is enabled."
         )
     return None
 
@@ -112,18 +164,7 @@ async def verify_otp_code(*, phone: str, code: str, purpose: str = OTP_PURPOSE_L
     if record["attempts"] >= record["max_attempts"]:
         raise OtpError("Too many attempts. Request a new OTP.", 429)
 
-    expires_at = record["expires_at"]
-    if isinstance(expires_at, str) and expires_at.endswith("Z"):
-        from datetime import datetime
-
-        exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    else:
-        from datetime import datetime
-
-        exp = datetime.fromisoformat(str(expires_at))
-
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=now.tzinfo)
+    exp = _parse_ts(record["expires_at"], fallback_tz=now.tzinfo)
 
     if now > exp:
         raise OtpError("OTP expired. Request a new code.", 401)

@@ -15,7 +15,7 @@ from app.practice import router as practice_router
 from app.tutor import router as tutor_router
 from app.payments import router as payments_router
 from app.reading import router as reading_router
-from app.speaking import router as speaking_router
+from app.speaking.router import router as speaking_router
 from app.notifications.router import router as notifications_router
 from app.writing.router import router as writing_router
 from app.routers import attempts, dashboard, diagnostic, mock_attempts, status, tests

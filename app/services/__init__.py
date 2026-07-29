@@ -1,3 +1,3 @@
-from app.services import test_engine
+"""Services package — import submodules directly (avoid eager circular imports)."""
 
-__all__ = ["test_engine"]
+__all__: list[str] = []

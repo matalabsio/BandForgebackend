@@ -1,3 +1,3 @@
-from app.speaking.router import router
+"""Speaking package — import router from app.speaking.router."""
 
-__all__ = ["router"]
+__all__: list[str] = []
