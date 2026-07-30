@@ -444,17 +444,46 @@ def _compute_module_statuses(
 
 
 def list_catalog(*, include_unpublished: bool = False) -> list[MockCatalogItem]:
+    """Published (or all, in dev) catalog slots for the mock picker.
+
+    Uses part counts from ``mock_tests`` row fields instead of per-mock
+    ``live_question_parts`` round trips. Result is cached briefly — catalog
+    changes only when admins publish.
+    """
     from app.mock_catalog.catalog import list_catalog_mock_rows
+    from app.mock_catalog.constants import MODULE_LIVE_PARTS
+
+    cache_key = f"mock_catalog:v2:{'all' if include_unpublished else 'pub'}"
+    cached = get_json(cache_key)
+    if isinstance(cached, list):
+        try:
+            return [MockCatalogItem.model_validate(item) for item in cached]
+        except Exception:
+            pass
 
     rows = list_catalog_mock_rows(include_unpublished=include_unpublished)
+    mock_ids = [UUID(str(row["id"])) for row in rows]
+    modules_by_id = repo.list_mock_modules_by_ids(mock_ids)
 
     items: list[MockCatalogItem] = []
     for row in rows:
         mock_id = UUID(str(row["id"]))
-        modules = repo.list_mock_modules(mock_id)
+        mock_id_str = str(mock_id)
+        modules = modules_by_id.get(mock_id_str) or []
         enabled_mods = [str(m["module"]) for m in modules if m.get("is_enabled")]
-        l_parts = len(repo.live_question_parts(mock_test_id=mock_id, module="listening"))
-        r_parts = len(repo.live_question_parts(mock_test_id=mock_id, module="reading"))
+
+        legacy = MODULE_LIVE_PARTS.get(mock_id_str, {})
+        listening_parts = (
+            len(legacy["listening"])
+            if "listening" in legacy
+            else int(row.get("listening_parts") or 0)
+        )
+        reading_passages = (
+            len(legacy["reading"])
+            if "reading" in legacy
+            else int(row.get("reading_passages") or 0)
+        )
+
         items.append(
             MockCatalogItem(
                 id=mock_id,
@@ -466,12 +495,23 @@ def list_catalog(*, include_unpublished: bool = False) -> list[MockCatalogItem]:
                     else None
                 ),
                 modules_enabled=enabled_mods,  # type: ignore[arg-type]
-                listening_parts=l_parts,
-                reading_passages=r_parts,
+                listening_parts=listening_parts,
+                reading_passages=reading_passages,
                 writing_tasks=int(row.get("writing_tasks") or 2),
             )
         )
+
+    set_json(
+        cache_key,
+        [item.model_dump(mode="json") for item in items],
+        ttl_seconds=60,
+    )
     return items
+
+
+def invalidate_catalog_cache() -> None:
+    """Drop picker catalog cache after publish / unpublish / delete."""
+    delete_many(["mock_catalog:v2:pub", "mock_catalog:v2:all"])
 
 
 def get_progress(*, mock_attempt_id: UUID, user_id: UUID) -> MockAttemptProgress:

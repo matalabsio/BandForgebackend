@@ -81,6 +81,58 @@ def list_mock_modules(mock_test_id: UUID) -> list[dict[str, Any]]:
     return rows
 
 
+def list_mock_modules_by_ids(
+    mock_test_ids: list[UUID],
+) -> dict[str, list[dict[str, Any]]]:
+    """Batch-load module configs for many mocks (one query for cache misses)."""
+    from app.cache.hybrid_cache import get_json, set_json
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    missing: list[str] = []
+    for mid in mock_test_ids:
+        key = str(mid)
+        cached = get_json(f"mock_modules:v2:{key}")
+        if isinstance(cached, list):
+            out[key] = cached
+        else:
+            missing.append(key)
+
+    if not missing:
+        return out
+
+    client = get_supabase()
+    try:
+        result = _exec(
+            client.table("mock_test_modules")
+            .select(
+                "mock_test_id, module, sequence_order, duration_minutes, is_enabled"
+            )
+            .in_("mock_test_id", missing)
+            .order("sequence_order")
+        )
+    except Exception as exc:  # noqa: BLE001
+        _raise_supabase_error(exc, context="Could not load mock module config.")
+
+    grouped: dict[str, list[dict[str, Any]]] = {mid: [] for mid in missing}
+    for row in result.data or []:
+        mid = str(row.get("mock_test_id") or "")
+        if mid not in grouped:
+            grouped[mid] = []
+        grouped[mid].append(
+            {
+                "module": row.get("module"),
+                "sequence_order": row.get("sequence_order"),
+                "duration_minutes": row.get("duration_minutes"),
+                "is_enabled": row.get("is_enabled"),
+            }
+        )
+
+    for mid, rows in grouped.items():
+        set_json(f"mock_modules:v2:{mid}", rows, ttl_seconds=300)
+        out[mid] = rows
+    return out
+
+
 def fetch_mock_attempt_progress_bundle(
     *, mock_attempt_id: UUID, user_id: UUID
 ) -> dict[str, Any] | None:
