@@ -14,8 +14,9 @@ PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (
     M02_MOCK_TEST_ID,
 )
 
-# Candidate app: only Tests 1–2 are startable; 3+ stay "coming soon" in the UI.
-MAX_CANDIDATE_CATALOG_NUMBER = 2
+# Candidate app: published mocks with catalog_number in 1..MAX are startable.
+# Aligns with admin CreateMockRequest catalog_number ge=1, le=20.
+MAX_CANDIDATE_CATALOG_NUMBER = 20
 
 
 def is_candidate_live_catalog_number(catalog_number: int | None) -> bool:

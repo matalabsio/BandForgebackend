@@ -162,7 +162,35 @@ def _parse_started_at(attempt: dict[str, Any]) -> datetime:
     return datetime.now(UTC)
 
 
-def _row_to_question(row: dict[str, Any]) -> SpeakingQuestionPublic:
+def _video_key_from_options(opts: dict[str, Any]) -> str | None:
+    video_key = opts.get("video_url")
+    if not video_key or not str(video_key).strip():
+        return None
+    key = str(video_key).strip()
+    # Ignore already-signed URLs when reading options (options store keys only).
+    if "X-Amz-Signature" in key or "Signature=" in key:
+        return None
+    return key
+
+
+def _sign_video_key(key: str | None) -> str | None:
+    if not key:
+        return None
+    if key.startswith("http://") or key.startswith("https://"):
+        return key
+    try:
+        from app.storage.r2 import generate_signed_url
+
+        return generate_signed_url(key)
+    except Exception:
+        return None
+
+
+def _row_to_question(
+    row: dict[str, Any],
+    *,
+    sign_video: bool = True,
+) -> SpeakingQuestionPublic:
     opts = row.get("options") if isinstance(row.get("options"), dict) else {}
     part = int(row.get("part") or 1)
     prep_seconds = int(
@@ -181,6 +209,10 @@ def _row_to_question(row: dict[str, Any]) -> SpeakingQuestionPublic:
         max_recording_seconds = max(
             max_recording_seconds, SPEAKING_PART1_MAX_RECORDING_SECONDS
         )
+
+    video_key = _video_key_from_options(opts if isinstance(opts, dict) else {})
+    video_url = _sign_video_key(video_key) if sign_video else video_key
+
     return SpeakingQuestionPublic(
         id=UUID(str(row["id"])),
         question_number=int(row.get("question_number") or 1),
@@ -201,6 +233,7 @@ def _row_to_question(row: dict[str, Any]) -> SpeakingQuestionPublic:
             or SPEAKING_PART1_RECORD_SECONDS
         ),
         part_label=str(opts.get("part_label") or "Part 1"),
+        video_url=video_url,
     )
 
 
@@ -213,24 +246,50 @@ def _build_manifest(rows: list[dict[str, Any]]) -> tuple[list[SpeakingQuestionPu
             str(row.get("id")),
         ),
     )
-    questions: list[SpeakingQuestionPublic] = []
+    # Freeze R2 keys (not signed URLs) so hashes stay stable and URLs can be
+    # re-signed when the attempt is resumed.
+    frozen: list[SpeakingQuestionPublic] = []
     for sequence_number, row in enumerate(ordered, start=1):
-        questions.append(
-            _row_to_question({**row, "sequence_number": sequence_number})
+        frozen.append(
+            _row_to_question(
+                {**row, "sequence_number": sequence_number},
+                sign_video=False,
+            )
         )
     canonical = [
-        question.model_dump(mode="json", exclude_none=False) for question in questions
+        question.model_dump(mode="json", exclude_none=False) for question in frozen
     ]
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    return questions, digest
+    live = [
+        q.model_copy(update={"video_url": _sign_video_key(q.video_url)})
+        for q in frozen
+    ]
+    return live, digest
 
 
 def _manifest_payload(
     questions: list[SpeakingQuestionPublic],
 ) -> list[dict[str, Any]]:
     return [question.model_dump(mode="json", exclude_none=False) for question in questions]
+
+
+def _freeze_manifest_from_rows(
+    rows: list[dict[str, Any]],
+) -> list[SpeakingQuestionPublic]:
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            int(row.get("part") or 1),
+            int(row.get("question_number") or 1),
+            str(row.get("id")),
+        ),
+    )
+    return [
+        _row_to_question({**row, "sequence_number": sequence_number}, sign_video=False)
+        for sequence_number, row in enumerate(ordered, start=1)
+    ]
 
 
 def _attempt_manifest(
@@ -256,7 +315,22 @@ def _attempt_manifest(
                 normalized.get("prep_sec") or (60 if part == 2 else 0),
             )
             normalized.setdefault("max_recording_seconds", max_seconds)
+            # Re-sign R2 keys for the client; leave http(s) as-is.
+            video = normalized.get("video_url")
+            if isinstance(video, str) and video.strip():
+                key = video.strip()
+                if not (
+                    key.startswith("http://")
+                    or key.startswith("https://")
+                    or "X-Amz-Signature" in key
+                    or "Signature=" in key
+                ):
+                    normalized["video_url"] = _sign_video_key(key)
+                elif "X-Amz-Signature" in key or "Signature=" in key:
+                    # Stale signed URL in old manifests — cannot recover key.
+                    normalized["video_url"] = None
             questions.append(SpeakingQuestionPublic.model_validate(normalized))
+        # Hash against stored payload as-is (keys), not re-signed URLs.
         canonical_hash = hashlib.sha256(
             json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -276,9 +350,10 @@ def _attempt_manifest(
             detail="No speaking questions configured for this mock.",
         )
     questions, manifest_hash = _build_manifest(rows)
+    frozen_for_store = _freeze_manifest_from_rows(rows)
     repo.update_attempt_manifest(
         attempt_id=UUID(str(attempt["id"])),
-        manifest=_manifest_payload(questions),
+        manifest=_manifest_payload(frozen_for_store),
         manifest_hash=manifest_hash,
     )
     return questions, manifest_hash
@@ -399,7 +474,7 @@ def start_attempt(
             mock_test_id=mock_test_id,
             mock_attempt_id=mock_attempt_id,
             part=part,
-            speaking_manifest=_manifest_payload(questions),
+            speaking_manifest=_manifest_payload(_freeze_manifest_from_rows(rows)),
             speaking_manifest_hash=current_manifest_hash,
         )
     except Exception:

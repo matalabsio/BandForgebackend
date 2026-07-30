@@ -40,6 +40,7 @@ class SpeakingQuestionPublic(BaseModel):
     max_recording_seconds: int = 3600
     duration_hint_sec: int | None = None
     part_label: str | None = None
+    video_url: str | None = None
 
 
 class StartSpeakingResponse(BaseModel):

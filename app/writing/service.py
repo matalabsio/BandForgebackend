@@ -233,13 +233,26 @@ def _writing_task_cache_key(mock_test_id: UUID, part: int) -> str:
 
 def _row_to_task(row: dict[str, Any]) -> WritingTaskQuestion:
     opts = row.get("options")
+    options: dict[str, Any] | None = dict(opts) if isinstance(opts, dict) else None
+    if options:
+        image = options.get("image_url")
+        if isinstance(image, str) and image.strip():
+            key = image.strip()
+            if not key.startswith("http://") and not key.startswith("https://"):
+                try:
+                    from app.storage.r2 import generate_signed_url
+
+                    options["image_url"] = generate_signed_url(key)
+                except Exception:
+                    # Keep raw key; student UI will show placeholder if unusable
+                    pass
     return WritingTaskQuestion(
         id=UUID(str(row["id"])),
         question_number=int(row.get("question_number") or 1),
         question_type=str(row.get("question_type") or "task2"),
         prompt=str(row.get("prompt") or ""),
         part=int(row.get("part") or 1),
-        options=opts if isinstance(opts, dict) else None,
+        options=options,
     )
 
 

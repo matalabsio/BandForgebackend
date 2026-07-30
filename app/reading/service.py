@@ -716,9 +716,10 @@ def get_score_report(*, attempt_id: UUID, user_id: UUID) -> ReadingScoreReport:
     }
 
     attempt_part = attempt.get("part")
-    review_part = int(attempt_part) if attempt_part is not None else None
+    live_part = int(attempt_part) if attempt_part is not None else None
+    review_content_part = _content_part(mock_test_id=mock_test_id, live_part=live_part)
     review_items: list[QuestionReviewItem] = []
-    for q in repo.list_questions_for_review(mock_test_id, part=review_part):
+    for q in repo.list_questions_for_review(mock_test_id, part=review_content_part):
         qid = str(q["id"])
         ans = answers_by_qid.get(qid, {})
         user_answer = ans.get("user_answer", "")
