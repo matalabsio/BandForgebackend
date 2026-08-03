@@ -155,6 +155,21 @@ def handle_webhook(
     event_db_id = event_row.get("id")
     try:
         if event_type == EVENT_PAYMENT_CAPTURED and order_id and razorpay_payment_id:
+            if captured_amount is None:
+                try:
+                    rzp_payment = razorpay_client.fetch_payment(str(razorpay_payment_id))
+                    amount_raw = rzp_payment.get("amount")
+                    if amount_raw is None:
+                        raise WebhookTransientError(
+                            detail="Payment amount unavailable from Razorpay."
+                        )
+                    captured_amount = int(amount_raw)
+                except WebhookTransientError:
+                    raise
+                except Exception as exc:
+                    raise WebhookTransientError(
+                        detail="Could not fetch payment amount from Razorpay."
+                    ) from exc
             service.confirm_payment_paid(
                 razorpay_order_id=order_id,
                 razorpay_payment_id=razorpay_payment_id,
@@ -230,16 +245,20 @@ def _on_refund(
     if not sb_payment:
         return
     payment_amount = int(sb_payment.get("amount") or 0)
-    if refund_amount is not None and refund_amount < payment_amount:
+    is_partial = (
+        refund_amount is not None
+        and payment_amount > 0
+        and refund_amount < payment_amount
+    )
+    if is_partial:
         payment_log(
-            "PARTIAL_REFUND_IGNORED",
+            "PARTIAL_REFUND_REVOKED",
             user_id=str(sb_payment.get("user_id") or ""),
             payment_id=str(sb_payment["id"]),
             order=str(sb_payment.get("razorpay_order_id") or ""),
             refund_amount=refund_amount,
             payment_amount=payment_amount,
         )
-        return
     repository.mark_payment_status(
         payment_id=sb_payment["id"], status=PAYMENT_REFUNDED
     )

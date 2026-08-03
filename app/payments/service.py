@@ -19,6 +19,7 @@ from app.payments.constants import (
     SUBSCRIPTION_ACTIVE,
 )
 from app.payments.exceptions import (
+    GuestCheckoutNotAllowedError,
     PaymentAmountMismatchError,
     PaymentConsistencyError,
     PaymentFetchError,
@@ -191,6 +192,8 @@ def _prove_payment_persisted(
 
 
 def create_order(*, user: UserPublic, plan_slug: str) -> CreateOrderResponse:
+    if str(getattr(user, "role", "") or "") == "guest":
+        raise GuestCheckoutNotAllowedError()
     ensure_razorpay_ready()
     plan = repository.get_plan_by_slug(plan_slug)
     if not plan:
@@ -353,7 +356,7 @@ def confirm_payment_paid(
         raise PaymentNotFoundError()
 
     expected_amount = int(payment["amount"])
-    if captured_amount is not None and int(captured_amount) != expected_amount:
+    if captured_amount is None or int(captured_amount) != expected_amount:
         payment_log(
             "PAYMENT_AMOUNT_MISMATCH",
             user_id=str(payment_user_id),

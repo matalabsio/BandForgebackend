@@ -18,6 +18,14 @@ class PlanNotFoundError(HTTPException):
         super().__init__(status.HTTP_404_NOT_FOUND, detail="Plan not found.")
 
 
+class GuestCheckoutNotAllowedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            detail="Guest accounts cannot purchase. Please sign up or sign in.",
+        )
+
+
 class PaymentNotFoundError(HTTPException):
     def __init__(self) -> None:
         super().__init__(status.HTTP_404_NOT_FOUND, detail="Payment not found.")

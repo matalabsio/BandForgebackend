@@ -92,12 +92,17 @@ def start_reading(
         str | None,
         Query(description="Skill-program mock gate (listening|reading|writing|speaking)."),
     ] = None,
+    from_plan: Annotated[
+        bool,
+        Query(description="Personalized study-plan practice (skip 12/12 mock unlock)."),
+    ] = False,
 ) -> StartReadingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_skill_program_module_start(
         user_id=current_user.id,
         skill_context=skill_context,
+        from_plan=from_plan,
     )
     started = perf_counter()
     timing = ReadingStartTiming()

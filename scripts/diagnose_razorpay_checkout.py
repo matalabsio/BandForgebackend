@@ -59,16 +59,18 @@ def main() -> int:
 
     print("\n--- Domestic vs international cards ---")
     print("Indian merchants reject international cards by default.")
-    print("Test with DOMESTIC cards only (Add new card; disable autofill):")
-    print("  Visa domestic:       4111 1111 1111 1111")
-    print("  Mastercard domestic: 5267 3181 8797 5449")
+    print("Visa 4111 often fails as 'international' when that method is off.")
+    print("Prefer:")
+    print("  Netbanking → any bank → Success   (fastest / most reliable)")
+    print("  Mastercard domestic: 5267 3181 8797 5449 (Add new card; any CVV)")
+    print("Optional Visa domestic: 4111 1111 1111 1111 (may still fail)")
     print("Do NOT use international test cards (5555 5555 5555 4444) or real foreign cards.")
 
     print("\n--- India test matrix ---")
     print("  Netbanking → Success     (fastest)")
     print("  Desktop UPI              scan QR with PhonePe/GPay/Paytm")
     print("  Mobile UPI               pick UPI app (Intent)")
-    print("  Domestic card            4111… or 5267… with Add new card")
+    print("  Domestic Mastercard      5267… with Add new card")
     print("Note: success@razorpay VPA only on iOS mobile web; desktop uses QR (2026+ NPCI rules).")
 
     print("\n--- Dev environment ---")

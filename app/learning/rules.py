@@ -480,6 +480,38 @@ def _merge_task_status_by_slot(new_plan: StudyPlan, prior: dict[str, Any]) -> St
     return new_plan.model_copy(update={"weeks": weeks})
 
 
+def _plan_open_href(
+    *,
+    skill: str,
+    hub_id: str,
+    task_type: str,
+    task_id: str,
+) -> str:
+    """Direct destination for Today links — skip hub hop for practice/submit."""
+    q_task = f"from=plan&task={task_type}&taskId={task_id}"
+    if task_type == "watch":
+        return f"/practice/{skill}/{hub_id}?{q_task}"
+    if skill == "writing" and task_type in ("practice", "submit"):
+        part = 2 if task_type == "submit" else 1
+        return (
+            f"/test/writing/task/{part}?auto=1&skill_context=writing"
+            f"&{q_task}&hubId={hub_id}&mock=m01"
+        )
+    if skill == "listening" and task_type == "practice":
+        return (
+            f"/test/1/listening?part=1&auto=1&skill_context=listening"
+            f"&{q_task}&hubId={hub_id}"
+        )
+    if skill == "reading" and task_type == "practice":
+        return (
+            f"/test/1/reading?passage=1&auto=1&skill_context=reading"
+            f"&{q_task}&hubId={hub_id}"
+        )
+    if task_type == "practice":
+        return f"/practice/{skill}/{hub_id}/exercise?{q_task}"
+    return f"/practice/{skill}/{hub_id}?{q_task}"
+
+
 def _personalized_task(
     *,
     skill: str,
@@ -497,9 +529,18 @@ def _personalized_task(
     }
     durations = {"watch": 10, "practice": 20, "submit": 15}
     kind = "practice" if task_type in ("watch", "practice") else "homework"
-    href = f"/practice/{skill}/{hub_id}" if hub_id else f"/practice/{skill}"
+    task_id = f"t-{day_date.isoformat()}-{skill}-{task_type}-s{slot_index}"
+    if hub_id:
+        href = _plan_open_href(
+            skill=skill,
+            hub_id=hub_id,
+            task_type=task_type,
+            task_id=task_id,
+        )
+    else:
+        href = f"/practice/{skill}"
     return StudyTask(
-        id=f"t-{day_date.isoformat()}-{skill}-{task_type}-s{slot_index}",
+        id=task_id,
         title=titles[task_type],
         subtitle=f"~{durations[task_type]} min",
         module=skill,
@@ -567,6 +608,7 @@ def build_personalized_study_plan(
     plan_tier: str = "full_skill_program",
     diagnostic_attempt_id: str | None = None,
     prior_plan: dict[str, Any] | None = None,
+    completed_by_skill: dict[str, int] | None = None,
 ) -> StudyPlan:
     """Build an exam-date-bound calendar plan with watch/practice/submit task stubs."""
     start = prep_start or date.today()
@@ -589,6 +631,7 @@ def build_personalized_study_plan(
     weekly_focus = f"Focus: {focus_label(focus_skills)}"
 
     prior_status = _prior_task_status(prior_plan)
+    completed_by_skill = completed_by_skill or {}
 
     try:
         from app.practice.catalog import pick_hub_for_slot
@@ -605,7 +648,12 @@ def build_personalized_study_plan(
             hub_id = None
             if pick_hub_for_slot is not None:
                 try:
-                    hub_id = pick_hub_for_slot(skill=skill, day_index=d, slot_index=slot_index)
+                    hub_id = pick_hub_for_slot(
+                        skill=skill,
+                        day_index=d,
+                        slot_index=slot_index,
+                        completed_count=int(completed_by_skill.get(skill, 0)),
+                    )
                 except Exception:
                     hub_id = None
                 if hub_id:

@@ -6,7 +6,7 @@ Access is derived only from the Supabase ``subscriptions`` table
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -14,16 +14,20 @@ from fastapi import Depends, HTTPException, status
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.diagnostic.constants import DIAGNOSTIC_MOCK_TEST_ID
-from app.payments import repository
-from app.payments.schemas import SubscriptionOut
-from app.payments.service import get_subscription
+
+if TYPE_CHECKING:
+    from app.payments.schemas import SubscriptionOut
 
 
 def has_active_subscription(user_id: UUID) -> bool:
+    from app.payments import repository
+
     return repository.get_active_subscription(user_id) is not None
 
 
 def has_full_skill_program(user_id: UUID) -> bool:
+    from app.payments import repository
+
     sub = repository.get_active_subscription(user_id)
     if not sub:
         return False
@@ -46,6 +50,8 @@ async def require_full_skill_program(
 
 
 def get_subscription_status(user_id: UUID) -> SubscriptionOut:
+    from app.payments.service import get_subscription
+
     return get_subscription(user_id=user_id)
 
 
@@ -80,6 +86,23 @@ def assert_premium_mock_access(*, user: UserPublic, mock_test_id: UUID) -> None:
         return
 
     flags = get_mock_access_flags(mock_test_id)
+    enforce_premium_mock_flags(user=user, mock_test_id=mock_test_id, flags=flags)
+
+
+def enforce_premium_mock_flags(
+    *,
+    user: UserPublic,
+    mock_test_id: UUID,
+    flags: dict[str, Any] | None,
+    subscription_active: bool | None = None,
+) -> None:
+    """Apply premium gate using pre-fetched ``mock_tests`` flags (same errors as assert).
+
+    Pass ``subscription_active`` when already known (e.g. gate-context RPC) to
+    skip a separate subscriptions lookup.
+    """
+    if mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
+        return
     if flags is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -87,7 +110,12 @@ def assert_premium_mock_access(*, user: UserPublic, mock_test_id: UUID) -> None:
         )
     if flags.get("is_free") or flags.get("is_diagnostic"):
         return
-    if not has_active_subscription(user.id):
+    subscribed = (
+        subscription_active
+        if subscription_active is not None
+        else has_active_subscription(user.id)
+    )
+    if not subscribed:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
             detail="An active subscription is required to access this mock test.",

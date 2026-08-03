@@ -52,9 +52,9 @@ def patch_learning_task(
     body: TaskStatusUpdate,
     user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> TaskStatusResponse:
-    profile = update_task_status(UUID(str(user.id)), task_id, body.status)
+    study_plan = update_task_status(UUID(str(user.id)), task_id, body.status)
     return TaskStatusResponse(
         task_id=task_id,
         status=body.status,
-        study_plan=profile.study_plan,
+        study_plan=study_plan,
     )

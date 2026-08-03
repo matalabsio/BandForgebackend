@@ -41,6 +41,20 @@ async def lifespan(_app: FastAPI):
         f"redis={redis_status()}"
     )
     if settings.app_env.strip().lower() == "production":
+        if settings.auth_demo_otp_enabled:
+            raise RuntimeError(
+                "AUTH_DEMO_OTP_ENABLED must be false in production."
+            )
+        if settings.auth_open_otp:
+            raise RuntimeError("AUTH_OPEN_OTP must be false in production.")
+        if settings.auth_demo_otp:
+            raise RuntimeError(
+                "AUTH_DEMO_OTP must be unset in production."
+            )
+        if settings.auth_skip_email_verify:
+            raise RuntimeError(
+                "AUTH_SKIP_EMAIL_VERIFY must be false in production."
+            )
         weak_jwt_defaults = (
             "dev-jwt-secret-change-in-production",
             "dev-jwt-refresh-secret-change-in-production",

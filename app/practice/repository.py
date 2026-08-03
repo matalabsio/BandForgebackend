@@ -16,8 +16,8 @@ HUB_LIST_COLUMNS = (
 )
 
 HUB_DETAIL_COLUMNS = (
-    "id, slug, videos, practice_prompt, submit_config, estimated_min, sort_order, "
-    "practice_sets!inner(set_number, title, practice_banks!inner(skill, bank_number, title))"
+    "id, slug, set_id, videos, practice_prompt, submit_config, estimated_min, sort_order, "
+    "practice_sets!inner(id, set_number, title, practice_banks!inner(skill, bank_number, title))"
 )
 
 
@@ -38,9 +38,24 @@ def list_hubs_for_skill(skill: str) -> list[dict[str, Any]]:
 
 
 def list_all_hubs_grouped() -> dict[str, list[dict[str, Any]]]:
+    """One hubs query, group by skill in memory (avoids 4 round-trips)."""
+    sb = get_supabase()
+    result = (
+        sb.table("practice_hubs")
+        .select(HUB_LIST_COLUMNS)
+        .order("sort_order")
+        .execute()
+    )
     grouped: dict[str, list[dict[str, Any]]] = {s: [] for s in SKILLS}
+    for row in result.data or []:
+        flat = _flatten_hub_row(row)
+        skill = str(flat.get("skill") or "")
+        if skill in grouped:
+            grouped[skill].append(row)
     for skill in SKILLS:
-        grouped[skill] = list_hubs_for_skill(skill)
+        grouped[skill].sort(
+            key=lambda r: int((_flatten_hub_row(r).get("sort_order") or 0))
+        )
     return grouped
 
 
@@ -140,6 +155,7 @@ def _flatten_hub_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
         "slug": row.get("slug") or "",
+        "set_id": str(row.get("set_id") or sets.get("id") or ""),
         "skill": banks.get("skill") or "",
         "bank_number": int(banks.get("bank_number") or 0),
         "set_number": int(sets.get("set_number") or 0),

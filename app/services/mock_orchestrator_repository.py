@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -41,7 +42,9 @@ def get_mock_test(mock_test_id: UUID, *, allow_unpublished: bool = False) -> dic
     try:
         result = (
             client.table("mock_tests")
-            .select("id, title, description, is_published")
+            .select(
+                "id, title, description, is_published, is_free, is_diagnostic, catalog_number"
+            )
             .eq("id", str(mock_test_id))
             .limit(1)
         )
@@ -483,20 +486,112 @@ def get_module_score_band(test_attempt_id: UUID) -> float | None:
 
 
 def abandon_in_progress_attempts_for_mock_attempt(*, mock_attempt_id: UUID) -> None:
-    """Mark all in-progress module attempts for this mock session as abandoned."""
+    """Mark all in-progress module attempts for this mock session as abandoned.
+
+    Uses a single UPDATE (no N+1). Prefers RPC when available.
+    """
     client = get_supabase()
-    result = _exec(
+    try:
+        _exec(
+            client.rpc(
+                "abandon_mock_attempt_children",
+                {"p_mock_attempt_id": str(mock_attempt_id)},
+            )
+        )
+        return
+    except Exception as exc:
+        logger.warning(
+            "abandon_mock_attempt_children RPC unavailable, using single UPDATE: %s",
+            exc,
+        )
+    _exec(
         client.table("test_attempts")
-        .select("id")
+        .update({"status": "abandoned"})
         .eq("mock_attempt_id", str(mock_attempt_id))
         .eq("status", "in_progress")
     )
-    for row in result.data or []:
+
+
+def abandon_mock_attempt_session(*, mock_attempt_id: UUID) -> None:
+    """Abandon child module attempts and mark the parent mock_attempt abandoned."""
+    client = get_supabase()
+    try:
         _exec(
-            client.table("test_attempts")
-            .update({"status": "abandoned"})
-            .eq("id", str(row["id"]))
+            client.rpc(
+                "abandon_mock_attempt_session",
+                {"p_mock_attempt_id": str(mock_attempt_id)},
+            )
         )
+        return
+    except Exception as exc:
+        logger.warning(
+            "abandon_mock_attempt_session RPC unavailable, using sequential fallback: %s",
+            exc,
+        )
+    abandon_in_progress_attempts_for_mock_attempt(mock_attempt_id=mock_attempt_id)
+    update_mock_attempt(
+        mock_attempt_id=mock_attempt_id,
+        fields={"status": "abandoned"},
+    )
+
+
+def fetch_mock_start_gate_context(
+    *,
+    user_id: UUID,
+    mock_test_id: UUID,
+    allow_unpublished: bool = False,
+) -> dict[str, Any] | None:
+    """Start context + entitlement fields + subscription flag (one RPC when available)."""
+    client = get_supabase()
+    try:
+        result = _exec(
+            client.rpc(
+                "get_mock_start_gate_context",
+                {
+                    "p_user_id": str(user_id),
+                    "p_mock_test_id": str(mock_test_id),
+                    "p_allow_unpublished": allow_unpublished,
+                },
+            )
+        )
+        data = result.data
+        if data is None:
+            return None
+        if isinstance(data, str):
+            import json as _json
+
+            data = _json.loads(data)
+        if isinstance(data, dict):
+            if not data.get("mock_test"):
+                return None
+            return data
+    except Exception as exc:
+        logger.warning(
+            "get_mock_start_gate_context RPC unavailable, using sequential fallback: %s",
+            exc,
+        )
+
+    base = fetch_mock_start_context(
+        user_id=user_id,
+        mock_test_id=mock_test_id,
+        allow_unpublished=allow_unpublished,
+    )
+    if not base:
+        return None
+    now_iso = datetime.now(UTC).isoformat()
+    try:
+        sub_result = _exec(
+            client.table("subscriptions")
+            .select("id")
+            .eq("user_id", str(user_id))
+            .eq("status", "active")
+            .gt("expires_at", now_iso)
+            .limit(1)
+        )
+        has_sub = bool(sub_result.data)
+    except Exception:
+        has_sub = False
+    return {**base, "has_active_subscription": has_sub}
 
 
 def get_module_score_row(test_attempt_id: UUID) -> dict[str, Any] | None:

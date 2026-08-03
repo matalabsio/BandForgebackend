@@ -46,6 +46,22 @@ def test_assert_skill_program_module_start_unlocked():
         assert_skill_program_module_start(user_id=USER_ID, skill_context="reading")
 
 
+def test_assert_skill_program_module_start_from_plan_skips_mock_unlock():
+    with (
+        patch("app.security.entitlements.has_full_skill_program", return_value=True),
+        patch(
+            "app.practice.service.assert_skill_mock_access",
+            side_effect=HTTPException(status_code=403, detail="locked"),
+        ) as mock_unlock,
+    ):
+        assert_skill_program_module_start(
+            user_id=USER_ID,
+            skill_context="writing",
+            from_plan=True,
+        )
+        mock_unlock.assert_not_called()
+
+
 def test_start_attempt_request_accepts_skill_context():
     body = StartAttemptRequest(module="listening", skill_context="listening")
     assert body.skill_context == "listening"

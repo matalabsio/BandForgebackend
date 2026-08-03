@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.auth.dependencies import get_current_user, get_current_user_timed
 from app.auth.schemas import UserPublic
 from app.config import get_settings
 from app.diagnostic.access import assert_mock_access
-from app.security.entitlements import assert_premium_mock_access
+from app.diagnostic.constants import DIAGNOSTIC_MOCK_TEST_ID
+from app.security.entitlements import (
+    assert_premium_mock_access,
+    enforce_premium_mock_flags,
+)
 from app.schemas.mock_orchestrator import (
     InProgressMockAttempt,
     MockAttemptHistoryItem,
@@ -29,6 +34,8 @@ from app.schemas.mock_orchestrator import (
     WritingModuleReviewResponse,
 )
 from app.services import mock_orchestrator, module_review
+from app.services import mock_orchestrator_repository as mock_repo
+from app.services.mock_start_timing import MockStartTiming, elapsed_ms
 
 router = APIRouter(prefix="/api/mock-attempts", tags=["mock-attempts"])
 
@@ -63,17 +70,89 @@ def list_mock_catalog(
 
 
 @router.post("", response_model=StartMockResponse)
-def start_mock_attempt(
+async def start_mock_attempt(
     body: StartMockRequest,
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> StartMockResponse:
-    assert_mock_access(user=current_user, mock_test_id=body.mock_test_id)
-    assert_premium_mock_access(user=current_user, mock_test_id=body.mock_test_id)
-    return mock_orchestrator.start_mock(
-        mock_test_id=body.mock_test_id,
-        user_id=current_user.id,
-        force_new=body.force_new,
-    )
+    timing = MockStartTiming()
+    started = perf_counter()
+    try:
+        t0 = perf_counter()
+        assert_mock_access(user=current_user, mock_test_id=body.mock_test_id)
+        timing.access_guest_ms = elapsed_ms(t0)
+
+        allow_unpublished = get_settings().app_env.strip().lower() == "development"
+        t0 = perf_counter()
+        if body.mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
+            # Preserve prior behavior: no subscription reads for diagnostic UUID.
+            start_ctx = await asyncio.to_thread(
+                mock_repo.fetch_mock_start_context,
+                user_id=current_user.id,
+                mock_test_id=body.mock_test_id,
+                allow_unpublished=allow_unpublished,
+            )
+            timing.fetch_start_context_ms = elapsed_ms(t0)
+            timing.access_premium_ms = 0
+        else:
+            # One RPC: mock flags + modules + in-progress + subscription bit.
+            start_ctx = await asyncio.to_thread(
+                mock_repo.fetch_mock_start_gate_context,
+                user_id=current_user.id,
+                mock_test_id=body.mock_test_id,
+                allow_unpublished=allow_unpublished,
+            )
+            timing.fetch_start_context_ms = elapsed_ms(t0)
+            mock_row = (start_ctx or {}).get("mock_test")
+            flags = (
+                {
+                    "is_free": bool(mock_row.get("is_free")),
+                    "is_diagnostic": bool(mock_row.get("is_diagnostic")),
+                }
+                if isinstance(mock_row, dict)
+                else None
+            )
+            t_gate = perf_counter()
+            enforce_premium_mock_flags(
+                user=current_user,
+                mock_test_id=body.mock_test_id,
+                flags=flags,
+                subscription_active=(
+                    None
+                    if start_ctx is None or "has_active_subscription" not in start_ctx
+                    else bool(start_ctx.get("has_active_subscription"))
+                ),
+            )
+            timing.access_premium_ms = elapsed_ms(t_gate)
+
+        response = await mock_orchestrator.start_mock(
+            mock_test_id=body.mock_test_id,
+            user_id=current_user.id,
+            force_new=body.force_new,
+            timing=timing,
+            start_ctx=start_ctx,
+        )
+        timing.duration_ms = elapsed_ms(started)
+        _timing_log(
+            "POST /api/mock-attempts",
+            started,
+            200,
+            extra=timing.to_log_fields(),
+        )
+        return response
+    except Exception as exc:
+        timing.duration_ms = elapsed_ms(started)
+        status_code = (
+            int(exc.status_code)
+            if isinstance(exc, HTTPException)
+            else 500
+        )
+        _timing_log(
+            "POST /api/mock-attempts",
+            started,
+            status_code,
+            extra=timing.to_log_fields(),
+        )
+        raise
 
 
 @router.get("/session", response_model=MockAttemptProgress | None)

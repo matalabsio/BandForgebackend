@@ -269,13 +269,13 @@ class Settings(BaseSettings):
     auth_demo_otp: str = Field(default="", validation_alias="AUTH_DEMO_OTP")
     auth_open_otp: bool = Field(default=False, validation_alias="AUTH_OPEN_OTP")
     auth_demo_otp_enabled: bool = Field(
-        default=True, validation_alias="AUTH_DEMO_OTP_ENABLED"
+        default=False, validation_alias="AUTH_DEMO_OTP_ENABLED"
     )
     phone_otp_enabled: bool = Field(
         default=False, validation_alias="PHONE_OTP_ENABLED"
     )
     auth_skip_email_verify: bool = Field(
-        default=True,
+        default=False,
         validation_alias="AUTH_SKIP_EMAIL_VERIFY",
     )
 

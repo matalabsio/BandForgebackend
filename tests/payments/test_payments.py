@@ -746,7 +746,9 @@ def test_webhook_payment_captured_uses_confirm_payment_paid():
     payload = {
         "event": "payment.captured",
         "payload": {
-            "payment": {"entity": {"id": "pay_x", "order_id": "order_x"}}
+            "payment": {
+                "entity": {"id": "pay_x", "order_id": "order_x", "amount": 99900}
+            }
         },
     }
     with (
@@ -771,9 +773,47 @@ def test_webhook_payment_captured_uses_confirm_payment_paid():
         confirm.assert_called_once_with(
             razorpay_order_id="order_x",
             razorpay_payment_id="pay_x",
-            captured_amount=None,
+            captured_amount=99900,
         )
         processed.assert_called_once()
+
+
+def test_webhook_payment_captured_fetches_amount_when_missing():
+    payload = {
+        "event": "payment.captured",
+        "payload": {
+            "payment": {"entity": {"id": "pay_x", "order_id": "order_x"}}
+        },
+    }
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch(
+            "app.payments.repository.insert_payment_event",
+            return_value={"id": "evt_row_1"},
+        ),
+        patch(
+            "app.payments.razorpay_client.fetch_payment",
+            return_value={"amount": 99900, "status": "captured"},
+        ) as fetch,
+        patch("app.payments.service.confirm_payment_paid") as confirm,
+        patch("app.payments.repository.mark_event_processed"),
+    ):
+        result = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="ok",
+            event_id="evt_fetch_amt",
+            payload=payload,
+            headers={"X-Razorpay-Signature": "secret"},
+        )
+        assert result == {"ok": True}
+        fetch.assert_called_once_with("pay_x")
+        confirm.assert_called_once_with(
+            razorpay_order_id="order_x",
+            razorpay_payment_id="pay_x",
+            captured_amount=99900,
+        )
 
 
 def test_webhook_sanitizes_signature_header():
@@ -1042,6 +1082,76 @@ def test_confirm_payment_paid_rejects_amount_mismatch():
         assert exc.value.status_code == 400
 
 
+def test_confirm_payment_paid_rejects_missing_amount():
+    with (
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_created_payment(),
+        ),
+        patch("app.payments.service.repository.get_plan_by_id", return_value=_plan()),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            service.confirm_payment_paid(
+                razorpay_order_id="order_x",
+                razorpay_payment_id="pay_x",
+                captured_amount=None,
+            )
+        assert exc.value.status_code == 400
+
+
+def test_webhook_partial_refund_revokes_access():
+    paid = {**_created_payment(), "status": "paid", "razorpay_payment_id": "pay_r"}
+    with (
+        patch(
+            "app.payments.razorpay_client.verify_webhook_signature", return_value=True
+        ),
+        patch(
+            "app.payments.repository.insert_payment_event",
+            return_value={"id": "evt_prf"},
+        ),
+        patch(
+            "app.payments.repository.get_payment_by_razorpay_payment_id",
+            return_value=paid,
+        ),
+        patch("app.payments.repository.mark_payment_status") as mark,
+        patch("app.payments.repository.cancel_subscription_for_payment") as cancel,
+        patch("app.payments.repository.mark_event_processed"),
+    ):
+        result = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="ok",
+            event_id="evt_prf",
+            payload={
+                "event": "refund.created",
+                "payload": {
+                    "refund": {
+                        "entity": {
+                            "payment_id": "pay_r",
+                            "amount": 10000,
+                        }
+                    }
+                },
+            },
+        )
+        assert result == {"ok": True}
+        mark.assert_called_once()
+        cancel.assert_called_once_with(payment_id=paid["id"])
+
+
+def test_create_order_rejects_guest_user():
+    guest = UserPublic(
+        id=USER_ID,
+        email=None,
+        full_name=None,
+        phone=None,
+        target_band=None,
+        role="guest",
+    )
+    with pytest.raises(HTTPException) as exc:
+        service.create_order(user=guest, plan_slug="premium_monthly")
+    assert exc.value.status_code == 403
+
+
 def test_get_plans_returns_active_plans():
     with (
         patch(
@@ -1194,6 +1304,39 @@ def test_premium_mock_access_allows_is_free_without_subscription():
             user=user,
             mock_test_id=UUID("a0000000-0000-4000-8000-000000000099"),
         )
+
+
+def test_enforce_premium_flags_skips_subscription_when_prefetched():
+    """Gate RPC can pass subscription_active and avoid a second subscriptions read."""
+    from unittest.mock import patch
+    from uuid import UUID
+
+    from app.security.entitlements import enforce_premium_mock_flags
+
+    user = _premium_access_user()
+    with patch(
+        "app.security.entitlements.has_active_subscription"
+    ) as has_sub:
+        enforce_premium_mock_flags(
+            user=user,
+            mock_test_id=UUID("a0000000-0000-4000-8000-000000000001"),
+            flags={"is_free": False, "is_diagnostic": False},
+            subscription_active=True,
+        )
+        has_sub.assert_not_called()
+
+    with (
+        patch("app.security.entitlements.has_active_subscription") as has_sub,
+        pytest.raises(HTTPException) as exc,
+    ):
+        enforce_premium_mock_flags(
+            user=user,
+            mock_test_id=UUID("a0000000-0000-4000-8000-000000000001"),
+            flags={"is_free": False, "is_diagnostic": False},
+            subscription_active=False,
+        )
+    assert exc.value.status_code == 402
+    has_sub.assert_not_called()
 
 
 def test_premium_mock_access_missing_mock_returns_404():

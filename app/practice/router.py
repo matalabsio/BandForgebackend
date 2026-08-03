@@ -11,6 +11,9 @@ from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.practice import service
 from app.practice.schemas import (
+    ExerciseStartOut,
+    ExerciseSubmitOut,
+    ExerciseSubmitRequest,
     HubCompleteOut,
     MockUnlockOut,
     PracticeHubDetailOut,
@@ -45,6 +48,35 @@ def complete_practice_hub(
     user: Annotated[UserPublic, Depends(require_full_skill_program)],
 ) -> HubCompleteOut:
     return service.complete_hub(user_id=UUID(str(user.id)), hub_id=hub_id)
+
+
+@router.post("/hubs/{hub_id}/exercise/start", response_model=ExerciseStartOut)
+def start_practice_exercise(
+    hub_id: str,
+    user: Annotated[UserPublic, Depends(require_full_skill_program)],
+    part: int | None = Query(default=None, ge=1, le=4),
+) -> ExerciseStartOut:
+    return service.start_hub_exercise(
+        user_id=UUID(str(user.id)), hub_id=hub_id, part=part
+    )
+
+
+@router.post(
+    "/hubs/{hub_id}/exercise/{attempt_id}/submit",
+    response_model=ExerciseSubmitOut,
+)
+def submit_practice_exercise(
+    hub_id: str,
+    attempt_id: str,
+    body: ExerciseSubmitRequest,
+    user: Annotated[UserPublic, Depends(require_full_skill_program)],
+) -> ExerciseSubmitOut:
+    return service.submit_hub_exercise(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        attempt_id=attempt_id,
+        answers=body.answers,
+    )
 
 
 @router.get("/progress", response_model=PracticeProgressOut)

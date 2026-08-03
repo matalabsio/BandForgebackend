@@ -291,13 +291,16 @@ def test_assert_module_unlocked_allows_next_reading_passage_after_partial():
         )
 
 
-def _start_ctx(*, modules=None, in_progress=None):
+def _start_ctx(*, modules=None, in_progress=None, is_free=False, is_diagnostic=False):
     return {
         "mock_test": {
             "id": str(M01),
             "title": "Test",
             "description": None,
             "is_published": True,
+            "is_free": is_free,
+            "is_diagnostic": is_diagnostic,
+            "catalog_number": 1,
         },
         "modules": modules if modules is not None else _modules_config(),
         "in_progress_attempt": in_progress,
@@ -352,7 +355,8 @@ def _sample_progress(*, current_module: str = "listening", next_module: str = "l
 
 def test_start_mock_fresh_m01_opens_listening_part_one():
     """Fresh Test 1 attempt always starts listening part 1."""
-    from unittest.mock import MagicMock, patch
+    import asyncio
+    from unittest.mock import AsyncMock, patch
 
     from app.services.mock_orchestrator import start_mock
 
@@ -381,8 +385,12 @@ def test_start_mock_fresh_m01_opens_listening_part_one():
             return_value=(UUID("44444444-4444-4444-8444-444444444444"), 1),
         ) as start_mod,
         patch("app.services.mock_orchestrator.repo.update_mock_attempt"),
+        patch(
+            "app.services.mock_orchestrator.write_progress_cache_async",
+            new_callable=AsyncMock,
+        ),
     ):
-        res = start_mock(mock_test_id=M01, user_id=user_id, force_new=False)
+        res = asyncio.run(start_mock(mock_test_id=M01, user_id=user_id, force_new=False))
 
     assert res.current_module == "listening"
     assert res.part == 1
@@ -395,7 +403,8 @@ def test_start_mock_fresh_m01_opens_listening_part_one():
 
 def test_start_mock_targets_listening_first():
     """start_mock should open listening when no attempts exist."""
-    from unittest.mock import MagicMock, patch
+    import asyncio
+    from unittest.mock import AsyncMock, patch
 
     from app.services.mock_orchestrator import start_mock
 
@@ -424,8 +433,12 @@ def test_start_mock_targets_listening_first():
             return_value=(UUID("44444444-4444-4444-8444-444444444444"), 1),
         ),
         patch("app.services.mock_orchestrator.repo.update_mock_attempt"),
+        patch(
+            "app.services.mock_orchestrator.write_progress_cache_async",
+            new_callable=AsyncMock,
+        ),
     ):
-        res = start_mock(mock_test_id=M01, user_id=user_id, force_new=False)
+        res = asyncio.run(start_mock(mock_test_id=M01, user_id=user_id, force_new=False))
 
     assert res.current_module == "listening"
     assert res.progress is not None
@@ -792,3 +805,84 @@ def test_provisional_aggregate_combines_final_objective_and_valid_ai():
     assert states["speaking"].source == "ai_estimate"
     assert aggregate == 7.3
     assert is_provisional is True
+
+
+def test_start_mock_force_new_abandons_existing_session():
+    """force_new abandons the prior in-progress mock session before inserting."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.services.mock_orchestrator import start_mock
+
+    user_id = UUID("22222222-2222-4222-8222-222222222222")
+    old_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    new_id = "33333333-3333-4333-8333-333333333333"
+    modules = _modules_config()
+    abandon = MagicMock()
+
+    with (
+        patch(
+            "app.services.mock_orchestrator.repo.fetch_mock_start_context",
+            return_value=_start_ctx(
+                modules=modules,
+                in_progress={
+                    "id": old_id,
+                    "status": "in_progress",
+                    "mock_test_id": str(M01),
+                },
+            ),
+        ),
+        patch(
+            "app.services.mock_orchestrator.repo.abandon_mock_attempt_session",
+            abandon,
+        ),
+        patch(
+            "app.services.mock_orchestrator.repo.insert_mock_attempt",
+            return_value={"id": new_id},
+        ) as insert_ma,
+        patch(
+            "app.services.mock_orchestrator.repo.fetch_mock_attempt_progress_bundle",
+            return_value=_progress_bundle(mock_attempt_id=new_id),
+        ),
+        patch(
+            "app.services.mock_orchestrator.repo.live_question_parts",
+            return_value=[1],
+        ),
+        patch(
+            "app.services.mock_orchestrator._start_module_attempt",
+            return_value=(UUID("44444444-4444-4444-8444-444444444444"), 1),
+        ) as start_mod,
+        patch("app.services.mock_orchestrator.repo.update_mock_attempt"),
+        patch(
+            "app.services.mock_orchestrator.write_progress_cache_async",
+            new_callable=AsyncMock,
+        ),
+    ):
+        res = asyncio.run(start_mock(mock_test_id=M01, user_id=user_id, force_new=True))
+
+    abandon.assert_called_once()
+    assert str(abandon.call_args.kwargs["mock_attempt_id"]) == old_id
+    insert_ma.assert_called_once()
+    assert res.resumed is False
+    assert res.current_module == "listening"
+    assert res.part == 1
+    assert start_mod.call_args.kwargs["force_new"] is False
+
+
+def test_required_attempt_parts_memoizes_within_request():
+    from unittest.mock import patch
+
+    from app.services import mock_orchestrator as orch
+
+    token = orch._live_parts_memo.set({})
+    try:
+        with patch(
+            "app.services.mock_orchestrator.repo.live_question_parts",
+            return_value=[1, 2, 3],
+        ) as live:
+            a = orch._required_attempt_parts(M01, "listening")
+            b = orch._required_attempt_parts(M01, "listening")
+        assert a == b == [1, 2, 3]
+        assert live.call_count == 1
+    finally:
+        orch._live_parts_memo.reset(token)

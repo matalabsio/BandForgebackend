@@ -13,8 +13,14 @@ def assert_skill_program_module_start(
     *,
     user_id: UUID,
     skill_context: str | None,
+    from_plan: bool = False,
 ) -> None:
-    """When skill_context is set, require Full Skill Program + 12/12 mock unlock."""
+    """When skill_context is set, require Full Skill Program.
+
+    Catalogue skill-mock unlock still needs 12/12 hubs.
+    Personalized plan practice (`from_plan`) only needs Full Skill Program —
+    daily tasks must open MT Writing/Speaking before mock unlock.
+    """
     if not skill_context:
         return
     if skill_context not in SKILLS:
@@ -30,4 +36,6 @@ def assert_skill_program_module_start(
             status.HTTP_403_FORBIDDEN,
             detail="Full Skill Program is required for skill mock access.",
         )
+    if from_plan:
+        return
     assert_skill_mock_access(user_id=user_id, skill=skill_context)

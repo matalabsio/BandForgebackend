@@ -88,6 +88,50 @@ def write_progress_cache(
         timing.set_session_cache_ms = _elapsed_ms(t0)
 
 
+async def write_progress_cache_async(
+    *,
+    mock_attempt_id: UUID,
+    user_id: UUID,
+    mock_test_id: UUID,
+    progress: MockAttemptProgress,
+    unlock: MockUnlockSnapshot,
+    timing: MockProgressTiming | None = None,
+) -> None:
+    """Like write_progress_cache but writes the two cache keys concurrently."""
+    import asyncio
+
+    key = progress_cache_key(mock_attempt_id=mock_attempt_id, user_id=user_id)
+    session_key = f"mock_session:v2:{user_id}:{mock_test_id}"
+
+    t0 = perf_counter()
+    payload = MockProgressCachePayload(progress=progress, unlock=unlock)
+    progress_unlock_blob = payload.model_dump(mode="json")
+    session_blob = progress.model_dump(mode="json")
+    if timing is not None:
+        timing.serialize_progress_ms = _elapsed_ms(t0)
+
+    t0 = perf_counter()
+    await asyncio.gather(
+        asyncio.to_thread(
+            set_json,
+            key,
+            progress_unlock_blob,
+            PROGRESS_CACHE_TTL_SECONDS,
+        ),
+        asyncio.to_thread(
+            set_json,
+            session_key,
+            session_blob,
+            PROGRESS_CACHE_TTL_SECONDS,
+        ),
+    )
+    wall = _elapsed_ms(t0)
+    if timing is not None:
+        timing.set_progress_cache_ms = wall
+        timing.set_unlock_cache_ms = 0
+        timing.set_session_cache_ms = wall
+
+
 def write_unlock_snapshot_cache(
     *,
     mock_attempt_id: UUID,

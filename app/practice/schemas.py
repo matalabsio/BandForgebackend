@@ -28,6 +28,8 @@ class PracticeHubOut(BaseModel):
     sort_order: int = 0
     status: HubStatus = "pending"
     completed_at: datetime | None = None
+    accessible: bool = True
+    locked_reason: str | None = None
 
 
 class PracticeHubDetailOut(PracticeHubOut):
@@ -62,3 +64,45 @@ class HubCompleteOut(BaseModel):
     status: HubStatus
     completed_at: datetime | None = None
     skill_progress: SkillHubProgressOut
+
+
+class BankExerciseQuestionOut(BaseModel):
+    id: str
+    question_number: int
+    question_type: str
+    prompt: str
+    options: Any = None
+    correct_answer: str | None = None
+
+
+class BankExerciseSectionOut(BaseModel):
+    section_id: str
+    part: int
+    module: SkillName
+    title: str | None = None
+    instructions: str | None = None
+    audio_key: str | None = None
+    passage_text: str | None = None
+    image_url: str | None = None
+    questions: list[BankExerciseQuestionOut] = Field(default_factory=list)
+
+
+class ExerciseStartOut(BaseModel):
+    attempt_id: str
+    hub_id: str
+    practice_set_id: str
+    skill: SkillName
+    part: int
+    section: BankExerciseSectionOut
+
+
+class ExerciseSubmitRequest(BaseModel):
+    answers: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExerciseSubmitOut(BaseModel):
+    attempt_id: str
+    status: Literal["completed"] = "completed"
+    score: dict[str, Any] | None = None
+    hub_completed: bool = False
+    skill_progress: SkillHubProgressOut | None = None

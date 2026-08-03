@@ -16,7 +16,12 @@ from app.learning.ingest import (
     load_diagnostic_seed,
     load_user_exam_and_target,
 )
-from app.learning.rules import apply_plan_rules, build_personalized_study_plan, monday_of
+from app.learning.rules import (
+    _plan_open_href,
+    apply_plan_rules,
+    build_personalized_study_plan,
+    monday_of,
+)
 from app.learning.schemas import (
     GrammarStats,
     LearningProfileResponse,
@@ -208,9 +213,44 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
-def _todays_tasks(study_plan: dict[str, Any], today: date | None = None) -> list[StudyTask]:
+def _rewrite_plan_task_href(task: StudyTask, *, hub_id: str | None) -> StudyTask:
+    """Point Today tasks at the current unlocked hub with plan-mode query params."""
+    skill = str(task.module or "").strip().lower()
+    task_type = task.task_type if task.task_type in ("watch", "practice", "submit") else "practice"
+    if skill not in ("listening", "reading", "writing", "speaking"):
+        return task
+    if not hub_id:
+        # Prefer disabled catalogue link over bare skill browse from Today
+        return task.model_copy(
+            update={
+                "hub_id": None,
+                "href": f"/study-plan/today?skill={skill}&unavailable=1",
+            }
+        )
+    return task.model_copy(
+        update={
+            "hub_id": hub_id,
+            "href": _plan_open_href(
+                skill=skill,
+                hub_id=hub_id,
+                task_type=task_type,
+                task_id=task.id,
+            ),
+        }
+    )
+
+
+def _todays_tasks(
+    study_plan: dict[str, Any],
+    today: date | None = None,
+    *,
+    user_id: UUID | None = None,
+    progress_map: dict[str, dict[str, Any]] | None = None,
+    hubs_by_skill: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[StudyTask]:
     today = today or date.today()
     today_s = today.isoformat()
+    raw_tasks: list[StudyTask] = []
     for week in study_plan.get("weeks") or []:
         if not isinstance(week, dict):
             continue
@@ -218,12 +258,46 @@ def _todays_tasks(study_plan: dict[str, Any], today: date | None = None) -> list
             if not isinstance(day, dict):
                 continue
             if day.get("date") == today_s:
-                tasks = []
                 for t in day.get("tasks") or []:
                     if isinstance(t, dict):
-                        tasks.append(StudyTask.model_validate(t))
-                return tasks
-    return []
+                        raw_tasks.append(StudyTask.model_validate(t))
+                break
+        if raw_tasks:
+            break
+
+    if not raw_tasks or user_id is None:
+        return raw_tasks
+
+    try:
+        from app.practice.service import current_hub_id_for_skill
+        from app.practice import repository as practice_repo
+
+        progress = (
+            progress_map
+            if progress_map is not None
+            else practice_repo.get_user_progress_map(user_id)
+        )
+        grouped = hubs_by_skill
+    except Exception:
+        logger.exception("todays_tasks hub rewrite failed for %s", user_id)
+        return raw_tasks
+
+    hub_by_skill: dict[str, str | None] = {}
+    rewritten: list[StudyTask] = []
+    for task in raw_tasks:
+        skill = str(task.module or "").strip().lower()
+        if skill not in hub_by_skill:
+            try:
+                hub_by_skill[skill] = current_hub_id_for_skill(
+                    user_id=user_id,
+                    skill=skill,
+                    progress_map=progress,
+                    hub_rows=(grouped.get(skill) if grouped is not None else None),
+                )
+            except Exception:
+                hub_by_skill[skill] = task.hub_id
+        rewritten.append(_rewrite_plan_task_href(task, hub_id=hub_by_skill.get(skill)))
+    return rewritten
 
 
 def row_to_response(row: dict[str, Any]) -> LearningProfileResponse:
@@ -269,7 +343,22 @@ def row_to_response(row: dict[str, Any]) -> LearningProfileResponse:
     ]
 
     timeline = _timeline_fields(row, study_plan_raw)
-    hub_progress = _hub_progress_for_user(UUID(str(row["user_id"])))
+    user_uuid = UUID(str(row["user_id"]))
+
+    hub_progress: dict[str, SkillHubProgress] = {}
+    progress_map: dict[str, dict[str, Any]] | None = None
+    hubs_by_skill: dict[str, list[dict[str, Any]]] | None = None
+    try:
+        from app.practice.service import practice_profile_bundle
+
+        hub_prog_raw, progress_map, hubs_by_skill = practice_profile_bundle(user_uuid)
+        hub_progress = {
+            skill: SkillHubProgress.model_validate(prog.model_dump())
+            for skill, prog in hub_prog_raw.items()
+        }
+    except Exception:
+        logger.exception("practice_profile_bundle failed for %s", user_uuid)
+        hub_progress = _hub_progress_for_user(user_uuid)
 
     return LearningProfileResponse(
         user_id=str(row["user_id"]),
@@ -288,7 +377,12 @@ def row_to_response(row: dict[str, Any]) -> LearningProfileResponse:
         source_counts=SourceCounts.model_validate(row.get("source_counts") or {}),
         refreshed_at=_parse_dt(row.get("refreshed_at")),
         plan_week_start=_parse_date(row.get("plan_week_start")),
-        todays_tasks=_todays_tasks(study_plan_raw),
+        todays_tasks=_todays_tasks(
+            study_plan_raw,
+            user_id=user_uuid,
+            progress_map=progress_map,
+            hubs_by_skill=hubs_by_skill,
+        ),
         prep_start=timeline["prep_start"],
         exam_date=timeline["exam_date"],
         total_days=timeline["total_days"],
@@ -478,7 +572,8 @@ def ensure_profile(user_id: UUID, *, force: bool = False) -> LearningProfileResp
     return row_to_response(row)
 
 
-def update_task_status(user_id: UUID, task_id: str, status: str) -> LearningProfileResponse:
+def update_task_status(user_id: UUID, task_id: str, status: str) -> StudyPlan:
+    """Patch one task status and return the updated study_plan only (fast path)."""
     row = fetch_profile_row(user_id)
     if row is None:
         row = refresh_profile(user_id)
@@ -528,9 +623,8 @@ def update_task_status(user_id: UUID, task_id: str, status: str) -> LearningProf
             .execute()
         )
     )
-    row = fetch_profile_row(user_id) or row
-    row["study_plan"] = study_plan
-    return row_to_response(row)
+    # Avoid row_to_response (hub rewrite + progress) — PATCH only needs study_plan.
+    return StudyPlan.model_validate(study_plan)
 
 
 def schedule_profile_refresh(user_id: UUID) -> None:
@@ -580,39 +674,33 @@ def generate_personalized_plan(
     prior = fetch_profile_row(user_id)
     prior_plan = prior.get("study_plan") if prior and isinstance(prior.get("study_plan"), dict) else None
 
+    completed_by_skill: dict[str, int] = {}
+    try:
+        from app.practice.service import hub_progress_map
+
+        for skill, prog in hub_progress_map(user_id).items():
+            completed_by_skill[skill] = int(prog.completed_count)
+    except Exception:
+        logger.exception("could not load hub progress for plan generation %s", user_id)
+
+    plan_kwargs = dict(
+        bands=bands,
+        target=target_f,
+        exam_date=exam_date,
+        prep_start=prep_start,
+        plan_tier=plan_tier,
+        diagnostic_attempt_id=str(attempt.get("id") or ""),
+        completed_by_skill=completed_by_skill,
+    )
     if prior_plan:
         prior_exam = _parse_date(prior.get("exam_date")) or _parse_date(prior_plan.get("exam_date"))
         prior_prep = _parse_date(prior.get("prep_start")) or _parse_date(prior_plan.get("prep_start"))
         if prior_exam == exam_date and prior_prep == prep_start and prior_plan.get("plan_tier") == plan_tier:
-            study_plan = build_personalized_study_plan(
-                bands=bands,
-                target=target_f,
-                exam_date=exam_date,
-                prep_start=prep_start,
-                plan_tier=plan_tier,
-                diagnostic_attempt_id=str(attempt.get("id") or ""),
-                prior_plan=prior_plan,
-            )
+            study_plan = build_personalized_study_plan(**plan_kwargs, prior_plan=prior_plan)
         else:
-            study_plan = build_personalized_study_plan(
-                bands=bands,
-                target=target_f,
-                exam_date=exam_date,
-                prep_start=prep_start,
-                plan_tier=plan_tier,
-                diagnostic_attempt_id=str(attempt.get("id") or ""),
-                prior_plan=None,
-            )
+            study_plan = build_personalized_study_plan(**plan_kwargs, prior_plan=None)
     else:
-        study_plan = build_personalized_study_plan(
-            bands=bands,
-            target=target_f,
-            exam_date=exam_date,
-            prep_start=prep_start,
-            plan_tier=plan_tier,
-            diagnostic_attempt_id=str(attempt.get("id") or ""),
-            prior_plan=None,
-        )
+        study_plan = build_personalized_study_plan(**plan_kwargs, prior_plan=None)
 
     sources = load_all_sources(user_id)
     aggregate = build_aggregate(sources)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -19,9 +20,11 @@ from app.cache.mock_cache import (
     refresh_mock_in_progress_cache,
     schedule_mock_history_cache_invalidation,
     write_progress_cache,
+    write_progress_cache_async,
     write_unlock_snapshot_cache,
 )
 from app.services.mock_progress_timing import MockProgressTiming, _elapsed_ms
+from app.services.mock_start_timing import MockStartTiming, elapsed_ms as _start_elapsed_ms
 from app.mock_catalog.constants import (
     M01_MOCK_TEST_ID,
     PUBLISHED_FULL_MOCK_IDS,
@@ -43,6 +46,12 @@ from app.schemas.mock_orchestrator import (
 )
 from app.schemas.test_engine import TestSummary
 from app.services import mock_orchestrator_repository as repo
+
+# Request-scoped memo for live_question_parts (set during start_mock).
+_live_parts_memo: ContextVar[dict[tuple[str, str], list[int]] | None] = ContextVar(
+    "bf_live_parts_memo",
+    default=None,
+)
 
 
 def _is_dev() -> bool:
@@ -70,12 +79,19 @@ def _first_enabled_module(modules: list[dict[str, Any]]) -> str:
 
 
 def _required_attempt_parts(mock_test_id: UUID, module: str) -> list[int]:
+    memo = _live_parts_memo.get()
+    key = (str(mock_test_id), module)
+    if memo is not None and key in memo:
+        return memo[key]
     question_parts = repo.live_question_parts(
         mock_test_id=mock_test_id,
         module=module,
     )
     # Speaking Parts 1–3 are captured and finalized as one durable attempt.
-    return [1] if module == "speaking" and question_parts else question_parts
+    result = [1] if module == "speaking" and question_parts else question_parts
+    if memo is not None:
+        memo[key] = result
+    return result
 
 
 def _first_part_for_module(mock_test_id: UUID, module: str) -> int:
@@ -553,13 +569,28 @@ def build_unlock_snapshot(
     modules: list[dict[str, Any]],
     module_attempts: list[dict[str, Any]],
     current_module: str | None,
+    module_progress: list[ModuleProgress] | None = None,
 ) -> MockUnlockSnapshot:
-    module_progress = _compute_module_statuses(
-        mock_test_id=mock_test_id,
-        modules=modules,
+    if module_progress is None:
+        module_progress = _compute_module_statuses(
+            mock_test_id=mock_test_id,
+            modules=modules,
+            module_attempts=module_attempts,
+            include_bands=False,
+        )
+    return _unlock_snapshot_from_progress(
+        module_progress=module_progress,
         module_attempts=module_attempts,
-        include_bands=False,
+        current_module=current_module,
     )
+
+
+def _unlock_snapshot_from_progress(
+    *,
+    module_progress: list[ModuleProgress],
+    module_attempts: list[dict[str, Any]],
+    current_module: str | None,
+) -> MockUnlockSnapshot:
     done_parts: dict[str, list[int]] = {}
     for attempt in module_attempts:
         if attempt.get("status") != "completed":
@@ -576,6 +607,38 @@ def build_unlock_snapshot(
         done_parts=done_parts,
         current_module=current_module,  # type: ignore[arg-type]
         module_status=module_status,  # type: ignore[arg-type]
+    )
+
+
+def _apply_started_module_to_progress(
+    *,
+    progress: MockAttemptProgress,
+    start_module: str,
+    module_attempt_id: UUID,
+    part: int,
+) -> MockAttemptProgress:
+    """Patch progress after opening a module attempt without recomputing statuses."""
+    updated_modules: list[ModuleProgress] = []
+    for mp in progress.modules:
+        if mp.module == start_module:
+            updated_modules.append(
+                mp.model_copy(
+                    update={
+                        "status": "in_progress",
+                        "test_attempt_id": module_attempt_id,
+                        "part": part,
+                    }
+                )
+            )
+        else:
+            updated_modules.append(mp)
+    return progress.model_copy(
+        update={
+            "current_module": start_module,  # type: ignore[arg-type]
+            "modules": updated_modules,
+            "next_module": start_module,  # type: ignore[arg-type]
+            "next_part": part,
+        }
     )
 
 
@@ -1218,159 +1281,250 @@ def get_mock_session(
     return progress
 
 
-def start_mock(
+async def start_mock(
     *,
     mock_test_id: UUID,
     user_id: UUID,
     force_new: bool = False,
+    timing: MockStartTiming | None = None,
+    start_ctx: dict[str, Any] | None = None,
 ) -> StartMockResponse:
-    """Create mock_attempt + first unlocked module test_attempt."""
-    start_ctx = repo.fetch_mock_start_context(
-        user_id=user_id,
-        mock_test_id=mock_test_id,
-        allow_unpublished=_is_dev(),
-    )
-    if not start_ctx or not start_ctx.get("mock_test"):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+    """Create mock_attempt + first unlocked module test_attempt.
 
-    test_row = start_ctx["mock_test"]
-    catalog_number = test_row.get("catalog_number")
-    if catalog_number is not None:
-        from app.mock_catalog.constants import is_candidate_live_catalog_number
+    Independent I/O uses ``asyncio.to_thread`` + ``asyncio.gather`` where safe.
+    Pass ``start_ctx`` when the caller already loaded start/gate context.
+    """
+    import asyncio
 
-        if not is_candidate_live_catalog_number(int(catalog_number)):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+    t_request = perf_counter()
+    memo_token = _live_parts_memo.set({})
+    if timing is not None:
+        timing.force_new = force_new
 
-    modules = list(start_ctx.get("modules") or [])
-    if not modules:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Mock has no module configuration. Run Supabase migrations "
-                "20260526100000_mock_attempts_orchestration.sql and "
-                "20260526100100_m01_consolidation.sql."
-            ),
-        )
-
-    existing_ma = start_ctx.get("in_progress_attempt")
-    if existing_ma and force_new:
-        old_id = UUID(str(existing_ma["id"]))
-        repo.abandon_in_progress_attempts_for_mock_attempt(mock_attempt_id=old_id)
-        repo.update_mock_attempt(
-            mock_attempt_id=old_id,
-            fields={"status": "abandoned"},
-        )
-        existing_ma = None
-
-    resumed = False
-    if existing_ma:
-        mock_attempt_id = UUID(str(existing_ma["id"]))
-        resumed = True
-    else:
-        first_mod = _first_enabled_module(modules)
-        ma_row = repo.insert_mock_attempt(
-            user_id=user_id,
-            mock_test_id=mock_test_id,
-            current_module=first_mod,
-        )
-        mock_attempt_id = UUID(str(ma_row["id"]))
-
-    bundle = repo.fetch_mock_attempt_progress_bundle(
-        mock_attempt_id=mock_attempt_id, user_id=user_id
-    )
-    if not bundle:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock attempt not found.")
-
-    progress = _progress_from_bundle(bundle, user_id=user_id)
-    target = next(
-        (m for m in progress.modules if m.status in ("available", "in_progress")),
-        None,
-    )
-    if not target:
-        if existing_ma and str(existing_ma.get("status")) == "in_progress":
-            repo.update_mock_attempt(
-                mock_attempt_id=mock_attempt_id,
-                fields={
-                    "status": "completed",
-                    "completed_at": datetime.now(UTC).isoformat(),
-                    "current_module": None,
-                },
-            )
-            invalidate_mock_progress_caches(
+    try:
+        if start_ctx is None:
+            t0 = perf_counter()
+            start_ctx = await asyncio.to_thread(
+                repo.fetch_mock_start_context,
                 user_id=user_id,
                 mock_test_id=mock_test_id,
-                mock_attempt_id=mock_attempt_id,
+                allow_unpublished=_is_dev(),
             )
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail="This test is complete. Start a new attempt to retake.",
+            if timing is not None:
+                timing.fetch_start_context_ms = _start_elapsed_ms(t0)
+
+        if not start_ctx or not start_ctx.get("mock_test"):
+            if timing is not None:
+                timing.duration_ms = _start_elapsed_ms(t_request)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+
+        test_row = start_ctx["mock_test"]
+        t0 = perf_counter()
+        catalog_number = test_row.get("catalog_number")
+        if catalog_number is not None:
+            from app.mock_catalog.constants import is_candidate_live_catalog_number
+
+            if not is_candidate_live_catalog_number(int(catalog_number)):
+                if timing is not None:
+                    timing.catalog_validate_ms = _start_elapsed_ms(t0)
+                    timing.duration_ms = _start_elapsed_ms(t_request)
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock test not found.")
+        if timing is not None:
+            timing.catalog_validate_ms = _start_elapsed_ms(t0)
+
+        modules = list(start_ctx.get("modules") or [])
+        if not modules:
+            if timing is not None:
+                timing.duration_ms = _start_elapsed_ms(t_request)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Mock has no module configuration. Run Supabase migrations "
+                    "20260526100000_mock_attempts_orchestration.sql and "
+                    "20260526100100_m01_consolidation.sql."
+                ),
+            )
+
+        existing_ma = start_ctx.get("in_progress_attempt")
+        if existing_ma and force_new:
+            t0 = perf_counter()
+            old_id = UUID(str(existing_ma["id"]))
+            await asyncio.to_thread(
+                repo.abandon_mock_attempt_session,
+                mock_attempt_id=old_id,
+            )
+            existing_ma = None
+            if timing is not None:
+                timing.abandon_existing_ms = _start_elapsed_ms(t0)
+
+        resumed = False
+        if existing_ma:
+            mock_attempt_id = UUID(str(existing_ma["id"]))
+            resumed = True
+        else:
+            first_mod = _first_enabled_module(modules)
+            t0 = perf_counter()
+            ma_row = await asyncio.to_thread(
+                repo.insert_mock_attempt,
+                user_id=user_id,
+                mock_test_id=mock_test_id,
+                current_module=first_mod,
+            )
+            if timing is not None:
+                timing.insert_mock_attempt_ms = _start_elapsed_ms(t0)
+            mock_attempt_id = UUID(str(ma_row["id"]))
+
+        if timing is not None:
+            timing.resumed = resumed
+
+        t0 = perf_counter()
+        bundle = await asyncio.to_thread(
+            repo.fetch_mock_attempt_progress_bundle,
+            mock_attempt_id=mock_attempt_id,
+            user_id=user_id,
         )
+        if timing is not None:
+            timing.fetch_progress_bundle_ms = _start_elapsed_ms(t0)
+        if not bundle:
+            if timing is not None:
+                timing.duration_ms = _start_elapsed_ms(t_request)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Mock attempt not found.")
 
-    start_module = target.module
-    start_part = target.part or _first_part_for_module(mock_test_id, start_module)
-    if not resumed and str(mock_test_id) == M01_MOCK_TEST_ID:
-        start_module = "listening"
-        start_part = 1
+        # Prefer modules from start_ctx when present (same data, avoid relying on bundle only).
+        if not bundle.get("modules") and modules:
+            bundle = {**bundle, "modules": modules}
 
-    module_attempt_id, part = _start_module_attempt(
-        mock_attempt_id=mock_attempt_id,
-        mock_test_id=mock_test_id,
-        user_id=user_id,
-        module=start_module,
-        part=start_part,
-        force_new=force_new or not resumed,
-    )
+        t0 = perf_counter()
+        progress = _progress_from_bundle(bundle, user_id=user_id)
+        if timing is not None:
+            timing.progress_from_bundle_ms = _start_elapsed_ms(t0)
+        target = next(
+            (m for m in progress.modules if m.status in ("available", "in_progress")),
+            None,
+        )
+        if not target:
+            if existing_ma and str(existing_ma.get("status")) == "in_progress":
+                await asyncio.to_thread(
+                    repo.update_mock_attempt,
+                    mock_attempt_id=mock_attempt_id,
+                    fields={
+                        "status": "completed",
+                        "completed_at": datetime.now(UTC).isoformat(),
+                        "current_module": None,
+                    },
+                )
+                invalidate_mock_progress_caches(
+                    user_id=user_id,
+                    mock_test_id=mock_test_id,
+                    mock_attempt_id=mock_attempt_id,
+                )
+            if timing is not None:
+                timing.duration_ms = _start_elapsed_ms(t_request)
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="This test is complete. Start a new attempt to retake.",
+            )
 
-    repo.update_mock_attempt(
-        mock_attempt_id=mock_attempt_id,
-        fields={"current_module": start_module},
-    )
+        start_module = target.module
+        start_part = target.part or _first_part_for_module(mock_test_id, start_module)
+        if not resumed and str(mock_test_id) == M01_MOCK_TEST_ID:
+            start_module = "listening"
+            start_part = 1
 
-    row, _, _, module_attempts, scores = _bundle_parts(bundle, user_id=user_id)
-    row = {**row, "current_module": start_module}
-    module_attempts = _merge_module_attempt_row(
-        mock_attempt_id=mock_attempt_id,
-        module_attempts=module_attempts,
-        attempt_id=module_attempt_id,
-        module=start_module,
-        part=part,
-    )
-    progress = _progress_from_context(
-        row=row,
-        mock_test_id=mock_test_id,
-        modules=modules,
-        module_attempts=module_attempts,
-        scores_by_attempt=scores,
-        include_bands=True,
-    )
+        if timing is not None:
+            timing.start_module = start_module
+            timing.start_part = start_part
 
-    unlock = build_unlock_snapshot(
-        mock_test_id=mock_test_id,
-        modules=modules,
-        module_attempts=module_attempts,
-        current_module=start_module,
-    )
-    write_progress_cache(
-        mock_attempt_id=mock_attempt_id,
-        user_id=user_id,
-        mock_test_id=mock_test_id,
-        progress=progress,
-        unlock=unlock,
-    )
+        # After force_new session abandon the new mock_attempt_id has no children.
+        module_force_new = (
+            False if (force_new and not resumed) else (force_new or not resumed)
+        )
+        t0 = perf_counter()
+        (module_attempt_id, part), _ = await asyncio.gather(
+            asyncio.to_thread(
+                _start_module_attempt,
+                mock_attempt_id=mock_attempt_id,
+                mock_test_id=mock_test_id,
+                user_id=user_id,
+                module=start_module,
+                part=start_part,
+                force_new=module_force_new,
+                timing=timing,
+            ),
+            asyncio.to_thread(
+                repo.update_mock_attempt,
+                mock_attempt_id=mock_attempt_id,
+                fields={"current_module": start_module},
+            ),
+        )
+        if timing is not None:
+            timing.start_module_ms = _start_elapsed_ms(t0)
+            timing.update_current_module_ms = timing.start_module_ms
 
-    return StartMockResponse(
-        mock_attempt_id=mock_attempt_id,
-        mock_test=TestSummary(
-            id=UUID(str(test_row["id"])),
-            title=str(test_row["title"]),
-            description=test_row.get("description"),
-        ),
-        current_module=start_module,
-        module_attempt_id=module_attempt_id,
-        part=part,
-        resumed=resumed,
-        progress=progress,
-    )
+        t0 = perf_counter()
+        row, _, bundle_modules, module_attempts, _scores = _bundle_parts(
+            bundle, user_id=user_id
+        )
+        _ = bundle_modules
+        row = {**row, "current_module": start_module}
+        module_attempts = _merge_module_attempt_row(
+            mock_attempt_id=mock_attempt_id,
+            module_attempts=module_attempts,
+            attempt_id=module_attempt_id,
+            module=start_module,
+            part=part,
+        )
+        # Reuse first progress compute — patch started module only (no second full recompute).
+        progress = _apply_started_module_to_progress(
+            progress=progress.model_copy(
+                update={
+                    "mock_attempt_id": mock_attempt_id,
+                    "current_module": start_module,  # type: ignore[arg-type]
+                }
+            ),
+            start_module=start_module,
+            module_attempt_id=module_attempt_id,
+            part=part,
+        )
+        if timing is not None:
+            timing.progress_rebuild_ms = _start_elapsed_ms(t0)
+
+        t0 = perf_counter()
+        unlock = _unlock_snapshot_from_progress(
+            module_progress=progress.modules,
+            module_attempts=module_attempts,
+            current_module=start_module,
+        )
+        if timing is not None:
+            timing.unlock_snapshot_ms = _start_elapsed_ms(t0)
+
+        t0 = perf_counter()
+        await write_progress_cache_async(
+            mock_attempt_id=mock_attempt_id,
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            progress=progress,
+            unlock=unlock,
+        )
+        if timing is not None:
+            timing.write_cache_ms = _start_elapsed_ms(t0)
+            timing.duration_ms = _start_elapsed_ms(t_request)
+
+        return StartMockResponse(
+            mock_attempt_id=mock_attempt_id,
+            mock_test=TestSummary(
+                id=UUID(str(test_row["id"])),
+                title=str(test_row["title"]),
+                description=test_row.get("description"),
+            ),
+            current_module=start_module,
+            module_attempt_id=module_attempt_id,
+            part=part,
+            resumed=resumed,
+            progress=progress,
+        )
+    finally:
+        _live_parts_memo.reset(memo_token)
 
 
 def _start_module_attempt(
@@ -1381,91 +1535,128 @@ def _start_module_attempt(
     module: str,
     part: int,
     force_new: bool,
+    timing: MockStartTiming | None = None,
 ) -> tuple[UUID, int]:
     from app.listening import repository as listening_repo
     from app.reading import repository as reading_repo
     from app.writing import repository as writing_repo
 
     if module == "reading":
+        t0 = perf_counter()
         existing = reading_repo.find_in_progress_reading_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             part=part,
             mock_attempt_id=mock_attempt_id,
         )
+        if timing is not None:
+            timing.start_module_find_ms += _start_elapsed_ms(t0)
         if existing and force_new:
+            t0 = perf_counter()
             reading_repo.abandon_reading_attempt(attempt_id=UUID(str(existing["id"])))
+            if timing is not None:
+                timing.start_module_abandon_ms += _start_elapsed_ms(t0)
             existing = None
         if existing:
             return UUID(str(existing["id"])), part
+        t0 = perf_counter()
         row = reading_repo.insert_reading_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             mock_attempt_id=mock_attempt_id,
             part=part,
         )
+        if timing is not None:
+            timing.start_module_insert_ms += _start_elapsed_ms(t0)
         return UUID(str(row["id"])), part
 
     if module == "listening":
+        t0 = perf_counter()
         existing = listening_repo.find_in_progress_listening_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             part=part,
             mock_attempt_id=mock_attempt_id,
         )
+        if timing is not None:
+            timing.start_module_find_ms += _start_elapsed_ms(t0)
         if existing and force_new:
+            t0 = perf_counter()
             listening_repo.abandon_listening_attempt(attempt_id=UUID(str(existing["id"])))
+            if timing is not None:
+                timing.start_module_abandon_ms += _start_elapsed_ms(t0)
             existing = None
         if existing:
             return UUID(str(existing["id"])), part
+        t0 = perf_counter()
         row = listening_repo.insert_listening_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             mock_attempt_id=mock_attempt_id,
             part=part,
         )
+        if timing is not None:
+            timing.start_module_insert_ms += _start_elapsed_ms(t0)
         return UUID(str(row["id"])), part
 
     if module == "writing":
+        t0 = perf_counter()
         existing = writing_repo.find_in_progress_writing_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             part=part,
             mock_attempt_id=mock_attempt_id,
         )
+        if timing is not None:
+            timing.start_module_find_ms += _start_elapsed_ms(t0)
         if existing and force_new:
+            t0 = perf_counter()
             writing_repo.abandon_writing_attempt(attempt_id=UUID(str(existing["id"])))
+            if timing is not None:
+                timing.start_module_abandon_ms += _start_elapsed_ms(t0)
             existing = None
         if existing:
             return UUID(str(existing["id"])), part
+        t0 = perf_counter()
         row = writing_repo.insert_writing_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             mock_attempt_id=mock_attempt_id,
             part=part,
         )
+        if timing is not None:
+            timing.start_module_insert_ms += _start_elapsed_ms(t0)
         return UUID(str(row["id"])), part
 
     if module == "speaking":
         from app.speaking import repository as speaking_repo
 
+        t0 = perf_counter()
         existing = speaking_repo.find_in_progress_speaking_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             part=part,
             mock_attempt_id=mock_attempt_id,
         )
+        if timing is not None:
+            timing.start_module_find_ms += _start_elapsed_ms(t0)
         if existing and force_new:
+            t0 = perf_counter()
             speaking_repo.abandon_speaking_attempt(attempt_id=UUID(str(existing["id"])))
+            if timing is not None:
+                timing.start_module_abandon_ms += _start_elapsed_ms(t0)
             existing = None
         if existing:
             return UUID(str(existing["id"])), part
+        t0 = perf_counter()
         row = speaking_repo.insert_speaking_attempt(
             user_id=user_id,
             mock_test_id=mock_test_id,
             mock_attempt_id=mock_attempt_id,
             part=part,
         )
+        if timing is not None:
+            timing.start_module_insert_ms += _start_elapsed_ms(t0)
         return UUID(str(row["id"])), part
 
     raise HTTPException(
