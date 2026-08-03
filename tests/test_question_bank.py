@@ -171,6 +171,14 @@ def test_start_hub_exercise_returns_questions():
 
     with (
         patch("app.practice.service.repository.get_hub_by_id", return_value=hub_row),
+        patch(
+            "app.practice.service.repository.get_user_progress_map",
+            return_value={},
+        ),
+        patch(
+            "app.practice.service.repository.list_hubs_for_skill",
+            return_value=[hub_row],
+        ),
         patch("app.db.supabase_client.get_supabase", return_value=sb),
     ):
         out = service.start_hub_exercise(user_id=USER_ID, hub_id=HUB_ID)

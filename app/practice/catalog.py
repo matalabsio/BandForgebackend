@@ -17,6 +17,9 @@ def _catalog_cache_key() -> int:
 
 def clear_hub_catalog_cache() -> None:
     get_ordered_hub_ids_by_skill.cache_clear()
+    from app.practice.repository import clear_hub_list_cache
+
+    clear_hub_list_cache()
 
 
 @lru_cache(maxsize=1)

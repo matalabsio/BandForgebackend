@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -61,8 +62,10 @@ def accessible_hub_ids_for_skill(
     return accessible
 
 
-def assert_hub_accessible(*, user_id: UUID, hub_id: str) -> dict[str, Any]:
-    """Raise 403 if this hub is locked behind an incomplete earlier set. Returns flat hub row."""
+def _assert_hub_accessible_with_progress(
+    *, user_id: UUID, hub_id: str
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Raise 403 if locked. Returns (flat hub row, progress_map) — one progress fetch."""
     row = repository.get_hub_by_id(hub_id)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
@@ -70,7 +73,18 @@ def assert_hub_accessible(*, user_id: UUID, hub_id: str) -> dict[str, Any]:
     skill = flat.get("skill")
     if skill not in SKILLS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
-    allowed = accessible_hub_ids_for_skill(user_id=user_id, skill=str(skill))
+    # Progress + ordered hubs in parallel (was sequential after hub fetch).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_progress = pool.submit(repository.get_user_progress_map, user_id)
+        fut_hubs = pool.submit(repository.list_hubs_for_skill, str(skill))
+        progress_map = fut_progress.result()
+        hub_rows = fut_hubs.result()
+    allowed = accessible_hub_ids_for_skill(
+        user_id=user_id,
+        skill=str(skill),
+        progress_map=progress_map,
+        hub_rows=hub_rows,
+    )
     if str(hub_id) not in allowed:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -81,6 +95,14 @@ def assert_hub_accessible(*, user_id: UUID, hub_id: str) -> dict[str, Any]:
                 "hub_id": str(hub_id),
             },
         )
+    return flat, progress_map
+
+
+def assert_hub_accessible(*, user_id: UUID, hub_id: str) -> dict[str, Any]:
+    """Raise 403 if this hub is locked behind an incomplete earlier set. Returns flat hub row."""
+    flat, _progress = _assert_hub_accessible_with_progress(
+        user_id=user_id, hub_id=hub_id
+    )
     return flat
 
 
@@ -169,11 +191,14 @@ def practice_profile_bundle(
     dict[str, list[dict[str, Any]]],
 ]:
     """Shared snapshot for learning profile: hub progress + rewrite inputs."""
-    grouped = repository.list_all_hubs_grouped()
-    progress = repository.get_user_progress_map(user_id)
-    mocks = {
-        str(m.get("skill") or ""): m for m in repository.list_skill_full_mocks()
-    }
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fut_hubs = pool.submit(repository.list_all_hubs_grouped)
+        fut_progress = pool.submit(repository.get_user_progress_map, user_id)
+        fut_mocks = pool.submit(repository.list_skill_full_mocks)
+        grouped = fut_hubs.result()
+        progress = fut_progress.result()
+        mock_rows = fut_mocks.result()
+    mocks = {str(m.get("skill") or ""): m for m in mock_rows}
     hub_prog = {
         s: skill_progress(
             user_id=user_id,
@@ -237,8 +262,10 @@ def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut
 
 
 def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
-    flat = assert_hub_accessible(user_id=user_id, hub_id=hub_id)
-    progress = repository.get_user_progress_map(user_id).get(str(hub_id), {})
+    flat, progress_map = _assert_hub_accessible_with_progress(
+        user_id=user_id, hub_id=hub_id
+    )
+    progress = progress_map.get(str(hub_id), {})
     completed_at = progress.get("completed_at")
     videos = [
         PracticeVideo(**v) if isinstance(v, dict) else PracticeVideo()
@@ -323,26 +350,36 @@ def start_hub_exercise(
     if chosen is None:
         chosen = sections[0]
     section_id = str(chosen["id"])
-    qrows = (
-        sb.table("bank_questions")
-        .select(
-            "id, question_number, question_type, prompt, options, correct_answer"
-        )
-        .eq("section_id", section_id)
-        .order("question_number")
-        .execute()
-    ).data or []
+
+    def _load_questions() -> list[dict[str, Any]]:
+        return (
+            sb.table("bank_questions")
+            .select(
+                "id, question_number, question_type, prompt, options, correct_answer"
+            )
+            .eq("section_id", section_id)
+            .order("question_number")
+            .execute()
+        ).data or []
+
+    def _abandon_in_progress() -> None:
+        sb.table("practice_exercise_attempts").update(
+            {"status": "abandoned"}
+        ).eq("user_id", str(user_id)).eq("hub_id", str(hub_id)).eq(
+            "status", "in_progress"
+        ).execute()
+
+    # Questions + abandon in parallel (were sequential).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_q = pool.submit(_load_questions)
+        fut_abandon = pool.submit(_abandon_in_progress)
+        qrows = fut_q.result()
+        fut_abandon.result()
     if not qrows:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail="Bank section has no questions.",
         )
-    # Abandon prior in-progress for this hub
-    sb.table("practice_exercise_attempts").update(
-        {"status": "abandoned"}
-    ).eq("user_id", str(user_id)).eq("hub_id", str(hub_id)).eq(
-        "status", "in_progress"
-    ).execute()
     inserted = (
         sb.table("practice_exercise_attempts")
         .insert(

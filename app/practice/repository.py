@@ -26,6 +26,12 @@ def _exec(query):
 
 
 def list_hubs_for_skill(skill: str) -> list[dict[str, Any]]:
+    from app.cache.hybrid_cache import get_json, set_json
+
+    cache_key = f"practice:hubs:list:{skill}"
+    cached = get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
     sb = get_supabase()
     result = (
         sb.table("practice_hubs")
@@ -34,11 +40,20 @@ def list_hubs_for_skill(skill: str) -> list[dict[str, Any]]:
         .order("sort_order")
         .execute()
     )
-    return list(result.data or [])
+    rows = list(result.data or [])
+    set_json(cache_key, rows, 60)
+    return rows
 
 
 def list_all_hubs_grouped() -> dict[str, list[dict[str, Any]]]:
     """One hubs query, group by skill in memory (avoids 4 round-trips)."""
+    from app.cache.hybrid_cache import get_json, set_json
+
+    cache_key = "practice:hubs:all_grouped"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict) and all(s in cached for s in SKILLS):
+        return {s: list(cached.get(s) or []) for s in SKILLS}
+
     sb = get_supabase()
     result = (
         sb.table("practice_hubs")
@@ -56,10 +71,26 @@ def list_all_hubs_grouped() -> dict[str, list[dict[str, Any]]]:
         grouped[skill].sort(
             key=lambda r: int((_flatten_hub_row(r).get("sort_order") or 0))
         )
+    set_json(cache_key, grouped, 60)
     return grouped
 
 
+def clear_hub_list_cache() -> None:
+    from app.cache.hybrid_cache import delete_many, invalidate_prefix
+
+    delete_many(["practice:hubs:all_grouped"])
+    invalidate_prefix("practice:hubs:list:")
+
+
 def get_hub_by_id(hub_id: str | UUID) -> dict[str, Any] | None:
+    from app.cache.hybrid_cache import get_json, set_json
+
+    cache_key = f"practice:hub:detail:{hub_id}"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        if cached.get("__miss__"):
+            return None
+        return cached
     sb = get_supabase()
     result = (
         sb.table("practice_hubs")
@@ -69,7 +100,12 @@ def get_hub_by_id(hub_id: str | UUID) -> dict[str, Any] | None:
         .execute()
     )
     rows = result.data or []
-    return rows[0] if rows else None
+    row = rows[0] if rows else None
+    if row is None:
+        set_json(cache_key, {"__miss__": True}, 30)
+    else:
+        set_json(cache_key, row, 60)
+    return row
 
 
 def get_user_progress_map(user_id: UUID) -> dict[str, dict[str, Any]]:

@@ -1,59 +1,76 @@
-# ---------------------------------------------------------------------------
-# BandForge backend (Python + FastAPI) .gitignore
-# ---------------------------------------------------------------------------
+# =============================================================================
+# BandForge API (backend) — production-grade .gitignore
+# Python / FastAPI / Docker / Supabase / Railway
+# =============================================================================
 
-# Virtual environments
+# -----------------------------------------------------------------------------
+# Secrets & environment — NEVER commit real values
+# -----------------------------------------------------------------------------
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+!.env*.example
+!env.local.example
+
+# Cloud / payment / TLS credential dumps
+*credentials*.json
+*service-account*.json
+*firebase-adminsdk*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+!**/fixtures/**/*.pem
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# -----------------------------------------------------------------------------
+# Virtual environments & Python version pin (local)
+# -----------------------------------------------------------------------------
 .venv/
 venv/
 ENV/
-.env/
 env/
 .python-version
+.conda/
+pip-wheel-metadata/
 
-# ---------------------------------------------------------------------------
-# Environment & secrets — NEVER commit real values
-# ---------------------------------------------------------------------------
-.env
-.env.*
-!.env.example
-!env.local.example
-!.env*.example
-
-# Cloud / payment credential dumps
-*credentials*.json
-*service-account*.json
-*.pem
-*.p12
-!.env*.example
-
-# ---------------------------------------------------------------------------
-# Python bytecode & packaging artifacts (root-scoped where ambiguous)
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Python bytecode & packaging
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.dylib
 .Python
-/build/
-/dist/
-/downloads/
-/eggs/
-/.eggs/
-/lib/
-/lib64/
-/parts/
-/sdist/
-/var/
-/wheels/
-/share/python-wheels/
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
 
-# ---------------------------------------------------------------------------
-# Testing, coverage & type checkers
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Testing, coverage, type checkers, linters
+# -----------------------------------------------------------------------------
 .pytest_cache/
 .coverage
 .coverage.*
@@ -62,6 +79,7 @@ htmlcov/
 .nox/
 coverage.xml
 *.cover
+*.py,cover
 .hypothesis/
 .mypy_cache/
 .dmypy.json
@@ -70,48 +88,73 @@ dmypy.json
 .pytype/
 .pyre/
 .pyright/
+.cache/
 
-# ---------------------------------------------------------------------------
-# Jupyter
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Jupyter / notebooks
+# -----------------------------------------------------------------------------
 .ipynb_checkpoints/
+*.ipynb_checkpoints
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Local Supabase (Docker) — keep migrations tracked
-# ---------------------------------------------------------------------------
-supabase/.branches
-supabase/.temp
+# -----------------------------------------------------------------------------
+supabase/.branches/
+supabase/.temp/
 supabase/.env
 supabase/.env.*
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Local databases & dumps
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 *.db
+*.sqlite
 *.sqlite3
 *.sql.gz
 *.dump
+*.bak
+dump.rdb
 
-# ---------------------------------------------------------------------------
-# Generated / local media (uploaded to R2, never checked in)
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Generated / local media (uploaded to object storage, never checked in)
+# -----------------------------------------------------------------------------
 audio_seed/
+uploads/
+media/
+tmp_audio/
 *.mp3
 *.wav
 *.webm
+*.m4a
+*.flac
+*.ogg
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Logs & runtime
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 *.log
 logs/
 uvicorn.pid
+*.pid
 .celerybeat-schedule
 celerybeat-schedule.*
+celerybeat.pid
 
-# ---------------------------------------------------------------------------
+# Local profiling / probe outputs (regenerable)
+docs/*-probe.json
+docs/*-probe*.json
+**/route-timing*.json
+**/probe-results*.json
+
+# -----------------------------------------------------------------------------
+# Docker / deploy local overrides
+# -----------------------------------------------------------------------------
+docker-compose.override.yml
+.docker/
+
+# -----------------------------------------------------------------------------
 # OS & editor
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -126,19 +169,29 @@ Desktop.ini
 .idea/
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json.example
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Local agent / tooling artifacts
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 .cursor/
 .claude/
 .agents/
 .agent/
 .codex/
-.cache/
+.scratch/
 tmp/
 temp/
-.scratch/
 *.local
 !*.example
 !env.local.example
+
+# -----------------------------------------------------------------------------
+# Security scanners / accidental secret dumps
+# -----------------------------------------------------------------------------
+*.secret
+*.secrets
+secrets/
+.secrets/
+gitleaks-report.json
+trufflehog-report.json

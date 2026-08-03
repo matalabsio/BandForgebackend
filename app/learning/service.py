@@ -513,11 +513,13 @@ def refresh_profile(user_id: UUID) -> dict[str, Any]:
         ).data or []
 
     if rows:
+        invalidate_learning_profile_cache(user_id)
         return rows[0]
     # Fallback re-fetch
     row = fetch_profile_row(user_id)
     if row is None:
         raise RuntimeError("failed to persist learning profile")
+    invalidate_learning_profile_cache(user_id)
     return row
 
 
@@ -565,11 +567,35 @@ def _diagnostic_uncounted(row: dict[str, Any] | None, user_id: UUID) -> bool:
 
 
 def ensure_profile(user_id: UUID, *, force: bool = False) -> LearningProfileResponse:
+    from app.cache.hybrid_cache import get_json, set_json
+
+    cache_key = f"learning:profile:{user_id}"
+    if not force:
+        cached = get_json(cache_key)
+        if isinstance(cached, dict) and cached.get("user_id"):
+            try:
+                return LearningProfileResponse.model_validate(cached)
+            except Exception:
+                pass
+
     row = fetch_profile_row(user_id)
     if _needs_refresh(row, force=force) or _diagnostic_uncounted(row, user_id):
         row = refresh_profile(user_id)
     assert row is not None
-    return row_to_response(row)
+    response = row_to_response(row)
+    # Short TTL collapses Strict Mode / layout+page duplicate assemble work.
+    set_json(
+        cache_key,
+        response.model_dump(mode="json"),
+        8,
+    )
+    return response
+
+
+def invalidate_learning_profile_cache(user_id: UUID | str) -> None:
+    from app.cache.hybrid_cache import delete_many
+
+    delete_many([f"learning:profile:{user_id}"])
 
 
 def update_task_status(user_id: UUID, task_id: str, status: str) -> StudyPlan:
@@ -623,6 +649,7 @@ def update_task_status(user_id: UUID, task_id: str, status: str) -> StudyPlan:
             .execute()
         )
     )
+    invalidate_learning_profile_cache(user_id)
     # Avoid row_to_response (hub rewrite + progress) — PATCH only needs study_plan.
     return StudyPlan.model_validate(study_plan)
 

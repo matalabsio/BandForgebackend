@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -231,6 +232,27 @@ def _writing_task_cache_key(mock_test_id: UUID, part: int) -> str:
     return f"writing_task:{mock_test_id}:{part}"
 
 
+def _cached_task_question_id(mock_test_id: UUID, part: int) -> str | None:
+    cached = get_json(_writing_task_cache_key(mock_test_id, part))
+    if not isinstance(cached, dict):
+        return None
+    task_row = cached.get("task_row")
+    if not isinstance(task_row, dict):
+        return None
+    qid = task_row.get("id")
+    return str(qid) if qid else None
+
+
+def _question_matches_writing_part(
+    *, mock_test_id: UUID, question_id: UUID, part: int
+) -> bool:
+    """Prefer warm task cache (filled by start) over an extra questions SELECT."""
+    cached_id = _cached_task_question_id(mock_test_id, part)
+    if cached_id is not None:
+        return cached_id == str(question_id)
+    return repo.question_belongs_to(mock_test_id, question_id, part=part)
+
+
 def _row_to_task(row: dict[str, Any]) -> WritingTaskQuestion:
     opts = row.get("options")
     options: dict[str, Any] | None = dict(opts) if isinstance(opts, dict) else None
@@ -365,16 +387,32 @@ def start_attempt(
     if existing:
         if timing is not None:
             timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
-        test, task = _pack_task(
-            mock_test_id=mock_test_id, part=part, timing=timing
-        )
         aid = UUID(str(existing["id"]))
-        t_saved = perf_counter()
-        saved_row = repo.get_answer_for_attempt(
-            attempt_id=aid, question_id=task.id
-        )
-        if timing is not None:
-            timing.task_ms += round((perf_counter() - t_saved) * 1000)
+        # Task pack (often cache) + saved answer in parallel.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_pack = pool.submit(
+                _pack_task, mock_test_id=mock_test_id, part=part, timing=None
+            )
+            cached_qid = _cached_task_question_id(mock_test_id, part)
+            fut_saved = None
+            if cached_qid:
+                fut_saved = pool.submit(
+                    repo.get_answer_for_attempt,
+                    attempt_id=aid,
+                    question_id=UUID(cached_qid),
+                )
+            test, task = fut_pack.result()
+            if fut_saved is not None:
+                saved_row = fut_saved.result()
+            else:
+                t_saved = perf_counter()
+                saved_row = repo.get_answer_for_attempt(
+                    attempt_id=aid, question_id=task.id
+                )
+                if timing is not None:
+                    timing.task_ms = (timing.task_ms or 0) + round(
+                        (perf_counter() - t_saved) * 1000
+                    )
         response = StartWritingResponse(
             attempt_id=aid,
             started_at=_parse_started_at(existing),
@@ -391,15 +429,22 @@ def start_attempt(
             timing.duration_ms = round((perf_counter() - t_request) * 1000)
         return response
 
-    row = repo.insert_writing_attempt(
-        user_id=user_id,
-        mock_test_id=mock_test_id,
-        mock_attempt_id=mock_attempt_id,
-        part=part,
-    )
+    # Fresh start: insert attempt + pack task in parallel.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_insert = pool.submit(
+            repo.insert_writing_attempt,
+            user_id=user_id,
+            mock_test_id=mock_test_id,
+            mock_attempt_id=mock_attempt_id,
+            part=part,
+        )
+        fut_pack = pool.submit(
+            _pack_task, mock_test_id=mock_test_id, part=part, timing=None
+        )
+        row = fut_insert.result()
+        test, task = fut_pack.result()
     if timing is not None:
         timing.attempt_ms = round((perf_counter() - t_attempt) * 1000)
-    test, task = _pack_task(mock_test_id=mock_test_id, part=part, timing=timing)
     response = StartWritingResponse(
         attempt_id=UUID(str(row["id"])),
         started_at=_parse_started_at(row),
@@ -438,7 +483,9 @@ def autosave_answer(
     mock_test_id = UUID(str(attempt["mock_test_id"]))
     part = int(attempt.get("part") or 1)
     t0 = perf_counter()
-    if not repo.question_belongs_to(mock_test_id, question_id, part=part):
+    if not _question_matches_writing_part(
+        mock_test_id=mock_test_id, question_id=question_id, part=part
+    ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid question_id.")
     if timing is not None:
         timing.validate_ms = round((perf_counter() - t0) * 1000)

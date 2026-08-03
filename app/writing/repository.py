@@ -144,7 +144,8 @@ def question_belongs_to(
 
 def upsert_answer(*, attempt_id: UUID, question_id: UUID, user_answer: str) -> None:
     client = get_supabase()
-    _exec(
+    # Autosave is latency-sensitive — one retry is enough for transient blips.
+    execute_with_retry(
         client.table("answers").upsert(
             {
                 "attempt_id": str(attempt_id),
@@ -152,7 +153,9 @@ def upsert_answer(*, attempt_id: UUID, question_id: UUID, user_answer: str) -> N
                 "user_answer": user_answer,
             },
             on_conflict="attempt_id,question_id",
-        )
+        ).execute,
+        retries=1,
+        base_delay_s=0.1,
     )
 
 

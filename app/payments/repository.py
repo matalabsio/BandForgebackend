@@ -202,6 +202,15 @@ def list_paid_payments_missing_subscriptions(
 
 
 def get_active_subscription(user_id: UUID) -> dict[str, Any] | None:
+    from app.cache.hybrid_cache import get_json, set_json
+
+    cache_key = f"sub:active:{user_id}"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        if cached.get("__miss__"):
+            return None
+        return cached
+
     sb = get_supabase()
     now_iso = datetime.now(UTC).isoformat()
     result = (
@@ -215,7 +224,19 @@ def get_active_subscription(user_id: UUID) -> dict[str, Any] | None:
         .execute()
     )
     rows = result.data or []
-    return rows[0] if rows else None
+    row = rows[0] if rows else None
+    # Short TTL: collapses duplicate gates within one navigation (writing start, FSP).
+    if row is None:
+        set_json(cache_key, {"__miss__": True}, 15)
+    else:
+        set_json(cache_key, row, 15)
+    return row
+
+
+def invalidate_active_subscription_cache(user_id: UUID | str) -> None:
+    from app.cache.hybrid_cache import delete_many
+
+    delete_many([f"sub:active:{user_id}"])
 
 
 def insert_subscription(
@@ -240,11 +261,13 @@ def insert_subscription(
                 }
             )
         )
+        invalidate_active_subscription_cache(user_id)
         return (result.data or [{}])[0]
     except Exception as exc:
         if _is_unique_violation(exc):
             existing = list_subscriptions_for_payment(payment_id)
             if existing:
+                invalidate_active_subscription_cache(user_id)
                 return existing[0]
         raise
 
@@ -450,12 +473,24 @@ def cancel_subscription_for_payment(*, payment_id: str | UUID) -> None:
     """Revoke access when a payment is refunded."""
     sb = get_supabase()
     now_iso = datetime.now(UTC).isoformat()
+    # Fetch user ids before update so we can bust entitlement cache.
+    prior = (
+        sb.table("subscriptions")
+        .select("user_id")
+        .eq("payment_id", str(payment_id))
+        .eq("status", "active")
+        .execute()
+    ).data or []
     sb.table("subscriptions").update(
         {
             "status": SUBSCRIPTION_CANCELLED,
             "expires_at": now_iso,
         }
     ).eq("payment_id", str(payment_id)).eq("status", "active").execute()
+    for row in prior:
+        uid = row.get("user_id")
+        if uid:
+            invalidate_active_subscription_cache(uid)
 
 
 def delete_subscriptions_for_payment(*, payment_id: str | UUID) -> int:
