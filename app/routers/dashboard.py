@@ -439,3 +439,82 @@ def dashboard_summary(
         )
     )
     return response
+
+
+class DashboardStreak(BaseModel):
+    current_streak: int = 0
+    longest_streak: int = 0
+
+
+@router.get("/streak", response_model=DashboardStreak)
+def dashboard_streak(
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> DashboardStreak:
+    """Lite streak only — no attempts list, scores, or mock sessions."""
+    request_started = perf_counter()
+    client = get_supabase()
+    user_id = str(current_user.id)
+    cache_key = f"dashboard_streak:{user_id}"
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        try:
+            response = DashboardStreak.model_validate(cached)
+            print(
+                json.dumps(
+                    {
+                        "route": "/api/dashboard/streak",
+                        "duration_ms": round(
+                            (perf_counter() - request_started) * 1000, 2
+                        ),
+                        "cache_hit": True,
+                        "cache_layer": "hybrid",
+                        "status": 200,
+                    }
+                )
+            )
+            return response
+        except Exception:
+            pass
+
+    attempts_res = execute_with_retry(
+        lambda: (
+            client.table("test_attempts")
+            .select("status, started_at, completed_at, mock_test_id")
+            .eq("user_id", user_id)
+            .eq("status", "completed")
+            .order("completed_at", desc=True)
+            .limit(120)
+            .execute()
+        )
+    )
+    attempts: list[dict[str, Any]] = list(attempts_res.data or [])
+
+    day_counts: dict[date, int] = {}
+    for a in attempts:
+        mock_id = str(a.get("mock_test_id") or "")
+        if not is_full_mock_id(mock_id):
+            continue
+        activity_dt = _safe_dt(a.get("completed_at")) or _safe_dt(a.get("started_at"))
+        if not activity_dt:
+            continue
+        d = _to_app_date(activity_dt)
+        day_counts[d] = day_counts.get(d, 0) + 1
+
+    current_streak, longest_streak = _streaks_from_counts(day_counts)
+    response = DashboardStreak(
+        current_streak=current_streak,
+        longest_streak=longest_streak,
+    )
+    set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=30)
+    print(
+        json.dumps(
+            {
+                "route": "/api/dashboard/streak",
+                "duration_ms": round((perf_counter() - request_started) * 1000, 2),
+                "cache_hit": False,
+                "cache_layer": "none",
+                "status": 200,
+            }
+        )
+    )
+    return response
