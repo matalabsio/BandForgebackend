@@ -79,12 +79,17 @@ def start_speaking(
         str | None,
         Query(description="Skill-program mock gate (listening|reading|writing|speaking)."),
     ] = None,
+    from_plan: Annotated[
+        bool,
+        Query(description="Plan-origin start bypasses 12/12 unlock but requires entitlement."),
+    ] = False,
 ) -> StartSpeakingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_skill_program_module_start(
         user_id=current_user.id,
         skill_context=skill_context,
+        from_plan=from_plan,
     )
     return service.start_attempt(
         mock_test_id=mock_test_id,
