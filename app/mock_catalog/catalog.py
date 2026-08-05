@@ -65,9 +65,11 @@ def list_catalog_mock_rows(*, include_unpublished: bool = False) -> list[dict[st
         sb.table("mock_tests")
         .select(
             "id, title, description, is_published, status, catalog_number, "
-            "listening_parts, reading_passages, writing_tasks, created_at"
+            "listening_parts, reading_passages, writing_tasks, created_at, "
+            "is_diagnostic"
         )
         .not_.is_("catalog_number", "null")
+        .eq("is_diagnostic", False)
         .order("catalog_number")
     )
     if not include_unpublished:
@@ -81,6 +83,8 @@ def list_catalog_mock_rows(*, include_unpublished: bool = False) -> list[dict[st
             if row.get("catalog_number") is not None
             else None
         )
+        and not bool(row.get("is_diagnostic"))
+        and str(row.get("status") or "") != "archived"
     ]
 
 

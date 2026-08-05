@@ -41,6 +41,13 @@ class ApiTimingMiddleware(BaseHTTPMiddleware):
         cache_hit = response.headers.get("X-Cache-Hit") == "1"
         response.headers["X-Response-Time-Ms"] = str(duration_ms)
 
+        try:
+            from app.reliability.metrics import record_latency
+
+            record_latency(path, duration_ms)
+        except Exception:
+            pass
+
         print(
             json.dumps(
                 {

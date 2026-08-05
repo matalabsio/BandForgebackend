@@ -171,6 +171,7 @@ def test_start_hub_exercise_returns_questions():
 
     with (
         patch("app.practice.service.repository.get_hub_by_id", return_value=hub_row),
+        patch("app.practice.service.repository.is_hub_assignable", return_value=True),
         patch(
             "app.practice.service.repository.get_user_progress_map",
             return_value={},
@@ -336,3 +337,115 @@ def test_create_question_bank_set_reuses_existing_custom_bank():
     assert res.set_number == 1
     assert res.parts == 4
     assert res.skill == "reading"
+
+
+def test_create_question_bank_set_rejects_published_without_content():
+    body = QuestionBankCreateSetRequest(
+        skill="listening",
+        title="Too early",
+        status="published",
+    )
+    with pytest.raises(HTTPException) as exc:
+        qb.create_question_bank_set(body=body, admin_id=ADMIN_ID)
+    assert exc.value.status_code == 400
+    assert "draft" in str(exc.value.detail).lower()
+
+
+def test_bank_publish_blockers_listening_missing_audio_and_answers():
+    sb = MagicMock()
+
+    def table(name: str):
+        m = MagicMock()
+        m.select.return_value = m
+        m.eq.return_value = m
+        m.in_.return_value = m
+        m.order.return_value = m
+        if name == "bank_sections":
+            m.execute.return_value = MagicMock(
+                data=[
+                    {
+                        "id": "sec-1",
+                        "part": 1,
+                        "audio_key": None,
+                        "passage_text": None,
+                        "module": "listening",
+                    }
+                ]
+            )
+        elif name == "bank_questions":
+            m.execute.return_value = MagicMock(
+                data=[
+                    {
+                        "id": "q1",
+                        "section_id": "sec-1",
+                        "prompt": "Q",
+                        "passage_text": None,
+                        "audio_url": None,
+                        "correct_answer": "",
+                    }
+                ]
+            )
+        else:
+            m.execute.return_value = MagicMock(data=[])
+        return m
+
+    sb.table.side_effect = table
+    with patch("app.admin.question_bank.get_supabase", return_value=sb):
+        blockers = qb.bank_publish_blockers(set_id=SET_ID, skill="listening")
+    assert any("audio" in b.lower() for b in blockers)
+    assert any("correct answer" in b.lower() for b in blockers)
+
+
+def test_bank_publish_blockers_writing_requires_prompt():
+    sb = MagicMock()
+
+    def table(name: str):
+        m = MagicMock()
+        m.select.return_value = m
+        m.eq.return_value = m
+        m.in_.return_value = m
+        m.order.return_value = m
+        m.execute.return_value = MagicMock(data=[])
+        return m
+
+    sb.table.side_effect = table
+    with patch("app.admin.question_bank.get_supabase", return_value=sb):
+        blockers = qb.bank_publish_blockers(set_id=SET_ID, skill="writing")
+    assert any("prompt" in b.lower() for b in blockers)
+
+
+def test_patch_question_bank_set_status_blocks_incomplete_publish():
+    from app.admin.schemas import PatchQuestionBankSetStatusRequest
+
+    sb = MagicMock()
+    chain = MagicMock()
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.limit.return_value = chain
+    chain.update.return_value = chain
+    chain.execute.return_value = MagicMock(
+        data=[
+            {
+                "id": str(SET_ID),
+                "status": "draft",
+                "practice_banks": {"skill": "writing", "bank_number": 5},
+            }
+        ]
+    )
+    sb.table.return_value = chain
+
+    with (
+        patch("app.admin.question_bank.get_supabase", return_value=sb),
+        patch(
+            "app.admin.question_bank.bank_publish_blockers",
+            return_value=["Writing: task prompt is required."],
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            qb.patch_question_bank_set_status(
+                set_id=SET_ID,
+                body=PatchQuestionBankSetStatusRequest(status="published"),
+                admin_id=ADMIN_ID,
+            )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "publish_blocked"

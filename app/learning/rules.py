@@ -36,13 +36,84 @@ MODULE_LABEL = {
 }
 
 MODULE_HREF = {
-    "listening": "/mocks",
-    "reading": "/mocks",
-    "writing": "/mocks",
-    "speaking": "/mocks",
+    "listening": "/study-plan/today?skill=listening",
+    "reading": "/study-plan/today?skill=reading",
+    "writing": "/study-plan/today?skill=writing",
+    "speaking": "/study-plan/today?skill=speaking",
     "vocabulary": "/content-library",
     "grammar": "/content-library",
 }
+
+# skill_tag → preferred display title for drill recommendations
+_DRILL_TAG_TITLES: dict[str, str] = {
+    "tfng": "True/False/Not Given",
+    "ynng": "Yes/No/Not Given",
+    "matching_headings": "Matching Headings",
+    "matching_information": "Matching Information",
+    "matching_features": "Matching Features",
+    "matching_sentence_endings": "Matching Sentence Endings",
+    "matching": "Matching",
+    "sentence_completion": "Sentence Completion",
+    "form_completion": "Form Completion",
+    "note_completion": "Note Completion",
+    "map_labeling": "Map Labelling",
+    "map_labelling": "Map Labelling",
+    "table_completion": "Table Completion",
+    "summary_completion_box": "Summary Completion",
+    "flowchart_completion": "Flow-chart Completion",
+    "mcq": "Multiple Choice",
+}
+
+
+def _href_for_weak_tag(*, module: str, skill_tag: str) -> str:
+    """Deep-link to a matching hub module when catalogue has one; else Today."""
+    mod = str(module or "reading").strip().lower()
+    tag = str(skill_tag or "").strip().lower().replace(" ", "_").replace("-", "_")
+    try:
+        from app.practice.catalog import (
+            get_hub_skill_tags_by_id,
+            get_hub_submit_configs_by_id,
+            get_ordered_hub_ids_by_skill,
+        )
+        from app.practice.module_href import plan_module_href
+        from app.practice.weakness import hub_tag_overlap_score, normalize_tag
+
+        ordered = get_ordered_hub_ids_by_skill().get(mod) or []
+        tags_by_id = get_hub_skill_tags_by_id()
+        submit_by_hub = get_hub_submit_configs_by_id()
+        best_id: str | None = None
+        best_score = 0
+        for hid in ordered:
+            score = hub_tag_overlap_score(tags_by_id.get(hid) or [], [normalize_tag(tag)])
+            if score > best_score:
+                best_score = score
+                best_id = hid
+        if best_id and best_score > 0:
+            cfg = submit_by_hub.get(best_id) or {}
+            return plan_module_href(
+                skill=mod,
+                hub_id=best_id,
+                task_type="practice",
+                submit_config=cfg if isinstance(cfg, dict) else None,
+            )
+    except Exception:
+        pass
+    return f"/study-plan/today?skill={mod}"
+
+
+def _drill_title_for_tag(skill_tag: str, fallback_label: str) -> str:
+    tag = str(skill_tag or "").strip().lower().replace(" ", "_")
+    pretty = _DRILL_TAG_TITLES.get(tag)
+    if pretty:
+        return f"Spend more time on {pretty}"
+    # Strip "Reading · tfng (45%)" style labels down to skill name when possible
+    label = str(fallback_label or "").strip()
+    if "·" in label:
+        mid = label.split("·", 1)[1].strip()
+        mid = mid.split("(")[0].strip()
+        if mid:
+            return f"Drill: {mid[:64]}"
+    return f"Drill: {label[:64]}" if label else "Drill weak skill"
 
 
 def monday_of(d: date) -> date:
@@ -92,7 +163,7 @@ def build_recommendations(aggregate: dict[str, Any]) -> list[RecommendationItem]
                 id="onboard-listening",
                 title="Take a listening practice set",
                 reason="Your learning profile is empty — a first attempt unlocks personalized focus areas.",
-                href="/mocks",
+                href="/study-plan/today?skill=listening",
                 module="listening",
             )
         )
@@ -134,12 +205,24 @@ def build_recommendations(aggregate: dict[str, Any]) -> list[RecommendationItem]
             continue
         mod = str(weak.get("module") or "reading")
         label = str(weak.get("label") or "Skill gap")
+        area = str(weak.get("area") or "")
+        skill_tag = ""
+        if area.startswith("skill:"):
+            skill_tag = area.split(":", 1)[1].strip()
+        if not skill_tag and "·" in label:
+            # "Reading · tfng (45%)"
+            skill_tag = label.split("·", 1)[1].split("(")[0].strip()
+        href = (
+            _href_for_weak_tag(module=mod, skill_tag=skill_tag)
+            if skill_tag
+            else MODULE_HREF.get(mod, "/study-plan/today")
+        )
         items.append(
             RecommendationItem(
                 id=f"weak-{abs(hash(label)) % 10_000}",
-                title=f"Drill: {label[:64]}",
+                title=_drill_title_for_tag(skill_tag, label),
                 reason="Recurring weakness across recent evaluations.",
-                href=MODULE_HREF.get(mod, "/mocks"),
+                href=href,
                 module=mod,
             )
         )
@@ -229,6 +312,95 @@ def build_weekly_goals(aggregate: dict[str, Any], recommendations: list[Recommen
             WeeklyGoal(id="goal-start", title="Complete your first listening practice", module="listening")
         )
     return goals[:5]
+
+
+def apply_weekly_goal_completion(
+    goals: list[WeeklyGoal],
+    *,
+    study_plan: dict[str, Any] | None = None,
+    hub_progress: dict[str, Any] | None = None,
+    source_counts: dict[str, Any] | None = None,
+    week_start: date | None = None,
+) -> list[WeeklyGoal]:
+    """Mark weekly goals done from plan/hub/mock signals (read-only for students)."""
+    start = week_start or monday_of(date.today())
+    end = start + timedelta(days=6)
+
+    # Count done practice tasks this week per module + overall mock completions this week
+    module_practice_done: dict[str, int] = {}
+    week_task_done = 0
+    week_task_total = 0
+    if isinstance(study_plan, dict):
+        for week in study_plan.get("weeks") or []:
+            if not isinstance(week, dict):
+                continue
+            for day in week.get("days") or []:
+                if not isinstance(day, dict):
+                    continue
+                day_s = str(day.get("date") or "")[:10]
+                try:
+                    d = date.fromisoformat(day_s)
+                except ValueError:
+                    continue
+                if d < start or d > end:
+                    continue
+                for task in day.get("tasks") or []:
+                    if not isinstance(task, dict):
+                        continue
+                    week_task_total += 1
+                    status = str(task.get("status") or "").lower()
+                    if status not in ("done", "completed"):
+                        continue
+                    week_task_done += 1
+                    mod = str(task.get("module") or "").lower()
+                    tt = str(task.get("task_type") or "practice").lower()
+                    if tt in ("practice", "submit") and mod:
+                        module_practice_done[mod] = module_practice_done.get(mod, 0) + 1
+
+    hubs_completed = 0
+    if isinstance(hub_progress, dict):
+        for skill, prog in hub_progress.items():
+            if not isinstance(prog, dict):
+                continue
+            # SkillHubProgress shape: completed_count or similar
+            try:
+                hubs_completed += int(
+                    prog.get("completed_count")
+                    or prog.get("completed")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                pass
+
+    sources = source_counts if isinstance(source_counts, dict) else {}
+    mock_sessions = sum(
+        int(sources.get(k) or 0)
+        for k in ("listening", "reading", "writing", "speaking")
+    )
+
+    out: list[WeeklyGoal] = []
+    for g in goals:
+        done = bool(g.done)
+        gid = str(g.id or "")
+        mod = str(g.module or "").lower() if g.module else ""
+        if gid == "goal-module" and mod:
+            done = module_practice_done.get(mod, 0) >= 2
+        elif gid == "goal-mock":
+            done = mock_sessions >= 1 or module_practice_done.get(mod, 0) >= 1
+        elif gid == "goal-focus":
+            # Any practice this week toward focus module, or overall week progress ≥50%
+            if mod and module_practice_done.get(mod, 0) >= 1:
+                done = True
+            elif week_task_total > 0 and week_task_done / week_task_total >= 0.5:
+                done = True
+        elif gid == "goal-grammar":
+            done = module_practice_done.get("writing", 0) >= 1 or hubs_completed >= 1
+        elif gid == "goal-vocab":
+            done = week_task_done >= 2
+        elif gid == "goal-start":
+            done = module_practice_done.get("listening", 0) >= 1 or hubs_completed >= 1
+        out.append(g.model_copy(update={"done": done}))
+    return out
 
 
 def _task(
@@ -442,6 +614,13 @@ def apply_plan_rules(
     if same_week and prior_study_plan:
         study_plan = _merge_task_status_by_slot(study_plan, prior_study_plan)
 
+    weekly_goals = apply_weekly_goal_completion(
+        weekly_goals,
+        study_plan=study_plan.model_dump(),
+        source_counts=aggregate.get("source_counts") or {},
+        week_start=start,
+    )
+
     return {
         "recommendations": [r.model_dump() for r in recommendations],
         "weekly_goals": [g.model_dump() for g in weekly_goals],
@@ -486,30 +665,28 @@ def _plan_open_href(
     hub_id: str,
     task_type: str,
     task_id: str,
+    catalog_number: int | None = None,
+    part: int | None = None,
+    submit_config: dict[str, Any] | None = None,
 ) -> str:
-    """Direct destination for Today links — skip hub hop for practice/submit."""
-    q_task = f"from=plan&task={task_type}&taskId={task_id}"
+    """Direct destination for Today links — mock module UI with hub targeting."""
+    q_task = f"from=plan&task={task_type}"
+    if task_id:
+        q_task += f"&taskId={task_id}"
     if task_type == "watch":
         return f"/practice/{skill}/{hub_id}?{q_task}"
-    if skill == "writing" and task_type in ("practice", "submit"):
-        part = 2 if task_type == "submit" else 1
-        return (
-            f"/test/writing/task/{part}?auto=1&skill_context=writing"
-            f"&{q_task}&hubId={hub_id}&mock=m01"
-        )
-    if skill == "listening" and task_type == "practice":
-        return (
-            f"/test/1/listening?part=1&auto=1&skill_context=listening"
-            f"&{q_task}&hubId={hub_id}"
-        )
-    if skill == "reading" and task_type == "practice":
-        return (
-            f"/test/1/reading?passage=1&auto=1&skill_context=reading"
-            f"&{q_task}&hubId={hub_id}"
-        )
-    if task_type == "practice":
-        return f"/practice/{skill}/{hub_id}/exercise?{q_task}"
-    return f"/practice/{skill}/{hub_id}?{q_task}"
+
+    from app.practice.module_href import plan_module_href
+
+    return plan_module_href(
+        skill=skill,
+        hub_id=hub_id,
+        task_type=task_type,
+        task_id=task_id,
+        catalog_number=int(catalog_number or 1),
+        part=part,
+        submit_config=submit_config,
+    )
 
 
 def _personalized_task(
@@ -609,6 +786,7 @@ def build_personalized_study_plan(
     diagnostic_attempt_id: str | None = None,
     prior_plan: dict[str, Any] | None = None,
     completed_by_skill: dict[str, int] | None = None,
+    weak_tags_by_skill: dict[str, list[str]] | None = None,
 ) -> StudyPlan:
     """Build an exam-date-bound calendar plan with watch/practice/submit task stubs."""
     start = prep_start or date.today()
@@ -632,6 +810,7 @@ def build_personalized_study_plan(
 
     prior_status = _prior_task_status(prior_plan)
     completed_by_skill = completed_by_skill or {}
+    weak_tags_by_skill = weak_tags_by_skill or {}
 
     try:
         from app.practice.catalog import pick_hub_for_slot
@@ -639,6 +818,9 @@ def build_personalized_study_plan(
         pick_hub_for_slot = None  # type: ignore[assignment,misc]
 
     assigned_hub_ids: list[str] = []
+    previous_hub_by_skill: dict[str, str | None] = {
+        k: None for k in SKILL_ORDER
+    }
     days: list[StudyDay] = []
     for d in range(total_days):
         day_date = start + timedelta(days=d)
@@ -653,11 +835,14 @@ def build_personalized_study_plan(
                         day_index=d,
                         slot_index=slot_index,
                         completed_count=int(completed_by_skill.get(skill, 0)),
+                        previous_hub_id=previous_hub_by_skill.get(skill),
+                        weak_tags=weak_tags_by_skill.get(skill) or None,
                     )
                 except Exception:
                     hub_id = None
                 if hub_id:
                     assigned_hub_ids.append(hub_id)
+                    previous_hub_by_skill[skill] = hub_id
             tasks.extend(
                 _tasks_for_session_skill(
                     skill,

@@ -79,17 +79,23 @@ def test_ensure_profile_self_heals_uncounted_diagnostic():
         "target_band": 7.0,
     }
 
+    profile = MagicMock()
+    profile.model_dump.return_value = {
+        "user_id": str(user_id),
+        "source_counts": healed["source_counts"],
+    }
+
     with (
         patch("app.learning.service.fetch_profile_row", return_value=stale),
         patch("app.learning.service._needs_refresh", return_value=False),
         patch("app.learning.service._diagnostic_uncounted", return_value=True),
         patch("app.learning.service.refresh_profile", return_value=healed) as refresh,
-        patch(
-            "app.learning.service.row_to_response",
-            side_effect=lambda row: row,
-        ),
+        patch("app.learning.service.row_to_response", return_value=profile),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.cache.hybrid_cache.set_json"),
     ):
         result = ensure_profile(user_id)
 
     refresh.assert_called_once_with(user_id)
-    assert result["source_counts"]["diagnostic"] == 1
+    assert result is profile
+    profile.model_dump.assert_called()

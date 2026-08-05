@@ -15,37 +15,34 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import httpx
 
 from app.auth.jwt import create_access_token
 from app.config import reload_settings
 from app.db import get_supabase
 
+_LOCAL_API_BASE = "http://127.0.0.1:8000"
+
 
 def _api(method: str, path: str, token: str, body: dict | None = None) -> tuple[int, dict]:
-    data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(
-        f"http://127.0.0.1:8000{path}",
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode()
-            return resp.status, json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode()
+    # Fixed localhost base — avoid urllib (Semgrep: dynamic-urllib-use-detected).
+    url = f"{_LOCAL_API_BASE}{path}"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    with httpx.Client(timeout=60.0) as client:
+        res = client.request(method, url, headers=headers, json=body)
         try:
-            return exc.code, json.loads(raw) if raw else {}
+            payload = res.json() if res.content else {}
         except Exception:
-            return exc.code, {"raw": raw[:400]}
+            payload = {"raw": res.text[:400]}
+        if not isinstance(payload, dict):
+            payload = {"raw": payload}
+        return res.status_code, payload
 
 
 def _pick_smoke_user() -> tuple[str, str]:

@@ -73,6 +73,7 @@ class BankExerciseQuestionOut(BaseModel):
     prompt: str
     options: Any = None
     correct_answer: str | None = None
+    difficulty: str = "medium"
 
 
 class BankExerciseSectionOut(BaseModel):

@@ -45,7 +45,8 @@ def _round_half(value: float | None) -> float | None:
     return round(value * 2) / 2
 
 
-def _streaks_from_counts(day_counts: dict[date, int]) -> tuple[int, int]:
+def streaks_from_counts(day_counts: dict[date, int]) -> tuple[int, int]:
+    """Current consecutive streak (ending today) and longest streak."""
     if not day_counts:
         return 0, 0
     active_dates = sorted(d for d, c in day_counts.items() if c > 0)
@@ -68,6 +69,133 @@ def _streaks_from_counts(day_counts: dict[date, int]) -> tuple[int, int]:
         current += 1
         cursor -= timedelta(days=1)
     return current, longest
+
+
+# Back-compat alias
+_streaks_from_counts = streaks_from_counts
+
+
+def _bump(day_counts: dict[date, int], d: date, n: int = 1) -> None:
+    day_counts[d] = day_counts.get(d, 0) + n
+
+
+def build_user_activity_day_counts(user_id: UUID) -> dict[date, int]:
+    """Union of mock completions + plan/hub practice days (Asia/Kolkata)."""
+    client = get_supabase()
+    uid = str(user_id)
+    day_counts: dict[date, int] = {}
+
+    attempts_res = execute_with_retry(
+        lambda: (
+            client.table("test_attempts")
+            .select("status, started_at, completed_at, mock_test_id")
+            .eq("user_id", uid)
+            .eq("status", "completed")
+            .order("completed_at", desc=True)
+            .limit(200)
+            .execute()
+        )
+    )
+    for a in attempts_res.data or []:
+        mock_id = str(a.get("mock_test_id") or "")
+        if not is_full_mock_id(mock_id):
+            continue
+        activity_dt = _safe_dt(a.get("completed_at")) or _safe_dt(a.get("started_at"))
+        if activity_dt:
+            _bump(day_counts, _to_app_date(activity_dt))
+
+    hub_res = execute_with_retry(
+        lambda: (
+            client.table("user_hub_progress")
+            .select("status, completed_at, updated_at")
+            .eq("user_id", uid)
+            .eq("status", "completed")
+            .limit(300)
+            .execute()
+        )
+    )
+    for row in hub_res.data or []:
+        activity_dt = _safe_dt(row.get("completed_at")) or _safe_dt(row.get("updated_at"))
+        if activity_dt:
+            _bump(day_counts, _to_app_date(activity_dt))
+
+    try:
+        ex_res = execute_with_retry(
+            lambda: (
+                client.table("practice_exercise_attempts")
+                .select("status, completed_at, started_at")
+                .eq("user_id", uid)
+                .eq("status", "completed")
+                .limit(300)
+                .execute()
+            )
+        )
+        for row in ex_res.data or []:
+            activity_dt = _safe_dt(row.get("completed_at")) or _safe_dt(
+                row.get("started_at")
+            )
+            if activity_dt:
+                _bump(day_counts, _to_app_date(activity_dt))
+    except Exception:
+        pass
+
+    try:
+        profile_res = execute_with_retry(
+            lambda: (
+                client.table("user_learning_profiles")
+                .select("study_plan")
+                .eq("user_id", uid)
+                .limit(1)
+                .execute()
+            )
+        )
+        rows = profile_res.data or []
+        study_plan = rows[0].get("study_plan") if rows else None
+        if isinstance(study_plan, dict):
+            for week in study_plan.get("weeks") or []:
+                if not isinstance(week, dict):
+                    continue
+                for day in week.get("days") or []:
+                    if not isinstance(day, dict):
+                        continue
+                    day_s = str(day.get("date") or "")[:10]
+                    try:
+                        day_d = date.fromisoformat(day_s)
+                    except ValueError:
+                        continue
+                    for task in day.get("tasks") or []:
+                        if not isinstance(task, dict):
+                            continue
+                        if str(task.get("status") or "").lower() in (
+                            "done",
+                            "completed",
+                        ):
+                            _bump(day_counts, day_d)
+    except Exception:
+        pass
+
+    return day_counts
+
+
+def activity_calendar(
+    day_counts: dict[date, int], *, days: int = 84
+) -> list[dict[str, Any]]:
+    today = datetime.now(APP_TZ).date()
+    start = today - timedelta(days=days - 1)
+    out: list[dict[str, Any]] = []
+    cursor = start
+    while cursor <= today:
+        out.append({"date": cursor.isoformat(), "count": int(day_counts.get(cursor, 0))})
+        cursor += timedelta(days=1)
+    return out
+
+
+def week_active_days(day_counts: dict[date, int]) -> int:
+    today = datetime.now(APP_TZ).date()
+    monday = today - timedelta(days=today.weekday())
+    return sum(
+        1 for i in range(7) if day_counts.get(monday + timedelta(days=i), 0) > 0
+    )
 
 
 def _load_attempt_context(user_id: UUID) -> tuple[
@@ -141,7 +269,6 @@ def build_user_activity_stats(user_id: UUID) -> dict[str, Any]:
     recent_modules: list[dict[str, Any]] = []
     last_activity: datetime | None = None
     completed_count = 0
-    day_counts: dict[date, int] = {}
 
     for a in attempts:
         attempt_started = _safe_dt(a.get("started_at"))
@@ -174,10 +301,6 @@ def build_user_activity_stats(user_id: UUID) -> dict[str, Any]:
 
         if status_lc == "completed":
             completed_count += 1
-            activity_dt = completed or attempt_started
-            if activity_dt:
-                d = _to_app_date(activity_dt)
-                day_counts[d] = day_counts.get(d, 0) + 1
             score = scores_by_attempt.get(str(a["id"]))
             band_val = (
                 float(score["band"]) if score and score.get("band") is not None else None
@@ -212,7 +335,8 @@ def build_user_activity_stats(user_id: UUID) -> dict[str, Any]:
 
     avg = sum(bands) / len(bands) if bands else None
     best = max(bands) if bands else None
-    current_streak, longest_streak = _streaks_from_counts(day_counts)
+    day_counts = build_user_activity_day_counts(user_id)
+    current_streak, longest_streak = streaks_from_counts(day_counts)
 
     return {
         "total_attempts": len(attempts),

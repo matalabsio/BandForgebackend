@@ -1,3 +1,4 @@
+import json
 import logging
 import secrets
 from typing import Any
@@ -11,31 +12,40 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+_GENERIC_GOOGLE_SIGNIN_FAILED = "Google sign-in failed. Try again."
+
+
+def _parse_google_token_error(body_text: str) -> tuple[str, str]:
+    """Return (error_code, error_description) from a Google token error body."""
+    try:
+        body = json.loads(body_text)
+        if not isinstance(body, dict):
+            return "", ""
+        return str(body.get("error") or ""), str(body.get("error_description") or "")
+    except Exception:
+        return "", ""
+
 
 def _google_token_error_message(status_code: int, body_text: str) -> str:
-    try:
-        import json
+    """Map known Google OAuth errors to safe, actionable client messages.
 
-        body = json.loads(body_text)
-        err = str(body.get("error", ""))
-        desc = str(body.get("error_description", ""))
-        if err == "invalid_client" or "client secret" in desc.lower():
-            return (
-                "Google Client Secret is incorrect. In Google Cloud Console open "
-                "Credentials → BandForge Web → copy the Client secret into "
-                "GOOGLE_CLIENT_SECRET in backend/.env, then restart the API."
-            )
-        if err == "redirect_uri_mismatch":
-            return (
-                "Redirect URI mismatch. Add exactly "
-                "http://localhost:3000/api/auth/google/callback "
-                "under Authorized redirect URIs in Google Cloud Console."
-            )
-        if desc:
-            return desc
-    except Exception:
-        pass
-    return "Google sign-in failed. Try again."
+    Never return raw Google ``error_description`` — it may contain sensitive detail.
+    """
+    _ = status_code
+    err, desc = _parse_google_token_error(body_text)
+    if err == "invalid_client" or "client secret" in desc.lower():
+        return (
+            "Google Client Secret is incorrect. In Google Cloud Console open "
+            "Credentials → BandForge Web → copy the Client secret into "
+            "GOOGLE_CLIENT_SECRET in backend/.env, then restart the API."
+        )
+    if err == "redirect_uri_mismatch":
+        return (
+            "Redirect URI mismatch. Add exactly "
+            "http://localhost:3000/api/auth/google/callback "
+            "under Authorized redirect URIs in Google Cloud Console."
+        )
+    return _GENERIC_GOOGLE_SIGNIN_FAILED
 
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -139,7 +149,14 @@ async def exchange_code_for_userinfo(*, code: str) -> dict[str, Any]:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if token_res.status_code >= 400:
-            logger.error("Google token error %s: %s", token_res.status_code, token_res.text[:300])
+            error_code, _ = _parse_google_token_error(token_res.text)
+            # Avoid logging response bodies; also avoid the word "token" in the
+            # message so Semgrep credential-leak rules do not false-positive.
+            logger.error(
+                "Google OAuth exchange failed status=%s error=%s",
+                token_res.status_code,
+                error_code or "unknown",
+            )
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
                 _google_token_error_message(token_res.status_code, token_res.text),

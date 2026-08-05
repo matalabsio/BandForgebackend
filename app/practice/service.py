@@ -65,7 +65,11 @@ def accessible_hub_ids_for_skill(
 def _assert_hub_accessible_with_progress(
     *, user_id: UUID, hub_id: str
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    """Raise 403 if locked. Returns (flat hub row, progress_map) — one progress fetch."""
+    """Allow any assignable hub (soft-repeat may jump ahead of sequential unlock).
+
+    Sequential unlock remains for catalogue list `accessible` flags only.
+    Prefer assignable-catalogue membership over re-running content gates.
+    """
     row = repository.get_hub_by_id(hub_id)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
@@ -73,28 +77,19 @@ def _assert_hub_accessible_with_progress(
     skill = flat.get("skill")
     if skill not in SKILLS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
-    # Progress + ordered hubs in parallel (was sequential after hub fetch).
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_progress = pool.submit(repository.get_user_progress_map, user_id)
-        fut_hubs = pool.submit(repository.list_hubs_for_skill, str(skill))
-        progress_map = fut_progress.result()
-        hub_rows = fut_hubs.result()
-    allowed = accessible_hub_ids_for_skill(
-        user_id=user_id,
-        skill=str(skill),
-        progress_map=progress_map,
-        hub_rows=hub_rows,
-    )
-    if str(hub_id) not in allowed:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail={
-                "message": LOCKED_HUB_MESSAGE,
-                "code": "hub_locked",
-                "skill": skill,
-                "hub_id": str(hub_id),
-            },
-        )
+
+    # Fast path: hub already in difficulty-ordered assignable catalogue
+    try:
+        from app.practice.catalog import get_ordered_hub_ids_by_skill
+
+        ordered = get_ordered_hub_ids_by_skill().get(str(skill)) or []
+        in_catalog = str(hub_id) in ordered
+    except Exception:
+        in_catalog = False
+
+    if not in_catalog and not repository.is_hub_assignable(row):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
+    progress_map = repository.get_user_progress_map(user_id)
     return flat, progress_map
 
 
@@ -295,6 +290,14 @@ def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
 def complete_hub(*, user_id: UUID, hub_id: str) -> HubCompleteOut:
     flat = assert_hub_accessible(user_id=user_id, hub_id=hub_id)
     saved = repository.upsert_hub_completed(user_id=user_id, hub_id=hub_id)
+    try:
+        from app.learning.service import invalidate_learning_profile_cache
+        from app.reliability.metrics import incr
+
+        invalidate_learning_profile_cache(user_id)
+        incr("hub_complete")
+    except Exception:
+        pass
     skill = flat["skill"]
     prog = skill_progress(user_id=user_id, skill=skill)
     completed_at = saved.get("completed_at")
@@ -352,15 +355,37 @@ def start_hub_exercise(
     section_id = str(chosen["id"])
 
     def _load_questions() -> list[dict[str, Any]]:
-        return (
+        from app.cache.hybrid_cache import get_json, set_json
+
+        _rank = {"easy": 0, "medium": 1, "hard": 2}
+
+        def _sort_by_difficulty(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return sorted(
+                rows,
+                key=lambda q: (
+                    _rank.get(str(q.get("difficulty") or "medium").lower(), 1),
+                    int(q.get("question_number") or 0),
+                ),
+            )
+
+        cache_key = f"practice:section:{section_id}:questions"
+        cached = get_json(cache_key)
+        if isinstance(cached, list) and cached:
+            return _sort_by_difficulty(cached)
+        rows = (
             sb.table("bank_questions")
             .select(
-                "id, question_number, question_type, prompt, options, correct_answer"
+                "id, question_number, question_type, prompt, options, "
+                "correct_answer, difficulty"
             )
             .eq("section_id", section_id)
             .order("question_number")
             .execute()
         ).data or []
+        if rows:
+            rows = _sort_by_difficulty(rows)
+            set_json(cache_key, rows, 60)
+        return rows
 
     def _abandon_in_progress() -> None:
         sb.table("practice_exercise_attempts").update(
@@ -408,6 +433,11 @@ def start_hub_exercise(
             prompt=str(q.get("prompt") or ""),
             options=q.get("options"),
             correct_answer=None,  # never leak to client on start for objective skills
+            difficulty=(
+                str(q.get("difficulty") or "medium")
+                if str(q.get("difficulty") or "medium") in ("easy", "medium", "hard")
+                else "medium"
+            ),
         )
         for q in qrows
     ]
@@ -443,83 +473,99 @@ def submit_hub_exercise(
     from app.practice.schemas import ExerciseSubmitOut
     from app.db.supabase_client import get_supabase
 
-    assert_hub_accessible(user_id=user_id, hub_id=hub_id)
+    try:
+        assert_hub_accessible(user_id=user_id, hub_id=hub_id)
 
-    sb = get_supabase()
-    rows = (
-        sb.table("practice_exercise_attempts")
-        .select("*")
-        .eq("id", attempt_id)
-        .eq("user_id", str(user_id))
-        .eq("hub_id", str(hub_id))
-        .limit(1)
-        .execute()
-    ).data or []
-    if not rows:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Attempt not found")
-    attempt = rows[0]
-    if attempt.get("status") != "in_progress":
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Attempt is not in progress")
-
-    section_id = attempt.get("section_id")
-    score: dict[str, Any] | None = None
-    if section_id:
-        qrows = (
-            sb.table("bank_questions")
-            .select("id, correct_answer, question_type")
-            .eq("section_id", str(section_id))
+        sb = get_supabase()
+        rows = (
+            sb.table("practice_exercise_attempts")
+            .select("*")
+            .eq("id", attempt_id)
+            .eq("user_id", str(user_id))
+            .eq("hub_id", str(hub_id))
+            .limit(1)
             .execute()
         ).data or []
-        # Score objective items when correct_answer present
-        total = 0
-        correct = 0
-        for q in qrows:
-            key = str(q["id"])
-            expected = (q.get("correct_answer") or "").strip()
-            if not expected:
-                continue
-            total += 1
-            given = answers.get(key)
-            given_s = (
-                str(given).strip()
-                if given is not None
-                else ""
-            )
-            # Accept primary or slash-alternates
-            alts = [p.strip().lower() for p in expected.split("/") if p.strip()]
-            if given_s.lower() in alts or given_s.lower() == expected.lower():
-                correct += 1
-        if total:
-            score = {
-                "correct": correct,
-                "total": total,
-                "percent": round(100.0 * correct / total, 1),
+        if not rows:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Attempt not found")
+        attempt = rows[0]
+        if attempt.get("status") != "in_progress":
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="Attempt is not in progress")
+
+        section_id = attempt.get("section_id")
+        score: dict[str, Any] | None = None
+        if section_id:
+            from app.cache.hybrid_cache import get_json, set_json
+            from app.scoring.answers import is_answer_correct
+
+            cache_key = f"practice:section:{section_id}:questions"
+            qrows = get_json(cache_key)
+            if not isinstance(qrows, list) or not qrows:
+                qrows = (
+                    sb.table("bank_questions")
+                    .select("id, correct_answer, question_type")
+                    .eq("section_id", str(section_id))
+                    .execute()
+                ).data or []
+                if qrows:
+                    set_json(cache_key, qrows, 60)
+            total = 0
+            correct = 0
+            for q in qrows:
+                key = str(q["id"])
+                expected = (q.get("correct_answer") or "").strip()
+                if not expected:
+                    continue
+                total += 1
+                given = answers.get(key)
+                given_s = str(given).strip() if given is not None else ""
+                if is_answer_correct(given_s, expected):
+                    correct += 1
+            if total:
+                score = {
+                    "correct": correct,
+                    "total": total,
+                    "percent": round(100.0 * correct / total, 1),
+                }
+
+        now = datetime.now(UTC).isoformat()
+        sb.table("practice_exercise_attempts").update(
+            {
+                "status": "completed",
+                "answers": answers,
+                "score": score,
+                "completed_at": now,
             }
+        ).eq("id", attempt_id).execute()
 
-    now = datetime.now(UTC).isoformat()
-    sb.table("practice_exercise_attempts").update(
-        {
-            "status": "completed",
-            "answers": answers,
-            "score": score,
-            "completed_at": now,
-        }
-    ).eq("id", attempt_id).execute()
+        hub_completed = False
+        prog = None
+        if mark_hub_complete:
+            done = complete_hub(user_id=user_id, hub_id=hub_id)
+            hub_completed = True
+            prog = done.skill_progress
 
-    hub_completed = False
-    prog = None
-    if mark_hub_complete:
-        done = complete_hub(user_id=user_id, hub_id=hub_id)
-        hub_completed = True
-        prog = done.skill_progress
+        return ExerciseSubmitOut(
+            attempt_id=attempt_id,
+            status="completed",
+            score=score,
+            hub_completed=hub_completed,
+            skill_progress=prog,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        try:
+            from app.reliability.metrics import record_event
 
-    return ExerciseSubmitOut(
-        attempt_id=attempt_id,
-        status="completed",
-        score=score,
-        hub_completed=hub_completed,
-        skill_progress=prog,
-    )
+            record_event(
+                "scoring_failure",
+                detail="practice_exercise_submit",
+                meta={"user_id": str(user_id), "hub_id": str(hub_id)},
+            )
+        except Exception:
+            pass
+        raise
 
 
 def assert_skill_mock_access(*, user_id: UUID, skill: str) -> None:

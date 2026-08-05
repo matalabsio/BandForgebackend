@@ -8,6 +8,13 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 
+from app.admin.answer_format import (
+    expand_choose_two_rows,
+    join_answers,
+    looks_like_choose_two_pair,
+    parse_choose_two_letters,
+    split_answers,
+)
 from app.admin.audit import log_admin_action
 from app.admin.listening_question_types import (
     MCQ_CHOOSE_TWO_UI,
@@ -23,6 +30,8 @@ from app.admin.schemas import (
     ListeningBuilderQuestionOut,
     ListeningBuilderSaveRequest,
     ListeningBuilderSaveResponse,
+    PatchQuestionBankSetStatusRequest,
+    PatchQuestionBankSetStatusResponse,
     QuestionBankCreateSetRequest,
     QuestionBankCreateSetResponse,
     QuestionBankListResponse,
@@ -51,20 +60,6 @@ CUSTOM_BANK_NUMBER = 5
 CUSTOM_BANK_TITLE = "Custom"
 
 
-def _join_answers(primary: str, alts: list[str]) -> str:
-    parts = [primary.strip()] + [a.strip() for a in alts if a.strip()]
-    return "/".join(parts) if parts else ""
-
-
-def _split_answers(raw: str | None) -> tuple[str, list[str]]:
-    if not raw:
-        return "", []
-    parts = [p.strip() for p in raw.split("/") if p.strip()]
-    if not parts:
-        return "", []
-    return parts[0], parts[1:]
-
-
 def _assert_skill(skill: str) -> str:
     s = skill.strip().lower()
     if s not in SKILLS:
@@ -84,7 +79,10 @@ def _assert_part(module: str, part: int) -> None:
 def _load_set_skill(sb: Any, set_id: str) -> tuple[dict[str, Any], str]:
     rows = (
         sb.table("practice_sets")
-        .select("id, set_number, title, difficulty, bank_id, practice_banks(skill, bank_number, title)")
+        .select(
+            "id, set_number, title, difficulty, status, bank_id, "
+            "practice_banks(skill, bank_number, title)"
+        )
         .eq("id", set_id)
         .limit(1)
         .execute()
@@ -102,13 +100,9 @@ def _load_set_skill(sb: Any, set_id: str) -> tuple[dict[str, Any], str]:
 
 
 def _module_href(skill: str) -> dict[str, Any]:
-    if skill == "writing":
-        return {"type": "module", "module": "writing", "href": "/test/writing/task/1"}
-    return {
-        "type": "module",
-        "module": skill,
-        "href": f"/test/1/{skill}",
-    }
+    from app.practice.module_href import module_submit_config
+
+    return module_submit_config(skill=skill, catalog_number=1, part=1)
 
 
 def _bank_href(skill: str, hub_id: str) -> dict[str, Any]:
@@ -120,16 +114,26 @@ def _bank_href(skill: str, hub_id: str) -> dict[str, Any]:
 
 
 def refresh_hub_submit_configs(*, practice_set_id: UUID, skill: str) -> None:
-    """Point hubs at bank exercise when the set has questions; else module fallback."""
+    """Prefer module targeting (Phase 2); fall back to bank exercise only when
+    content exists but has no mock mapping and admin wants bank UI.
+
+    Phase 0 / slug-mapped hubs always get type=module with catalog+part.
+    """
+    from app.practice.module_href import config_from_slug_or_defaults
+
     sb = get_supabase()
     sections = (
         sb.table("bank_sections")
-        .select("id")
+        .select("id, part")
         .eq("practice_set_id", str(practice_set_id))
+        .order("part")
         .execute()
     ).data or []
     total_q = 0
+    first_part: int | None = None
     for sec in sections:
+        if first_part is None and sec.get("part") is not None:
+            first_part = int(sec["part"])
         count = (
             sb.table("bank_questions")
             .select("id", count="exact")
@@ -141,15 +145,27 @@ def refresh_hub_submit_configs(*, practice_set_id: UUID, skill: str) -> None:
 
     hubs = (
         sb.table("practice_hubs")
-        .select("id")
+        .select("id, slug")
         .eq("set_id", str(practice_set_id))
         .execute()
     ).data or []
     for hub in hubs:
         hub_id = str(hub["id"])
-        config = (
-            _bank_href(skill, hub_id) if total_q > 0 else _module_href(skill)
-        )
+        slug = str(hub.get("slug") or "")
+        if total_q > 0:
+            # Module UI for Phase 0 slugs / known mappings; else bank smoke form.
+            if slug.startswith("phase0-"):
+                config = config_from_slug_or_defaults(
+                    skill=skill,
+                    slug=slug,
+                    hub_id=hub_id,
+                    section_part=first_part,
+                )
+            else:
+                # Custom bank content without MT mapping → bank exercise
+                config = _bank_href(skill, hub_id)
+        else:
+            config = _module_href(skill)
         sb.table("practice_hubs").update({"submit_config": config}).eq(
             "id", hub_id
         ).execute()
@@ -408,6 +424,155 @@ def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
     )
 
 
+def _clear_practice_catalog_cache() -> None:
+    try:
+        from app.practice.catalog import clear_hub_catalog_cache
+
+        clear_hub_catalog_cache()
+    except Exception:
+        pass
+    try:
+        from app.cache.hybrid_cache import invalidate_prefix
+
+        invalidate_prefix("practice:section:")
+    except Exception:
+        pass
+
+
+def bank_publish_blockers(*, set_id: UUID | str, skill: str) -> list[str]:
+    """Return human-readable blockers that prevent publishing a practice set."""
+    skill = _assert_skill(skill)
+    sb = get_supabase()
+    sid = str(set_id)
+    sections = (
+        sb.table("bank_sections")
+        .select("id, part, audio_key, passage_text, module")
+        .eq("practice_set_id", sid)
+        .order("part")
+        .execute()
+    ).data or []
+    section_ids = [str(s["id"]) for s in sections if s.get("id")]
+    questions: list[dict[str, Any]] = []
+    if section_ids:
+        questions = (
+            sb.table("bank_questions")
+            .select("id, section_id, prompt, passage_text, audio_url, correct_answer")
+            .in_("section_id", section_ids)
+            .execute()
+        ).data or []
+
+    qs_by_section: dict[str, list[dict[str, Any]]] = {}
+    for q in questions:
+        qs_by_section.setdefault(str(q.get("section_id") or ""), []).append(q)
+
+    blockers: list[str] = []
+
+    if skill == "listening":
+        if not questions:
+            blockers.append("Listening: add at least one question before publishing.")
+            return blockers
+        for sec in sections:
+            sec_id = str(sec.get("id") or "")
+            sec_qs = qs_by_section.get(sec_id) or []
+            if not sec_qs:
+                continue
+            part = int(sec.get("part") or 0)
+            audio = str(sec.get("audio_key") or "").strip()
+            if not audio and not any(
+                str(q.get("audio_url") or "").strip() for q in sec_qs
+            ):
+                blockers.append(f"Listening Part {part}: missing audio (R2 key).")
+            for i, q in enumerate(sec_qs, start=1):
+                if not str(q.get("correct_answer") or "").strip():
+                    blockers.append(
+                        f"Listening Part {part} Q{i}: missing correct answer."
+                    )
+
+    elif skill == "reading":
+        if not questions:
+            blockers.append("Reading: add at least one question before publishing.")
+            return blockers
+        has_passage = any(str(s.get("passage_text") or "").strip() for s in sections) or any(
+            str(q.get("passage_text") or "").strip() for q in questions
+        )
+        if not has_passage:
+            blockers.append("Reading: passage text is required.")
+        for sec in sections:
+            sec_id = str(sec.get("id") or "")
+            sec_qs = qs_by_section.get(sec_id) or []
+            part = int(sec.get("part") or 0)
+            for i, q in enumerate(sec_qs, start=1):
+                if not str(q.get("correct_answer") or "").strip():
+                    blockers.append(
+                        f"Reading Passage {part} Q{i}: missing correct answer."
+                    )
+
+    elif skill == "writing":
+        has_prompt = any(str(s.get("passage_text") or "").strip() for s in sections) or any(
+            str(q.get("prompt") or "").strip() for q in questions
+        )
+        if not has_prompt:
+            blockers.append("Writing: task prompt is required.")
+
+    elif skill == "speaking":
+        prompts = [q for q in questions if str(q.get("prompt") or "").strip()]
+        if not prompts:
+            blockers.append("Speaking: add at least one prompt before publishing.")
+
+    return blockers
+
+
+def patch_question_bank_set_status(
+    *,
+    set_id: UUID,
+    body: PatchQuestionBankSetStatusRequest,
+    admin_id: UUID,
+) -> PatchQuestionBankSetStatusResponse:
+    sb = get_supabase()
+    row, skill = _load_set_skill(sb, str(set_id))
+    next_status = body.status
+    prev = str(row.get("status") or "draft")
+
+    if next_status == "published":
+        blockers = bank_publish_blockers(set_id=set_id, skill=skill)
+        if blockers:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "Cannot publish incomplete practice set.",
+                    "code": "publish_blocked",
+                    "blockers": blockers,
+                },
+            )
+
+    (
+        sb.table("practice_sets")
+        .update({"status": next_status})
+        .eq("id", str(set_id))
+        .execute()
+    )
+    refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
+    _clear_practice_catalog_cache()
+
+    log_admin_action(
+        admin_id=admin_id,
+        action="question_bank.set_status",
+        resource_type="practice_set",
+        resource_id=set_id,
+        metadata={
+            "skill": skill,
+            "from": prev,
+            "to": next_status,
+        },
+    )
+    return PatchQuestionBankSetStatusResponse(
+        set_id=set_id,
+        skill=skill,
+        status=next_status,
+        ok=True,
+    )
+
+
 def create_question_bank_set(
     *,
     body: QuestionBankCreateSetRequest,
@@ -420,6 +585,13 @@ def create_question_bank_set(
     description = (body.description or "").strip() or None
     status_val = body.status
     difficulty = body.difficulty
+
+    # New sets have no content yet — force draft; publish via PATCH after fill.
+    if status_val == "published":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Create sets as draft, add content, then publish.",
+        )
 
     sb = get_supabase()
     banks = (
@@ -563,12 +735,7 @@ def delete_question_bank_set(
     set_number = int(row.get("set_number") or 0)
     sb.table("practice_sets").delete().eq("id", str(set_id)).execute()
 
-    try:
-        from app.practice.catalog import clear_hub_catalog_cache
-
-        clear_hub_catalog_cache()
-    except Exception:
-        pass
+    _clear_practice_catalog_cache()
 
     log_admin_action(
         admin_id=admin_id,
@@ -622,27 +789,44 @@ def save_bank_listening(
         },
     )
     inserts: list[dict[str, Any]] = []
-    for i, q in enumerate(body.questions, start=1):
+    qnum = 1
+    for q in body.questions:
         slug = listening_to_slug(q.question_type)
+        choose_two = bool(q.choose_two) or q.question_type == MCQ_CHOOSE_TWO_UI
         passage: str | None = None
-        if i == 1 and body.instructions and body.instructions.strip():
+        if qnum == 1 and body.instructions and body.instructions.strip():
             passage = body.instructions.strip()
         elif q.instructions and q.instructions.strip():
             passage = q.instructions.strip()
-        inserts.append(
-            {
-                "question_number": i,
-                "question_type": slug,
-                "prompt": q.prompt,
-                "passage_text": passage,
-                "options": q.options,
-                "correct_answer": _join_answers(q.correct_answer, q.alt_answers),
-                "skill_tag": q.skill_tag or slug,
-                "audio_url": audio_key,
-            }
-        )
+        base: dict[str, Any] = {
+            "question_type": slug,
+            "prompt": q.prompt,
+            "passage_text": passage,
+            "options": q.options,
+            "skill_tag": q.skill_tag or slug,
+            "audio_url": audio_key,
+            "difficulty": q.difficulty if q.difficulty in ("easy", "medium", "hard") else "medium",
+        }
+        if choose_two and slug == "mcq":
+            rows = expand_choose_two_rows(
+                base=base,
+                correct_answer=q.correct_answer,
+                alt_answers=q.alt_answers,
+            )
+        else:
+            rows = [
+                {
+                    **base,
+                    "correct_answer": join_answers(q.correct_answer, q.alt_answers),
+                }
+            ]
+        for row in rows:
+            row["question_number"] = qnum
+            inserts.append(row)
+            qnum += 1
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
+    _clear_practice_catalog_cache()
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.listening_save",
@@ -679,7 +863,7 @@ def load_bank_listening(*, set_id: UUID, part: int) -> BankListeningPartResponse
         sb.table("bank_questions")
         .select(
             "id, question_number, question_type, prompt, passage_text, "
-            "options, correct_answer, skill_tag, audio_url"
+            "options, correct_answer, skill_tag, audio_url, difficulty"
         )
         .eq("section_id", str(sec["id"]))
         .order("question_number")
@@ -688,14 +872,27 @@ def load_bank_listening(*, set_id: UUID, part: int) -> BankListeningPartResponse
     audio_key = sec.get("audio_key") or (rows[0].get("audio_url") if rows else None)
     instructions = sec.get("instructions")
     questions: list[ListeningBuilderQuestionOut] = []
-    for row in rows:
+    i = 0
+    while i < len(rows):
+        row = rows[i]
         if instructions is None and row.get("passage_text"):
             instructions = str(row["passage_text"])
-        primary, alts = _split_answers(row.get("correct_answer"))
+        primary, alts = split_answers(row.get("correct_answer"))
         slug = str(row["question_type"])
+        if slug.lower() in ("multiple_choice", "multiple-choice"):
+            slug = "mcq"
         choose_two = _is_choose_two(slug, primary, row.get("options"))
         if slug == "mcq" and "," in primary:
             choose_two = True
+        if i + 1 < len(rows) and looks_like_choose_two_pair(row, rows[i + 1]):
+            letters = [
+                str(row.get("correct_answer") or "").strip().upper(),
+                str(rows[i + 1].get("correct_answer") or "").strip().upper(),
+            ]
+            choose_two = True
+            primary = ",".join(letters)
+            alts = []
+            i += 1
         questions.append(
             ListeningBuilderQuestionOut(
                 id=UUID(str(row["id"])),
@@ -708,8 +905,14 @@ def load_bank_listening(*, set_id: UUID, part: int) -> BankListeningPartResponse
                 alt_answers=alts,
                 skill_tag=row.get("skill_tag"),
                 choose_two=choose_two,
+                difficulty=(
+                    row.get("difficulty")
+                    if row.get("difficulty") in ("easy", "medium", "hard")
+                    else "medium"
+                ),
             )
         )
+        i += 1
     return BankListeningPartResponse(
         practice_set_id=set_id,
         part=part,
@@ -743,21 +946,38 @@ def save_bank_reading(
         },
     )
     inserts: list[dict[str, Any]] = []
-    for i, q in enumerate(body.questions, start=1):
+    qnum = 1
+    for q in body.questions:
         slug = to_slug(q.question_type)
-        inserts.append(
-            {
-                "question_number": i,
-                "question_type": slug,
-                "prompt": q.prompt,
-                "passage_text": passage or None,
-                "options": q.options,
-                "correct_answer": _join_answers(q.correct_answer, q.alt_answers),
-                "skill_tag": q.skill_tag or slug,
-            }
-        )
+        letters = parse_choose_two_letters(q.correct_answer)
+        base: dict[str, Any] = {
+            "question_type": slug,
+            "prompt": q.prompt,
+            "passage_text": passage or None,
+            "options": q.options,
+            "skill_tag": q.skill_tag or slug,
+            "difficulty": q.difficulty if q.difficulty in ("easy", "medium", "hard") else "medium",
+        }
+        if slug == "mcq" and len(letters) >= 2:
+            rows = expand_choose_two_rows(
+                base=base,
+                correct_answer=q.correct_answer,
+                alt_answers=q.alt_answers,
+            )
+        else:
+            rows = [
+                {
+                    **base,
+                    "correct_answer": join_answers(q.correct_answer, q.alt_answers),
+                }
+            ]
+        for row in rows:
+            row["question_number"] = qnum
+            inserts.append(row)
+            qnum += 1
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
+    _clear_practice_catalog_cache()
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.reading_save",
@@ -791,7 +1011,7 @@ def load_bank_reading(*, set_id: UUID, part: int) -> BankReadingPartResponse:
         sb.table("bank_questions")
         .select(
             "id, question_number, question_type, prompt, options, "
-            "correct_answer, skill_tag, passage_text"
+            "correct_answer, skill_tag, passage_text, difficulty"
         )
         .eq("section_id", str(sec["id"]))
         .order("question_number")
@@ -801,7 +1021,7 @@ def load_bank_reading(*, set_id: UUID, part: int) -> BankReadingPartResponse:
 
     questions: list[ReadingBuilderQuestionOut] = []
     for row in rows:
-        primary, alts = _split_answers(row.get("correct_answer"))
+        primary, alts = split_answers(row.get("correct_answer"))
         questions.append(
             ReadingBuilderQuestionOut(
                 id=UUID(str(row["id"])),
@@ -812,6 +1032,11 @@ def load_bank_reading(*, set_id: UUID, part: int) -> BankReadingPartResponse:
                 correct_answer=primary,
                 alt_answers=alts,
                 skill_tag=row.get("skill_tag"),
+                difficulty=(
+                    row.get("difficulty")
+                    if row.get("difficulty") in ("easy", "medium", "hard")
+                    else "medium"
+                ),
             )
         )
     passage = str(sec.get("passage_text") or "")
@@ -873,6 +1098,7 @@ def save_bank_writing(
     ]
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
+    _clear_practice_catalog_cache()
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.writing_save",
@@ -1001,6 +1227,7 @@ def save_bank_speaking(
         )
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
+    _clear_practice_catalog_cache()
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.speaking_save",

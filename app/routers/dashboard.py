@@ -22,7 +22,13 @@ from app.db.supabase_client import get_supabase
 from uuid import UUID
 
 from app.mock_catalog.catalog import is_full_mock_id
-from app.services.user_activity import build_user_mock_sessions
+from app.services.user_activity import (
+    activity_calendar as ua_activity_calendar,
+    build_user_activity_day_counts,
+    build_user_mock_sessions,
+    streaks_from_counts,
+    week_active_days,
+)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -104,46 +110,14 @@ def _to_app_date(dt: datetime) -> date:
 
 
 def _streaks_from_counts(day_counts: dict[date, int]) -> tuple[int, int]:
-    """Current consecutive streak (ending today) and longest streak."""
-    if not day_counts:
-        return 0, 0
-
-    active_dates = sorted(d for d, c in day_counts.items() if c > 0)
-    if not active_dates:
-        return 0, 0
-
-    longest = 1
-    run = 1
-    for i in range(1, len(active_dates)):
-        if (active_dates[i] - active_dates[i - 1]).days == 1:
-            run += 1
-            longest = max(longest, run)
-        else:
-            run = 1
-
-    today = datetime.now(APP_TZ).date()
-    current = 0
-    cursor = today
-    while day_counts.get(cursor, 0) > 0:
-        current += 1
-        cursor -= timedelta(days=1)
-    return current, longest
+    return streaks_from_counts(day_counts)
 
 
 def _activity_calendar(day_counts: dict[date, int], *, days: int = 84) -> list[ActivityDay]:
-    today = datetime.now(APP_TZ).date()
-    start = today - timedelta(days=days - 1)
-    out: list[ActivityDay] = []
-    cursor = start
-    while cursor <= today:
-        out.append(
-            ActivityDay(
-                date=cursor.isoformat(),
-                count=int(day_counts.get(cursor, 0)),
-            )
-        )
-        cursor += timedelta(days=1)
-    return out
+    return [
+        ActivityDay(date=row["date"], count=int(row["count"]))
+        for row in ua_activity_calendar(day_counts, days=days)
+    ]
 
 
 def _safe_dt(value: Any) -> datetime | None:
@@ -290,7 +264,6 @@ def dashboard_summary(
     recent: list[RecentAttempt] = []
     last_activity: datetime | None = None
     completed_count = 0
-    day_counts: dict[date, int] = {}
 
     for a in attempts:
         attempt_started = _safe_dt(a.get("started_at"))
@@ -323,10 +296,6 @@ def dashboard_summary(
 
         if status_lc == "completed":
             completed_count += 1
-            activity_dt = completed or attempt_started
-            if activity_dt:
-                d = _to_app_date(activity_dt)
-                day_counts[d] = day_counts.get(d, 0) + 1
             score = scores_by_attempt.get(str(a["id"]))
             review_writing = writing_reviews_by_attempt.get(str(a["id"]))
             review_speaking = speaking_reviews_by_attempt.get(str(a["id"]))
@@ -384,6 +353,7 @@ def dashboard_summary(
 
     avg = sum(bands) / len(bands) if bands else None
     best = max(bands) if bands else None
+    day_counts = build_user_activity_day_counts(UUID(user_id))
     current_streak, longest_streak = _streaks_from_counts(day_counts)
 
     mock_sessions = build_user_mock_sessions(UUID(user_id))
@@ -441,18 +411,24 @@ def dashboard_summary(
     return response
 
 
+class ActivityDayLite(BaseModel):
+    date: str
+    count: int = 0
+
+
 class DashboardStreak(BaseModel):
     current_streak: int = 0
     longest_streak: int = 0
+    activity_days: list[ActivityDayLite] = Field(default_factory=list)
+    week_active_days: int = 0
 
 
 @router.get("/streak", response_model=DashboardStreak)
 def dashboard_streak(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> DashboardStreak:
-    """Lite streak only — no attempts list, scores, or mock sessions."""
+    """Lite streak + recent activity strip (mocks + plan/hub days)."""
     request_started = perf_counter()
-    client = get_supabase()
     user_id = str(current_user.id)
     cache_key = f"dashboard_streak:{user_id}"
     cached = get_json(cache_key)
@@ -476,34 +452,14 @@ def dashboard_streak(
         except Exception:
             pass
 
-    attempts_res = execute_with_retry(
-        lambda: (
-            client.table("test_attempts")
-            .select("status, started_at, completed_at, mock_test_id")
-            .eq("user_id", user_id)
-            .eq("status", "completed")
-            .order("completed_at", desc=True)
-            .limit(120)
-            .execute()
-        )
-    )
-    attempts: list[dict[str, Any]] = list(attempts_res.data or [])
-
-    day_counts: dict[date, int] = {}
-    for a in attempts:
-        mock_id = str(a.get("mock_test_id") or "")
-        if not is_full_mock_id(mock_id):
-            continue
-        activity_dt = _safe_dt(a.get("completed_at")) or _safe_dt(a.get("started_at"))
-        if not activity_dt:
-            continue
-        d = _to_app_date(activity_dt)
-        day_counts[d] = day_counts.get(d, 0) + 1
-
-    current_streak, longest_streak = _streaks_from_counts(day_counts)
+    day_counts = build_user_activity_day_counts(UUID(user_id))
+    current_streak, longest_streak = streaks_from_counts(day_counts)
+    cal = ua_activity_calendar(day_counts, days=14)
     response = DashboardStreak(
         current_streak=current_streak,
         longest_streak=longest_streak,
+        activity_days=[ActivityDayLite(**row) for row in cal],
+        week_active_days=week_active_days(day_counts),
     )
     set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=30)
     print(

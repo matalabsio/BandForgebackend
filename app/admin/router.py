@@ -12,6 +12,7 @@ from app.admin import (
     audit_routes,
     dashboard,
     diagnostics,
+    exports as admin_exports,
     mocks,
     mocks_ingest,
     payments as admin_payments,
@@ -71,6 +72,8 @@ from app.admin.schemas import (
     QuestionBankCreateSetResponse,
     QuestionBankSetItem,
     DeleteQuestionBankSetResponse,
+    PatchQuestionBankSetStatusRequest,
+    PatchQuestionBankSetStatusResponse,
     BankListeningPartResponse,
     BankReadingPartResponse,
     BankWritingPartResponse,
@@ -107,6 +110,16 @@ def get_ai_metrics_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
 ) -> admin_ai_ops.AiMetricsResponse:
     return admin_ai_ops.get_ai_metrics()
+
+
+@router.get("/reliability")
+def get_reliability_snapshot(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> dict:
+    """Phase 4/6.4: counters, latency, practice catalog, speaking outbox."""
+    from app.reliability.metrics import snapshot
+
+    return snapshot()
 
 
 @router.get("/ai/health", response_model=admin_ai_ops.AiHealthResponse)
@@ -263,6 +276,20 @@ def get_question_bank_set_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
 ) -> QuestionBankSetItem:
     return question_bank.get_question_bank_set(set_id=set_id)
+
+
+@router.patch(
+    "/question-bank/sets/{set_id}/status",
+    response_model=PatchQuestionBankSetStatusResponse,
+)
+def patch_question_bank_set_status_route(
+    set_id: UUID,
+    body: PatchQuestionBankSetStatusRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> PatchQuestionBankSetStatusResponse:
+    return question_bank.patch_question_bank_set_status(
+        set_id=set_id, body=body, admin_id=admin.id
+    )
 
 
 @router.delete(
@@ -1326,6 +1353,36 @@ def review_analytics_route(
         module=module,  # type: ignore[arg-type]
         days=days,
     )
+
+
+@router.get("/exports/review-analytics.csv")
+def export_review_analytics_csv(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    module: Annotated[str, Query(pattern="^(speaking|writing|all)$")] = "all",
+    days: int = Query(30, ge=1, le=365),
+):
+    return admin_exports.review_analytics_csv(module=module, days=days)  # type: ignore[arg-type]
+
+
+@router.get("/exports/users-overview.csv")
+def export_users_overview_csv(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+):
+    return admin_exports.users_overview_csv()
+
+
+@router.get("/exports/reliability-snapshot.csv")
+def export_reliability_snapshot_csv(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+):
+    return admin_exports.reliability_snapshot_csv()
+
+
+@router.get("/exports/hub-progress-7d.csv")
+def export_hub_progress_7d_csv(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+):
+    return admin_exports.hub_progress_7d_csv()
 
 
 @router.get("/audit", response_model=AuditLogResponse)

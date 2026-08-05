@@ -33,12 +33,16 @@ def _hub_row(skill: str, hub_id: str, bank: int, set_num: int) -> dict:
     return {
         "id": hub_id,
         "slug": f"{skill}-b{bank}-s{set_num}",
+        "set_id": f"set-{bank}-{set_num}",
         "estimated_min": 25,
         "sort_order": bank * 10 + set_num,
         "practice_prompt": "Practice",
         "practice_sets": {
+            "id": f"set-{bank}-{set_num}",
             "set_number": set_num,
             "title": f"{skill.title()} Set {bank}.{set_num}",
+            "status": "published",
+            "difficulty": "medium",
             "practice_banks": {
                 "skill": skill,
                 "bank_number": bank,
@@ -136,7 +140,8 @@ def test_current_hub_id_for_skill_falls_back_to_last_completed():
         )
 
 
-def test_assert_hub_accessible_blocks_locked_hub():
+def test_assert_hub_accessible_allows_any_assignable_hub():
+    """Phase 1: soft-repeat may open non-sequential hubs — no hard sequential lock."""
     hubs = [
         _hub_row("listening", "h1", 1, 1),
         _hub_row("listening", "h2", 1, 2),
@@ -150,13 +155,11 @@ def test_assert_hub_accessible_blocks_locked_hub():
     }
     with (
         patch("app.practice.service.repository.get_hub_by_id", return_value=detail),
-        patch("app.practice.service.repository.list_hubs_for_skill", return_value=hubs),
+        patch("app.practice.service.repository.is_hub_assignable", return_value=True),
         patch("app.practice.service.repository.get_user_progress_map", return_value={}),
     ):
-        with pytest.raises(HTTPException) as exc:
-            service.assert_hub_accessible(user_id=USER_ID, hub_id="h2")
-    assert exc.value.status_code == 403
-    assert exc.value.detail["code"] == "hub_locked"
+        flat = service.assert_hub_accessible(user_id=USER_ID, hub_id="h2")
+    assert flat["id"] == "h2"
 
 
 def test_list_hubs_marks_accessible_flag():
@@ -272,6 +275,7 @@ def test_complete_hub_idempotent_shape():
     row["submit_config"] = {}
     with (
         patch("app.practice.service.repository.get_hub_by_id", return_value=row),
+        patch("app.practice.service.repository.is_hub_assignable", return_value=True),
         patch("app.practice.service.repository.list_hubs_for_skill", return_value=[row]),
         patch("app.practice.service.repository.get_user_progress_map", return_value={}),
         patch(
@@ -320,14 +324,18 @@ def test_build_personalized_study_plan_assigns_hub_ids():
         day_index: int,
         slot_index: int = 0,
         completed_count: int | None = None,
+        previous_hub_id: str | None = None,
     ) -> str | None:
         ids = fake_catalog.get(skill) or []
         if not ids:
             return None
-        if completed_count is not None:
-            idx = min(max(completed_count, 0) + max(day_index, 0), len(ids) - 1)
-            return ids[idx]
-        return ids[(day_index + slot_index) % len(ids)]
+        cursor = int(completed_count or 0)
+        idx = (cursor + max(day_index, 0)) % len(ids)
+        hub = ids[idx]
+        if previous_hub_id and len(ids) > 1 and hub == previous_hub_id:
+            idx = (idx + 1) % len(ids)
+            hub = ids[idx]
+        return hub
 
     with patch("app.practice.catalog.pick_hub_for_slot", side_effect=fake_pick):
         plan = build_personalized_study_plan(
@@ -347,13 +355,209 @@ def test_build_personalized_study_plan_assigns_hub_ids():
     assert "task=watch" in watch.href
 
 
-def test_pick_hub_for_slot_progress_aware():
+def test_pick_hub_for_slot_soft_repeat_wraps():
     from app.practice.catalog import pick_hub_for_slot
 
     with patch(
         "app.practice.catalog.get_ordered_hub_ids_by_skill",
         return_value={"listening": ["l1", "l2", "l3"]},
     ):
+        # cursor=1, day=0 → l2; day=2 → (1+2)%3=0 → l1 wrap
         assert pick_hub_for_slot(skill="listening", day_index=0, completed_count=1) == "l2"
-        assert pick_hub_for_slot(skill="listening", day_index=1, completed_count=1) == "l3"
-        assert pick_hub_for_slot(skill="listening", day_index=5, completed_count=2) == "l3"
+        assert pick_hub_for_slot(skill="listening", day_index=2, completed_count=1) == "l1"
+        # clamp gone: large day still wraps
+        assert pick_hub_for_slot(skill="listening", day_index=5, completed_count=2) == "l2"
+
+
+def test_assign_hub_for_day_anti_consecutive():
+    from app.practice.assignment import assign_hub_for_day
+
+    hubs = ["a", "b", "c"]
+    # (0+0)%3 = a; previous a → skip to b
+    assert assign_hub_for_day(hub_ids=hubs, cursor=0, day_offset=0, previous_hub_id="a") == "b"
+    # pool size 1 may repeat
+    assert assign_hub_for_day(hub_ids=["only"], cursor=0, day_offset=0, previous_hub_id="only") == "only"
+    assert assign_hub_for_day(hub_ids=[], cursor=0, day_offset=0) is None
+
+
+def test_skill_cursor_counts_completed_in_pool():
+    from app.practice.assignment import skill_cursor
+
+    progress = {
+        "l1": {"status": "completed"},
+        "l2": {"status": "completed"},
+        "other": {"status": "completed"},
+    }
+    assert (
+        skill_cursor(
+            skill="listening",
+            progress_map=progress,
+            hub_ids=["l1", "l2", "l3"],
+        )
+        == 2
+    )
+    assert skill_cursor(skill="listening", progress_map={}, hub_ids=["l1"]) == 0
+
+
+def test_rewrite_plan_hubs_syncs_today_and_calendar():
+    from datetime import date, timedelta
+
+    from app.practice.assignment import rewrite_plan_hubs
+
+    start = date(2026, 8, 1)
+    plan = {
+        "prep_start": start.isoformat(),
+        "weeks": [
+            {
+                "id": "w1",
+                "label": "Week 1",
+                "focus": "x",
+                "days": [
+                    {
+                        "date": start.isoformat(),
+                        "label": "Sat",
+                        "tasks": [
+                            {
+                                "id": "t1",
+                                "title": "L Watch",
+                                "module": "listening",
+                                "task_type": "watch",
+                                "hub_id": "stale",
+                                "href": "/old",
+                            },
+                            {
+                                "id": "t2",
+                                "title": "L Practice",
+                                "module": "listening",
+                                "task_type": "practice",
+                                "hub_id": "stale",
+                                "href": "/old",
+                            },
+                        ],
+                    },
+                    {
+                        "date": (start + timedelta(days=1)).isoformat(),
+                        "label": "Sun",
+                        "tasks": [
+                            {
+                                "id": "t3",
+                                "title": "L Watch",
+                                "module": "listening",
+                                "task_type": "watch",
+                                "hub_id": "stale2",
+                                "href": "/old",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    out = rewrite_plan_hubs(
+        plan,
+        cursors={"listening": 0, "reading": 0, "writing": 0, "speaking": 0},
+        prep_start=start,
+        ordered_ids={
+            "listening": ["L-easy", "L-med", "L-hard"],
+            "reading": [],
+            "writing": [],
+            "speaking": [],
+        },
+        href_builder=lambda **kw: f"/ok/{kw.get('hub_id')}",
+    )
+    d0 = out["weeks"][0]["days"][0]["tasks"]
+    d1 = out["weeks"][0]["days"][1]["tasks"]
+    assert d0[0]["hub_id"] == "L-easy"
+    assert d0[1]["hub_id"] == "L-easy"  # same day same skill
+    assert d1[0]["hub_id"] == "L-med"  # next day advances; not consecutive same
+    assert d0[0]["href"] == "/ok/L-easy"
+
+
+
+def test_pick_hub_for_slot_returns_none_when_empty():
+    from app.practice.catalog import pick_hub_for_slot
+
+    with patch(
+        "app.practice.catalog.get_ordered_hub_ids_by_skill",
+        return_value={"listening": []},
+    ):
+        assert pick_hub_for_slot(skill="listening", day_index=0, completed_count=0) is None
+
+
+def test_set_content_ok_listening_requires_audio_and_answers():
+    from app.practice.repository import _set_content_ok
+
+    sections = [{"id": "s1", "audio_key": "audio/key.mp3", "passage_text": None}]
+    qs = {
+        "s1": [
+            {"prompt": "Q1", "correct_answer": "A", "audio_url": None, "passage_text": None}
+        ]
+    }
+    assert _set_content_ok(skill="listening", sections=sections, questions_by_section=qs)
+
+    bad = {
+        "s1": [
+            {"prompt": "Q1", "correct_answer": "", "audio_url": None, "passage_text": None}
+        ]
+    }
+    assert not _set_content_ok(skill="listening", sections=sections, questions_by_section=bad)
+
+    no_audio = [{"id": "s1", "audio_key": "", "passage_text": None}]
+    assert not _set_content_ok(
+        skill="listening", sections=no_audio, questions_by_section=qs
+    )
+
+
+def test_set_content_ok_reading_writing_speaking():
+    from app.practice.repository import _set_content_ok
+
+    r_sections = [{"id": "s1", "audio_key": None, "passage_text": "Passage body"}]
+    r_qs = {
+        "s1": [
+            {
+                "prompt": "Q1",
+                "correct_answer": "TRUE",
+                "audio_url": None,
+                "passage_text": "Passage body",
+            }
+        ]
+    }
+    assert _set_content_ok(skill="reading", sections=r_sections, questions_by_section=r_qs)
+
+    w_sections = [{"id": "s1", "audio_key": None, "passage_text": "Write about X"}]
+    assert _set_content_ok(skill="writing", sections=w_sections, questions_by_section={})
+
+    s_qs = {"s1": [{"prompt": "Talk about home", "correct_answer": None, "audio_url": None, "passage_text": None}]}
+    assert _set_content_ok(
+        skill="speaking",
+        sections=[{"id": "s1", "audio_key": None, "passage_text": None}],
+        questions_by_section=s_qs,
+    )
+
+
+def test_filter_assignable_excludes_draft(monkeypatch):
+    from app.practice import repository as repo
+
+    draft = _hub_row("listening", "h-draft", 1, 1)
+    draft["practice_sets"]["status"] = "draft"
+    published = _hub_row("listening", "h-pub", 1, 2)
+
+    monkeypatch.setattr(
+        repo,
+        "_assignable_set_ids",
+        lambda set_ids, skill_by_set: {str(published["practice_sets"]["id"])},
+    )
+    out = repo._filter_assignable_hub_rows([draft, published])
+    assert len(out) == 1
+    assert out[0]["id"] == "h-pub"
+
+
+def test_assert_hub_accessible_404_when_not_assignable():
+    detail = _hub_row("listening", "h1", 1, 1)
+    with (
+        patch("app.practice.service.repository.get_hub_by_id", return_value=detail),
+        patch("app.practice.service.repository.is_hub_assignable", return_value=False),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            service.assert_hub_accessible(user_id=USER_ID, hub_id="h1")
+    assert exc.value.status_code == 404

@@ -13,6 +13,7 @@ from app.schemas.test_engine import TestSummary
 
 class NotificationPreferencesResponse(BaseModel):
     email_enabled: bool
+    plan_reminders_email: bool = True
     whatsapp_enabled: bool
     whatsapp_eligible: bool
     masked_phone: str | None = None
@@ -21,6 +22,7 @@ class NotificationPreferencesResponse(BaseModel):
 
 class PatchNotificationPreferencesRequest(BaseModel):
     email_enabled: bool | None = None
+    plan_reminders_email: bool | None = None
     whatsapp_enabled: bool | None = None
     consent_confirmation: str | None = Field(default=None, max_length=80)
 

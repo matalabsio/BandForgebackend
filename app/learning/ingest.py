@@ -296,10 +296,19 @@ def load_diagnostic_seed(user_id: UUID) -> dict[str, Any] | None:
 
 
 def load_all_sources(user_id: UUID) -> dict[str, Any]:
-    return {
-        "target_band": load_user_target_band(user_id),
-        "lr_scores": load_lr_scores(user_id),
-        "writing": load_writing_reviews(user_id),
-        "speaking": load_speaking_reviews(user_id),
-        "diagnostic": load_diagnostic_seed(user_id),
-    }
+    """Parallel load of learning signals (Phase 4)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        fut_target = pool.submit(load_user_target_band, user_id)
+        fut_lr = pool.submit(load_lr_scores, user_id)
+        fut_writing = pool.submit(load_writing_reviews, user_id)
+        fut_speaking = pool.submit(load_speaking_reviews, user_id)
+        fut_diag = pool.submit(load_diagnostic_seed, user_id)
+        return {
+            "target_band": fut_target.result(),
+            "lr_scores": fut_lr.result(),
+            "writing": fut_writing.result(),
+            "speaking": fut_speaking.result(),
+            "diagnostic": fut_diag.result(),
+        }

@@ -7,6 +7,12 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.admin.answer_format import (
+    expand_choose_two_rows,
+    join_answers,
+    looks_like_choose_two_pair,
+    split_answers,
+)
 from app.admin.audit import log_admin_action
 from app.admin.listening_question_types import (
     MCQ_CHOOSE_TWO_UI,
@@ -20,20 +26,6 @@ from app.admin.schemas import (
     ListeningPartResponse,
 )
 from app.db.supabase_client import get_supabase
-
-
-def _join_answers(primary: str, alts: list[str]) -> str:
-    parts = [primary.strip()] + [a.strip() for a in alts if a.strip()]
-    return "/".join(parts) if parts else ""
-
-
-def _split_answers(raw: str | None) -> tuple[str, list[str]]:
-    if not raw:
-        return "", []
-    parts = [p.strip() for p in raw.split("/") if p.strip()]
-    if not parts:
-        return "", []
-    return parts[0], parts[1:]
 
 
 def _assert_mock_exists(sb: Any, mock_id: str) -> None:
@@ -53,7 +45,7 @@ def _is_choose_two(q_type_ui: str, correct: str, options: list | None) -> bool:
         return True
     if listening_to_slug(q_type_ui) != "mcq":
         return False
-    # Heuristic on load: comma-separated multi correct among options
+    # Legacy heuristic: comma-separated multi correct among options
     parts = [p.strip() for p in (correct or "").split(",") if p.strip()]
     return len(parts) >= 2
 
@@ -91,29 +83,47 @@ def save_listening_part(
     ).eq("part", part).execute()
 
     inserts: list[dict[str, Any]] = []
-    for i, q in enumerate(body.questions, start=1):
+    qnum = 1
+    for q in body.questions:
         slug = listening_to_slug(q.question_type)
+        choose_two = bool(q.choose_two) or q.question_type == MCQ_CHOOSE_TWO_UI
         passage: str | None = None
-        if i == 1 and body.instructions and body.instructions.strip():
+        if qnum == 1 and body.instructions and body.instructions.strip():
             passage = body.instructions.strip()
         elif q.instructions and q.instructions.strip():
             passage = q.instructions.strip()
 
-        inserts.append(
-            {
-                "mock_test_id": str(mock_id),
-                "module": "listening",
-                "part": part,
-                "question_number": i,
-                "question_type": slug,
-                "prompt": q.prompt,
-                "passage_text": passage,
-                "options": q.options,
-                "correct_answer": _join_answers(q.correct_answer, q.alt_answers),
-                "skill_tag": q.skill_tag or slug,
-                "audio_url": audio_key,
-            }
-        )
+        base: dict[str, Any] = {
+            "mock_test_id": str(mock_id),
+            "module": "listening",
+            "part": part,
+            "question_type": slug,
+            "prompt": q.prompt,
+            "passage_text": passage,
+            "options": q.options,
+            "skill_tag": q.skill_tag or slug,
+            "audio_url": audio_key,
+        }
+        if choose_two and slug == "mcq":
+            rows = expand_choose_two_rows(
+                base=base,
+                correct_answer=q.correct_answer,
+                alt_answers=q.alt_answers,
+            )
+        else:
+            rows = [
+                {
+                    **base,
+                    "correct_answer": join_answers(q.correct_answer, q.alt_answers),
+                }
+            ]
+        for row in rows:
+            row["question_number"] = qnum
+            # Only first row of a choose-two pair keeps shared instructions
+            if qnum > 1 and choose_two:
+                row["passage_text"] = passage if q.instructions else None
+            inserts.append(row)
+            qnum += 1
 
     sb.table("questions").insert(inserts).execute()
 
@@ -166,18 +176,37 @@ def load_listening_part(*, mock_id: UUID, part: int) -> ListeningPartResponse:
     instructions: str | None = None
     questions: list[ListeningBuilderQuestionOut] = []
 
-    for row in rows:
+    i = 0
+    while i < len(rows):
+        row = rows[i]
         if audio_key is None and row.get("audio_url"):
             audio_key = str(row["audio_url"])
         if instructions is None and row.get("passage_text"):
             instructions = str(row["passage_text"])
 
-        primary, alts = _split_answers(row.get("correct_answer"))
+        primary, alts = split_answers(row.get("correct_answer"))
         slug = str(row["question_type"])
+        # Normalize legacy type aliases on read
+        if slug.lower() in ("multiple_choice", "multiple-choice"):
+            slug = "mcq"
+
         choose_two = _is_choose_two(slug, primary, row.get("options"))
-        # Also detect choose-two from comma in primary for mcq
         if slug == "mcq" and "," in primary:
             choose_two = True
+
+        # Merge consecutive exam-style choose-two rows for admin edit UI
+        if (
+            i + 1 < len(rows)
+            and looks_like_choose_two_pair(row, rows[i + 1])
+        ):
+            letters = [
+                str(row.get("correct_answer") or "").strip().upper(),
+                str(rows[i + 1].get("correct_answer") or "").strip().upper(),
+            ]
+            choose_two = True
+            primary = ",".join(letters)
+            alts = []
+            i += 1  # skip partner row
 
         display = listening_to_display(slug, choose_two=choose_two)
         questions.append(
@@ -194,6 +223,7 @@ def load_listening_part(*, mock_id: UUID, part: int) -> ListeningPartResponse:
                 choose_two=choose_two,
             )
         )
+        i += 1
 
     return ListeningPartResponse(
         mock_test_id=mock_id,

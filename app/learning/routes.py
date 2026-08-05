@@ -14,8 +14,15 @@ from app.learning.schemas import (
     LearningProfileResponse,
     TaskStatusResponse,
     TaskStatusUpdate,
+    TodayBundleResponse,
 )
-from app.learning.service import ensure_profile, generate_personalized_plan, update_task_status
+from app.learning.service import (
+    ensure_profile,
+    ensure_today_bundle,
+    generate_personalized_plan,
+    replan_remaining_schedule,
+    update_task_status,
+)
 from app.security.entitlements import require_full_skill_program
 
 router = APIRouter(prefix="/api/learning", tags=["learning"])
@@ -27,6 +34,14 @@ def get_learning_profile(
 ) -> LearningProfileResponse:
     """Return adaptive learning profile (creates/refreshes when stale)."""
     return ensure_profile(UUID(str(user.id)))
+
+
+@router.get("/today", response_model=TodayBundleResponse)
+def get_learning_today(
+    user: Annotated[UserPublic, Depends(get_current_user)],
+) -> TodayBundleResponse:
+    """Slim Today bundle — todays_tasks + hub_progress + timeline (no full calendar)."""
+    return ensure_today_bundle(UUID(str(user.id)))
 
 
 @router.post("/refresh", response_model=LearningProfileResponse)
@@ -44,6 +59,14 @@ def generate_learning_plan(
 ) -> LearningProfileResponse:
     """Generate or refresh the exam-date-bound personalized study plan."""
     return generate_personalized_plan(UUID(str(user.id)), plan_tier=body.plan_tier)
+
+
+@router.post("/plan/replan", response_model=LearningProfileResponse)
+def replan_learning_plan(
+    user: Annotated[UserPublic, Depends(require_full_skill_program)],
+) -> LearningProfileResponse:
+    """Rebuild remaining schedule from updated strengths/weaknesses; keep past days."""
+    return replan_remaining_schedule(UUID(str(user.id)))
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskStatusResponse)

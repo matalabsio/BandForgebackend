@@ -15,6 +15,7 @@ def _user(**overrides):
         "phone_verified_at": "2026-07-21T10:00:00Z",
         "is_active": True,
         "speaking_release_email_enabled": True,
+        "plan_reminders_email": True,
         "speaking_release_whatsapp_enabled": False,
         "speaking_release_whatsapp_consented_at": None,
         "speaking_release_whatsapp_consent_version": None,
@@ -26,8 +27,32 @@ def test_preferences_mask_phone_and_compute_eligibility():
     with patch("app.notifications.preferences._load", return_value=_user()):
         result = get_preferences(uuid4())
     assert result.whatsapp_eligible is True
+    assert result.plan_reminders_email is True
     assert result.masked_phone.endswith("10")
     assert "+919876543210" not in result.masked_phone
+
+
+def test_patch_plan_reminders_email():
+    chain = MagicMock()
+    chain.update.return_value = chain
+    chain.eq.return_value = chain
+    chain.select.return_value = chain
+    result = MagicMock()
+    result.data = []
+    chain.execute.return_value = result
+    sb = MagicMock()
+    sb.table.return_value = chain
+
+    with (
+        patch("app.notifications.preferences._load", return_value=_user()),
+        patch("app.notifications.preferences.get_supabase", return_value=sb),
+    ):
+        updated = patch_preferences(
+            uuid4(), PatchNotificationPreferencesRequest(plan_reminders_email=False)
+        )
+    update = chain.update.call_args.args[0]
+    assert update["plan_reminders_email"] is False
+    assert updated.plan_reminders_email is False
 
 
 def test_enable_whatsapp_requires_exact_consent_and_verified_phone():

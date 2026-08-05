@@ -1,15 +1,13 @@
-"""Reading scoring — reuses listening MCQ/TFNG/completion logic."""
+"""Reading scoring — reuses shared objective answer checking."""
 
 from __future__ import annotations
 
-from typing import Any
-
-from app.listening.evaluation import (
+from app.reading.constants import READING_BAND_TABLE
+from app.scoring.answers import (
     build_skill_breakdown,
     is_answer_correct,
     score_answers,
 )
-from app.reading.constants import READING_BAND_TABLE
 
 
 def calculate_reading_band(raw_score: int, total: int = 40) -> float:

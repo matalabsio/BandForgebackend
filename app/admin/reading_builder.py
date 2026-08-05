@@ -7,6 +7,12 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.admin.answer_format import (
+    expand_choose_two_rows,
+    join_answers,
+    parse_choose_two_letters,
+    split_answers,
+)
 from app.admin.audit import log_admin_action
 from app.admin.question_types import to_slug
 from app.admin.schemas import (
@@ -22,22 +28,6 @@ from app.admin.schemas import (
     UpdateQuestionResponse,
 )
 from app.db.supabase_client import get_supabase
-
-
-def _join_answers(primary: str, alts: list[str]) -> str:
-    """Combine primary + alternates into `/`-separated string for DB storage."""
-    parts = [primary.strip()] + [a.strip() for a in alts if a.strip()]
-    return "/".join(parts) if parts else ""
-
-
-def _split_answers(raw: str | None) -> tuple[str, list[str]]:
-    """Split `/`-separated correct_answer back into primary + alternates."""
-    if not raw:
-        return "", []
-    parts = [p.strip() for p in raw.split("/") if p.strip()]
-    if not parts:
-        return "", []
-    return parts[0], parts[1:]
 
 
 def _assert_mock_exists(sb: Any, mock_id: str) -> None:
@@ -79,22 +69,39 @@ def save_reading_passage(
     ).eq("part", part).execute()
 
     inserts: list[dict[str, Any]] = []
-    for i, q in enumerate(body.questions, start=1):
+    qnum = 1
+    for q in body.questions:
         slug = to_slug(q.question_type)
-        inserts.append(
-            {
-                "mock_test_id": str(mock_id),
-                "module": "reading",
-                "part": part,
-                "question_number": i,
-                "question_type": slug,
-                "prompt": q.prompt,
-                "passage_text": body.passage_text if i == 1 else None,
-                "options": q.options,
-                "correct_answer": _join_answers(q.correct_answer, q.alt_answers),
-                "skill_tag": q.skill_tag or slug,
-            }
-        )
+        letters = parse_choose_two_letters(q.correct_answer)
+        base: dict[str, Any] = {
+            "mock_test_id": str(mock_id),
+            "module": "reading",
+            "part": part,
+            "question_type": slug,
+            "prompt": q.prompt,
+            "passage_text": body.passage_text if qnum == 1 else None,
+            "options": q.options,
+            "skill_tag": q.skill_tag or slug,
+        }
+        if slug == "mcq" and len(letters) >= 2:
+            rows = expand_choose_two_rows(
+                base=base,
+                correct_answer=q.correct_answer,
+                alt_answers=q.alt_answers,
+            )
+        else:
+            rows = [
+                {
+                    **base,
+                    "correct_answer": join_answers(q.correct_answer, q.alt_answers),
+                }
+            ]
+        for row in rows:
+            row["question_number"] = qnum
+            if qnum > 1:
+                row["passage_text"] = None
+            inserts.append(row)
+            qnum += 1
 
     sb.table("questions").insert(inserts).execute()
 
@@ -132,7 +139,7 @@ def load_reading_passage(
     for row in rows:
         if passage_text is None and row.get("passage_text"):
             passage_text = str(row["passage_text"])
-        primary, alts = _split_answers(row.get("correct_answer"))
+        primary, alts = split_answers(row.get("correct_answer"))
         questions.append(
             ReadingBuilderQuestionOut(
                 id=UUID(str(row["id"])),
@@ -259,11 +266,11 @@ def update_question(
         update["options"] = body.options
     if body.correct_answer is not None:
         alt = body.alt_answers or []
-        update["correct_answer"] = _join_answers(body.correct_answer, alt)
+        update["correct_answer"] = join_answers(body.correct_answer, alt)
     elif body.alt_answers is not None:
         existing_ca = row.get("correct_answer") or ""
-        primary, _ = _split_answers(existing_ca)
-        update["correct_answer"] = _join_answers(primary, body.alt_answers)
+        primary, _ = split_answers(existing_ca)
+        update["correct_answer"] = join_answers(primary, body.alt_answers)
     if body.skill_tag is not None:
         update["skill_tag"] = body.skill_tag
 

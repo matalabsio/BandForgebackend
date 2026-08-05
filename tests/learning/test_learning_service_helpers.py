@@ -7,7 +7,11 @@ from unittest.mock import patch
 from uuid import UUID
 
 from app.learning.schemas import StudyDay, StudyPlan, StudyTask, StudyWeek
-from app.learning.service import _todays_tasks, row_to_response
+from app.learning.service import (
+    _serve_rewritten_study_plan,
+    _todays_tasks,
+    row_to_response,
+)
 
 USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -47,10 +51,11 @@ def test_todays_tasks_filters_current_day():
     assert tasks[0].id == "t1"
 
 
-def test_todays_tasks_rewrites_hub_and_plan_query():
-    today = date.today().isoformat()
+def test_serve_rewritten_plan_updates_hubs_for_today():
+    today = date.today()
     plan = {
         "weekly_focus": "Focus",
+        "prep_start": today.isoformat(),
         "weeks": [
             {
                 "id": "w1",
@@ -58,7 +63,7 @@ def test_todays_tasks_rewrites_hub_and_plan_query():
                 "focus": "Focus",
                 "days": [
                     {
-                        "date": today,
+                        "date": today.isoformat(),
                         "label": "Mon",
                         "tasks": [
                             {
@@ -87,12 +92,31 @@ def test_todays_tasks_rewrites_hub_and_plan_query():
     }
     with (
         patch(
-            "app.practice.service.current_hub_id_for_skill",
-            return_value="current-hub",
+            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            return_value={
+                "listening": ["current-hub", "l2"],
+                "reading": [],
+                "writing": [],
+                "speaking": [],
+            },
         ),
-        patch("app.practice.repository.get_user_progress_map", return_value={}),
+        patch(
+            "app.practice.assignment.cursors_by_skill",
+            return_value={
+                "listening": 0,
+                "reading": 0,
+                "writing": 0,
+                "speaking": 0,
+            },
+        ),
     ):
-        tasks = _todays_tasks(plan, user_id=USER_ID)
+        rewritten = _serve_rewritten_study_plan(
+            plan,
+            user_id=USER_ID,
+            prep_start=today,
+            progress_map={},
+        )
+        tasks = _todays_tasks(rewritten)
 
     assert len(tasks) == 2
     assert tasks[0].hub_id == "current-hub"
@@ -106,10 +130,11 @@ def test_todays_tasks_rewrites_hub_and_plan_query():
     )
 
 
-def test_todays_tasks_unavailable_when_no_hub():
-    today = date.today().isoformat()
+def test_serve_rewritten_plan_unavailable_when_empty_pool():
+    today = date.today()
     plan = {
         "weekly_focus": "Focus",
+        "prep_start": today.isoformat(),
         "weeks": [
             {
                 "id": "w1",
@@ -117,7 +142,7 @@ def test_todays_tasks_unavailable_when_no_hub():
                 "focus": "Focus",
                 "days": [
                     {
-                        "date": today,
+                        "date": today.isoformat(),
                         "label": "Mon",
                         "tasks": [
                             {
@@ -136,10 +161,32 @@ def test_todays_tasks_unavailable_when_no_hub():
         ],
     }
     with (
-        patch("app.practice.service.current_hub_id_for_skill", return_value=None),
-        patch("app.practice.repository.get_user_progress_map", return_value={}),
+        patch(
+            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            return_value={
+                "listening": [],
+                "reading": [],
+                "writing": [],
+                "speaking": [],
+            },
+        ),
+        patch(
+            "app.practice.assignment.cursors_by_skill",
+            return_value={
+                "listening": 0,
+                "reading": 0,
+                "writing": 0,
+                "speaking": 0,
+            },
+        ),
     ):
-        tasks = _todays_tasks(plan, user_id=USER_ID)
+        rewritten = _serve_rewritten_study_plan(
+            plan,
+            user_id=USER_ID,
+            prep_start=today,
+            progress_map={},
+        )
+        tasks = _todays_tasks(rewritten)
 
     assert tasks[0].hub_id is None
     assert "unavailable=1" in tasks[0].href
@@ -196,10 +243,13 @@ def test_row_to_response_empty_bootstrap():
     with patch("app.learning.service._hub_progress_for_user", return_value={}):
         with (
             patch(
-                "app.practice.service.current_hub_id_for_skill",
-                return_value=None,
+                "app.learning.service._serve_rewritten_study_plan",
+                side_effect=lambda plan, **_kw: plan,
             ),
-            patch("app.practice.repository.get_user_progress_map", return_value={}),
+            patch(
+                "app.practice.service.practice_profile_bundle",
+                side_effect=Exception("skip"),
+            ),
         ):
             profile = row_to_response(row)
     assert profile.user_id.endswith("0001")

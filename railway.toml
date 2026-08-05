@@ -8,6 +8,8 @@ dockerfilePath = "Dockerfile"
 # Speaking release delivery must run as a separate always-on Railway service
 # using the same image/env and start command: bash scripts/run_notification_worker.sh
 # Optional recovery cron (every 5 minutes): bash scripts/sweep_notification_outbox.sh
+# Plan reminders (Phase 6.5): daily cron ~07:00 IST → bash scripts/sweep_plan_reminders.sh
+# (enqueues learning.daily_reminder; the always-on worker above sends via Resend).
 
 [deploy]
 healthcheckPath = "/health"

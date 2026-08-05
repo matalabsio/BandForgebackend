@@ -147,3 +147,20 @@ class TaskStatusResponse(BaseModel):
 
 class GeneratePlanRequest(BaseModel):
     plan_tier: str = "full_skill_program"
+
+
+class TodayBundleResponse(BaseModel):
+    """Slim Today payload (Phase 4) — no full study_plan.weeks."""
+
+    user_id: str
+    todays_tasks: list[StudyTask] = Field(default_factory=list)
+    hub_progress: dict[str, SkillHubProgress] = Field(default_factory=dict)
+    prep_start: date | None = None
+    exam_date: date | None = None
+    total_days: int | None = None
+    current_day: int | None = None
+    days_remaining: int | None = None
+    skill_difficulty: dict[str, str] = Field(default_factory=dict)
+    current_band: float | None = None
+    target_band: float | None = None
+    gap_to_target: float | None = None

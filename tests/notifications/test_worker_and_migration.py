@@ -20,6 +20,7 @@ INDEX_MIGRATION = (
 def _row(**overrides):
     row = {
         "id": str(uuid4()),
+        "event_type": "speaking.release",
         "review_id": str(uuid4()),
         "attempt_id": str(uuid4()),
         "approval_version": 2,
@@ -111,6 +112,28 @@ def test_worker_claims_with_configured_lease_and_batch():
     ):
         assert asyncio.run(run_batch()) == 0
     claim.assert_called_once_with(batch_size=20, lease_seconds=120)
+
+
+def test_worker_sends_plan_reminder_email():
+    row = _row(
+        event_type="learning.daily_reminder",
+        review_id=None,
+        attempt_id=None,
+        approval_version=None,
+        payload={"student_name": "Student", "unfinished_count": 2, "task_titles": ["Listening"]},
+    )
+    with (
+        patch("app.notifications.worker.get_settings", return_value=_settings()),
+        patch("app.notifications.worker.repository.preflight", return_value=True),
+        patch(
+            "app.notifications.worker.ResendProvider.send",
+            new=AsyncMock(return_value=DeliveryResult("email-plan-1")),
+        ) as send,
+        patch("app.notifications.worker.repository.mark_sent") as sent,
+    ):
+        asyncio.run(deliver(row))
+    sent.assert_called_once_with(row, "email-plan-1")
+    assert "practice plan is waiting" in send.await_args.kwargs["subject"]
 
 
 def test_migration_has_atomic_claim_enqueue_idempotency_and_reopen_cancellation():

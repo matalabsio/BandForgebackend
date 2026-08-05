@@ -42,7 +42,8 @@ MODULE_LIVE_PARTS: dict[str, dict[str, tuple[int, ...]]] = {
     },
 }
 
-# Live part → DB content part (passages 3–4 reuse 1–2 until more content is seeded).
+# Legacy URL aliases only — live Reading for M01 is passages (1, 2).
+# Requests for passage 3/4 remap to 1/2 so old links do not 404.
 MODULE_CONTENT_PART_ALIAS: dict[str, dict[str, dict[int, int]]] = {
     M01_MOCK_TEST_ID: {
         "reading": {3: 1, 4: 2},

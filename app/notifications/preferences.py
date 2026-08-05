@@ -17,6 +17,7 @@ from app.speaking.schemas import (
 
 PREFERENCE_COLUMNS = (
     "id, phone, phone_verified_at, is_active, speaking_release_email_enabled, "
+    "plan_reminders_email, "
     "speaking_release_whatsapp_enabled, speaking_release_whatsapp_consented_at, "
     "speaking_release_whatsapp_consent_version"
 )
@@ -52,6 +53,7 @@ def _response(row: dict[str, Any]) -> NotificationPreferencesResponse:
     enabled = bool(row.get("speaking_release_whatsapp_enabled")) and eligible
     return NotificationPreferencesResponse(
         email_enabled=bool(row.get("speaking_release_email_enabled", True)),
+        plan_reminders_email=bool(row.get("plan_reminders_email", True)),
         whatsapp_enabled=enabled,
         whatsapp_eligible=eligible,
         masked_phone=_mask_phone(row.get("phone")),
@@ -74,6 +76,8 @@ def patch_preferences(
     changes: dict[str, Any] = {}
     if body.email_enabled is not None:
         changes["speaking_release_email_enabled"] = body.email_enabled
+    if body.plan_reminders_email is not None:
+        changes["plan_reminders_email"] = body.plan_reminders_email
     if body.whatsapp_enabled is True:
         if body.consent_confirmation != WHATSAPP_CONSENT_VERSION:
             raise HTTPException(
