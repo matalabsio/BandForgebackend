@@ -806,7 +806,7 @@ def build_personalized_study_plan(
     unique_skills = list(dict.fromkeys(session_order))
     skill_difficulty = classify_skills(bands, target)
     focus_skills = focus_skills_from_gaps(raw_gaps)
-    weekly_focus = f"Focus: {focus_label(focus_skills)}"
+    weekly_focus = f"Strengthen {focus_label(focus_skills)}"
 
     prior_status = _prior_task_status(prior_plan)
     completed_by_skill = completed_by_skill or {}

@@ -879,6 +879,14 @@ def invalidate_learning_profile_cache(user_id: UUID | str) -> None:
 
 def update_task_status(user_id: UUID, task_id: str, status: str) -> StudyPlan:
     """Patch one task status and return the updated study_plan only (fast path)."""
+    from fastapi import HTTPException
+
+    from app.learning.plan_day_access import (
+        day_access_denial_detail,
+        find_task_day,
+        is_plan_day_accessible,
+    )
+
     row = fetch_profile_row(user_id)
     if row is None:
         row = refresh_profile(user_id)
@@ -887,8 +895,24 @@ def update_task_status(user_id: UUID, task_id: str, status: str) -> StudyPlan:
     if not isinstance(study_plan, dict):
         study_plan = {}
 
-    found = False
     weeks = list(study_plan.get("weeks") or [])
+    _task_day, day_date = find_task_day(weeks, task_id)
+    if day_date is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    today = date.today().isoformat()
+    exam_raw = study_plan.get("exam_date") or row.get("exam_date")
+    exam_date = exam_raw if isinstance(exam_raw, str) else None
+    if exam_date is None and hasattr(exam_raw, "isoformat"):
+        exam_date = exam_raw.isoformat()
+
+    if not is_plan_day_accessible(day_date, today, exam_date, weeks):
+        raise HTTPException(
+            status_code=400,
+            detail=day_access_denial_detail(day_date, today, exam_date, weeks),
+        )
+
+    found = False
     new_weeks = []
     for week in weeks:
         if not isinstance(week, dict):
@@ -913,8 +937,6 @@ def update_task_status(user_id: UUID, task_id: str, status: str) -> StudyPlan:
         new_weeks.append({**week, "days": days})
 
     if not found:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Task not found")
 
     study_plan = {**study_plan, "weeks": new_weeks}
