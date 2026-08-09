@@ -21,7 +21,8 @@ from app.diagnostic.evaluation_schemas import (
     reconcile_overall_band,
     row_to_public_response,
 )
-from app.diagnostic.rate_limit import _buckets, check_evaluate_writing_rate_limit
+from app.diagnostic.rate_limit import check_evaluate_writing_rate_limit
+from app.security import rate_limit as shared_rl
 from app.diagnostic.writing_evaluator import (
     _is_cache_valid,
     compute_essay_hash,
@@ -635,18 +636,22 @@ def criteria_from_row(data: dict) -> dict:
 
 
 def test_rate_limit_blocks_fourth_request():
-    _buckets.clear()
+    shared_rl.reset_rate_limit_state_for_tests()
     request = MagicMock()
     request.headers = {}
     request.client = MagicMock(host="10.0.0.1")
 
-    for _ in range(3):
-        check_evaluate_writing_rate_limit(request)
+    with (
+        patch("app.security.rate_limit._redis_allow", return_value=None),
+        patch("app.security.rate_limit.rate_limit_fail_closed", return_value=False),
+    ):
+        for _ in range(3):
+            check_evaluate_writing_rate_limit(request)
 
-    with pytest.raises(Exception) as exc:
-        check_evaluate_writing_rate_limit(request)
+        with pytest.raises(Exception) as exc:
+            check_evaluate_writing_rate_limit(request)
     assert getattr(exc.value, "status_code", None) == 429
-    _buckets.clear()
+    shared_rl.reset_rate_limit_state_for_tests()
 
 
 def test_evaluate_writing_api_response_schema():

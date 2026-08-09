@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
+from app.security.rate_limit import enforce_tutor_chat_rate_limit
 from app.tutor.schemas import TutorChatRequest, TutorChatResponse, TutorSuggestionsResponse
 from app.tutor import service as tutor_service
 
@@ -21,6 +22,7 @@ async def tutor_chat(
     user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> TutorChatResponse:
     """Contextual writing tutor — essay + evaluation + history injected server-side."""
+    enforce_tutor_chat_rate_limit(user_id=str(user.id))
     return await tutor_service.chat(UUID(str(user.id)), body)
 
 

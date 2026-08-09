@@ -44,7 +44,10 @@ from app.auth.schemas import (
 from app.auth import service
 from app.config import get_settings
 from app.security.rate_limit import (
+    enforce_collect_lead_rate_limit,
+    enforce_forgot_password_rate_limit,
     enforce_login_rate_limit,
+    enforce_register_rate_limit,
     enforce_send_otp_rate_limit,
 )
 
@@ -87,7 +90,8 @@ def _clear_auth_cookies(response: Response) -> None:
 
 
 @router.post("/register", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest) -> MessageResponse:
+async def register(body: RegisterRequest, request: Request) -> MessageResponse:
+    enforce_register_rate_limit(request)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=AUTH_TEMP_BLOCK_MSG,
@@ -95,7 +99,8 @@ async def register(body: RegisterRequest) -> MessageResponse:
 
 
 @router.post("/collect-lead", response_model=MessageResponse)
-async def collect_lead(body: CollectLeadRequest) -> MessageResponse:
+async def collect_lead(body: CollectLeadRequest, request: Request) -> MessageResponse:
+    enforce_collect_lead_rate_limit(request)
     return await service.collect_signup_lead(
         phone=body.phone,
         email=str(body.email) if body.email else None,
@@ -193,7 +198,8 @@ async def logout(
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
-async def forgot_password(body: ForgotPasswordRequest) -> MessageResponse:
+async def forgot_password(body: ForgotPasswordRequest, request: Request) -> MessageResponse:
+    enforce_forgot_password_rate_limit(request)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=AUTH_TEMP_BLOCK_MSG,

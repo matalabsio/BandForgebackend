@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from app.ai_ops.budget import check_claude_budget, consume_claude_eval
+from app.ai_ops.budget import (
+    check_claude_budget,
+    check_groq_budget,
+    consume_claude_eval,
+    consume_groq_eval,
+)
 from app.ai_ops.circuit import (
     is_claude_circuit_open,
     record_claude_failure,
@@ -19,6 +24,7 @@ from app.writing.evaluation import word_count
 from app.writing.providers.claude_eval import ClaudeWritingProvider
 from app.writing.providers.constants import (
     PROVIDER_NAME_ANTHROPIC_CLAUDE,
+    PROVIDER_NAME_GROQ,
     PROVIDER_NAME_STUB,
     WritingLLMProviderKind,
 )
@@ -194,12 +200,16 @@ async def evaluate_writing_essay(
         chain.append(fallback_kind)
 
     budget = check_claude_budget()
+    groq_budget = check_groq_budget()
     circuit = is_claude_circuit_open()
     skip_claude_reason: str | None = None
+    skip_groq_reason: str | None = None
     if not budget.ok:
         skip_claude_reason = budget.reason or "budget_exceeded"
     elif circuit.open:
         skip_claude_reason = circuit.reason or "circuit_open"
+    if not groq_budget.ok:
+        skip_groq_reason = groq_budget.reason or "budget_exceeded"
 
     last_error: Exception | None = None
     for kind in chain:
@@ -211,6 +221,15 @@ async def evaluate_writing_essay(
                 skipped_reason=skip_claude_reason,
             )
             logger.warning("Skipping Claude: %s", skip_claude_reason)
+            continue
+        if kind == WritingLLMProviderKind.GROQ and skip_groq_reason:
+            log_writing_eval_request(
+                provider=PROVIDER_NAME_GROQ,
+                model=settings.groq_model,
+                estimate=estimate,
+                skipped_reason=skip_groq_reason,
+            )
+            logger.warning("Skipping Groq: %s", skip_groq_reason)
             continue
 
         provider = _provider_for_kind(kind)
@@ -227,6 +246,8 @@ async def evaluate_writing_essay(
             logger.info("Calling writing evaluator: %s (%s)", provider.name, provider.model)
             if kind == WritingLLMProviderKind.CLAUDE:
                 consume_claude_eval()
+            elif kind == WritingLLMProviderKind.GROQ:
+                consume_groq_eval()
             result = await _run_provider(
                 provider=provider,
                 task_part=task_part,

@@ -201,15 +201,18 @@ def list_paid_payments_missing_subscriptions(
 # --- subscriptions ---------------------------------------------------------
 
 
-def get_active_subscription(user_id: UUID) -> dict[str, Any] | None:
+def get_active_subscription(
+    user_id: UUID, *, use_cache: bool = True
+) -> dict[str, Any] | None:
     from app.cache.hybrid_cache import get_json, set_json
 
     cache_key = f"sub:active:{user_id}"
-    cached = get_json(cache_key)
-    if isinstance(cached, dict):
-        if cached.get("__miss__"):
-            return None
-        return cached
+    if use_cache:
+        cached = get_json(cache_key)
+        if isinstance(cached, dict):
+            if cached.get("__miss__"):
+                return None
+            return cached
 
     sb = get_supabase()
     now_iso = datetime.now(UTC).isoformat()
@@ -226,10 +229,11 @@ def get_active_subscription(user_id: UUID) -> dict[str, Any] | None:
     rows = result.data or []
     row = rows[0] if rows else None
     # Short TTL: collapses duplicate gates within one navigation (writing start, FSP).
-    if row is None:
-        set_json(cache_key, {"__miss__": True}, 15)
-    else:
-        set_json(cache_key, row, 15)
+    if use_cache:
+        if row is None:
+            set_json(cache_key, {"__miss__": True}, 15)
+        else:
+            set_json(cache_key, row, 15)
     return row
 
 
@@ -336,6 +340,9 @@ def confirm_payment_paid_bundle(
                     subscription_id=str(data.get("subscription_id") or ""),
                     order=razorpay_order_id,
                 )
+            uid = data.get("user_id")
+            if uid:
+                invalidate_active_subscription_cache(uid)
             return data
     except Exception as exc:
         msg = str(exc).lower()
@@ -410,6 +417,7 @@ def _confirm_payment_paid_sequential(
             payment_id=str(payment["id"]),
             order=razorpay_order_id,
         )
+        invalidate_active_subscription_cache(payment["user_id"])
         return out
 
     if not payment.get("plan_id"):

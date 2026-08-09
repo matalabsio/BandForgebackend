@@ -5,8 +5,11 @@ from __future__ import annotations
 from app.ai_ops.budget import (
     BudgetStatus,
     check_claude_budget,
+    check_groq_budget,
     consume_claude_eval,
+    consume_groq_eval,
     get_budget_status,
+    get_groq_budget_status,
 )
 from app.ai_ops.circuit import (
     CircuitStatus,
@@ -31,10 +34,13 @@ __all__ = [
     "CircuitStatus",
     "WritingCallEstimate",
     "check_claude_budget",
+    "check_groq_budget",
     "consume_claude_eval",
+    "consume_groq_eval",
     "estimate_tokens",
     "estimate_writing_call",
     "get_budget_status",
+    "get_groq_budget_status",
     "is_claude_circuit_open",
     "log_writing_eval_request",
     "recent_failures",

@@ -1,47 +1,17 @@
-"""Rate limiting for diagnostic evaluate-writing (3 per IP per hour)."""
+"""Rate limiting for diagnostic evaluate-writing (3 per IP per hour via Redis)."""
 
 from __future__ import annotations
 
-import time
-from collections import defaultdict
-from threading import Lock
+from fastapi import Request
 
-from fastapi import HTTPException, Request, status
-
-_LIMIT = 3
-_WINDOW_SEC = 3600
-
-# In-process fallback when Redis is unavailable (dev / single worker).
-_buckets: dict[str, list[float]] = defaultdict(list)
-_lock = Lock()
-
-
-def _client_ip(request: Request) -> str:
-    from app.security.rate_limit import client_ip
-
-    return client_ip(request)
-
-
-def _prune(timestamps: list[float], now: float) -> list[float]:
-    return [t for t in timestamps if now - t < _WINDOW_SEC]
+from app.security.rate_limit import enforce_evaluate_writing_rate_limit
 
 
 def check_evaluate_writing_rate_limit(request: Request) -> None:
     """Raise 429 if IP exceeded 3 evaluations in the last hour."""
-    ip = _client_ip(request)
-    now = time.time()
-
-    with _lock:
-        recent = _prune(_buckets[ip], now)
-        if len(recent) >= _LIMIT:
-            raise HTTPException(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many writing evaluations. Please try again in an hour.",
-            )
-        recent.append(now)
-        _buckets[ip] = recent
+    enforce_evaluate_writing_rate_limit(request)
 
 
 def record_evaluate_writing_rate_limit(request: Request) -> None:
-    """Count a Groq evaluation against the IP limit (not used on cache hits)."""
+    """Count a live AI evaluation against the IP limit (not used on cache hits)."""
     check_evaluate_writing_rate_limit(request)

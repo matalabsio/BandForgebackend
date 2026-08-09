@@ -447,6 +447,9 @@ def test_confirm_payment_paid_idempotent_for_already_paid():
         ),
         patch("app.payments.service.get_subscription", return_value=active_sub),
         patch("app.payments.service.repository.confirm_payment_paid_bundle") as bundle,
+        patch(
+            "app.payments.service.repository.invalidate_active_subscription_cache"
+        ) as inv_sub,
     ):
         result = service.confirm_payment_paid(
             razorpay_order_id="order_x",
@@ -454,6 +457,7 @@ def test_confirm_payment_paid_idempotent_for_already_paid():
         )
         assert result.is_active
         bundle.assert_not_called()
+        inv_sub.assert_called_once_with(USER_ID)
 
 
 def test_confirm_payment_paid_heals_paid_without_subscription():
@@ -480,13 +484,18 @@ def test_confirm_payment_paid_heals_paid_without_subscription():
             "app.payments.service.get_subscription",
             return_value=SubscriptionOut(is_active=True, plan_name="Premium"),
         ),
+        patch(
+            "app.payments.service.repository.invalidate_active_subscription_cache"
+        ) as inv_sub,
     ):
         result = service.confirm_payment_paid(
             razorpay_order_id="order_x",
             razorpay_payment_id="pay_x",
+            captured_amount=99900,
         )
         assert result.is_active
         bundle.assert_called_once()
+        inv_sub.assert_called_with(USER_ID)
 
 
 def test_confirm_payment_paid_calls_bundle_for_new_payment():
@@ -508,16 +517,89 @@ def test_confirm_payment_paid_calls_bundle_for_new_payment():
             "app.payments.service.get_subscription",
             return_value=SubscriptionOut(is_active=True, plan_name="Premium"),
         ),
+        patch(
+            "app.payments.service.repository.invalidate_active_subscription_cache"
+        ) as inv_sub,
     ):
         service.confirm_payment_paid(
             razorpay_order_id="order_x",
             razorpay_payment_id="pay_x",
             razorpay_signature="sig",
+            captured_amount=99900,
         )
         bundle.assert_called_once()
+        inv_sub.assert_called_with(USER_ID)
         kwargs = bundle.call_args.kwargs
         assert kwargs["razorpay_order_id"] == "order_x"
         assert kwargs["razorpay_payment_id"] == "pay_x"
+
+
+def test_confirm_payment_paid_invalidates_learning_cache_for_full_skill():
+    fsp_plan = {**_plan(), "slug": "full_skill_program", "name": "Full Skill Program"}
+    with (
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_created_payment(),
+        ),
+        patch("app.payments.service.repository.get_plan_by_id", return_value=fsp_plan),
+        patch(
+            "app.payments.service.repository.get_active_subscription",
+            return_value=None,
+        ),
+        patch(
+            "app.payments.service.repository.confirm_payment_paid_bundle",
+            return_value={"already_paid": False, "user_id": str(USER_ID)},
+        ),
+        patch(
+            "app.payments.service.get_subscription",
+            return_value=SubscriptionOut(
+                is_active=True,
+                plan_slug="full_skill_program",
+                plan_name="Full Skill Program",
+            ),
+        ),
+        patch("app.payments.service.repository.invalidate_active_subscription_cache"),
+        patch(
+            "app.learning.service.invalidate_learning_profile_cache"
+        ) as inv_learn,
+        patch(
+            "app.learning.service.schedule_personalized_plan_generation"
+        ) as sched,
+        patch(
+            "app.learning.ingest.load_user_exam_and_target",
+            return_value={"exam_date": "2026-12-01"},
+        ),
+    ):
+        result = service.confirm_payment_paid(
+            razorpay_order_id="order_x",
+            razorpay_payment_id="pay_x",
+            razorpay_signature="sig",
+            captured_amount=99900,
+        )
+        assert result.is_active
+        inv_learn.assert_called_once_with(USER_ID)
+        sched.assert_called_once_with(USER_ID)
+
+
+def test_get_active_subscription_use_cache_false_skips_cache_write():
+    empty = SimpleNamespace(data=[])
+    table = MagicMock()
+    table.select.return_value = table
+    table.eq.return_value = table
+    table.gt.return_value = table
+    table.order.return_value = table
+    table.limit.return_value = table
+    table.execute.return_value = empty
+    sb = MagicMock()
+    sb.table.return_value = table
+    with (
+        patch("app.payments.repository.get_supabase", return_value=sb),
+        patch("app.cache.hybrid_cache.get_json") as get_json,
+        patch("app.cache.hybrid_cache.set_json") as set_json,
+    ):
+        assert repository.get_active_subscription(USER_ID, use_cache=False) is None
+        get_json.assert_not_called()
+        set_json.assert_not_called()
 
 
 def test_confirm_payment_paid_enforces_ownership():

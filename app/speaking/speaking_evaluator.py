@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 
 import httpx
 
+from app.ai_ops.budget import check_claude_budget, check_groq_budget, consume_claude_eval, consume_groq_eval
+from app.ai_ops.circuit import is_claude_circuit_open
 from app.config import get_settings
 from app.speaking import repository as repo
 from app.speaking.evaluation_schemas import (
@@ -22,6 +24,8 @@ from app.speaking.evaluation_schemas import (
 )
 from app.speaking.fluency_metrics import aggregate_fluency_metrics, compute_fluency_metrics
 from app.speaking.providers.constants import (
+    PROVIDER_NAME_ANTHROPIC_CLAUDE,
+    PROVIDER_NAME_GROQ,
     PROVIDER_NAME_STUB,
     PROVIDER_VERSION,
 )
@@ -232,8 +236,32 @@ async def _evaluate_full_attempt(
         else:
             last_error: Exception | None = None
             selected_provider = None
+            claude_budget = check_claude_budget()
+            groq_budget = check_groq_budget()
+            circuit = is_claude_circuit_open()
+            skip_claude = (not claude_budget.ok) or circuit.open
+            skip_groq = not groq_budget.ok
             for provider in providers:
+                if (
+                    provider.name == PROVIDER_NAME_ANTHROPIC_CLAUDE
+                    and skip_claude
+                ):
+                    logger.warning(
+                        "Skipping Speaking Claude: %s",
+                        claude_budget.reason or circuit.reason or "budget/circuit",
+                    )
+                    continue
+                if provider.name == PROVIDER_NAME_GROQ and skip_groq:
+                    logger.warning(
+                        "Skipping Speaking Groq: %s",
+                        groq_budget.reason or "budget",
+                    )
+                    continue
                 try:
+                    if provider.name == PROVIDER_NAME_ANTHROPIC_CLAUDE:
+                        consume_claude_eval()
+                    elif provider.name == PROVIDER_NAME_GROQ:
+                        consume_groq_eval()
                     evaluation = await provider.evaluate_attempt(
                         responses=inputs, fluency_metrics=metrics
                     )
@@ -247,12 +275,21 @@ async def _evaluate_full_attempt(
                         exc_info=exc,
                     )
             if selected_provider is None:
-                if last_error is not None:
+                if settings.ai_budget_fallback_stub and (
+                    skip_claude or skip_groq or not providers
+                ):
+                    evaluation = _stub_attempt_evaluation(inputs)
+                    status_value = "ai_stub"
+                    provider_name = PROVIDER_NAME_STUB
+                    provider_model = PROVIDER_NAME_STUB
+                elif last_error is not None:
                     raise last_error
-                raise RuntimeError("No Speaking evaluation provider completed")
-            provider_name = selected_provider.name
-            provider_model = selected_provider.model
-            status_value = "ai_complete"
+                else:
+                    raise RuntimeError("No Speaking evaluation provider completed")
+            else:
+                provider_name = selected_provider.name
+                provider_model = selected_provider.model
+                status_value = "ai_complete"
         _apply_pronunciation_advisory(evaluation)
         criteria = evaluation_to_admin_criteria(evaluation)
         scores = {

@@ -10,7 +10,12 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
-from app.ai_ops.budget import check_claude_budget, consume_claude_eval
+from app.ai_ops.budget import (
+    check_claude_budget,
+    check_groq_budget,
+    consume_claude_eval,
+    consume_groq_eval,
+)
 from app.ai_ops.circuit import is_claude_circuit_open
 from app.config import get_settings
 from app.tutor.context import build_context_pack, used_context_summary
@@ -24,7 +29,6 @@ from app.tutor.schemas import (
 )
 from app.tutor.stub import stub_tutor_chat_json, stub_tutor_reply
 from app.writing.providers.constants import (
-    PROVIDER_NAME_ANTHROPIC_CLAUDE,
     PROVIDER_NAME_STUB,
     WritingLLMProviderKind,
 )
@@ -137,13 +141,18 @@ async def _live_chat(
         chain.append(fallback)
 
     budget = check_claude_budget()
+    groq_budget = check_groq_budget()
     circuit = is_claude_circuit_open()
     skip_claude = (not budget.ok) or circuit.open
+    skip_groq = not groq_budget.ok
 
     last_error: Exception | None = None
     for kind in chain:
         if kind == WritingLLMProviderKind.CLAUDE and skip_claude:
             logger.warning("Tutor skip Claude: budget/circuit")
+            continue
+        if kind == WritingLLMProviderKind.GROQ and skip_groq:
+            logger.warning("Tutor skip Groq: %s", groq_budget.reason or "budget")
             continue
         provider = _provider_for_kind(kind)
         if provider is None or not provider.configured():
@@ -151,6 +160,8 @@ async def _live_chat(
         try:
             if kind == WritingLLMProviderKind.CLAUDE:
                 consume_claude_eval()
+            elif kind == WritingLLMProviderKind.GROQ:
+                consume_groq_eval()
             content, _raw = await provider.chat_json(system=SYSTEM_PROMPT, user=user_prompt)
             data = _extract_json_obj(content)
             if data and data.get("reply"):

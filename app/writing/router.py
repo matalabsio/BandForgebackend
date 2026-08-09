@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.diagnostic.access import assert_mock_access
 from app.security.entitlements import assert_premium_mock_access
+from app.security.rate_limit import enforce_writing_submit_rate_limit
 from app.skill_program_gate import assert_skill_program_module_start
 from app.writing import service
 from app.writing.schemas import (
@@ -146,6 +147,7 @@ def submit_writing(
 ) -> SubmitWritingResponse:
     started = perf_counter()
     timing = WritingSubmitTiming()
+    enforce_writing_submit_rate_limit(user_id=str(current_user.id))
     payload = [
         {"question_id": str(a.question_id), "user_answer": a.user_answer}
         for a in body.answers

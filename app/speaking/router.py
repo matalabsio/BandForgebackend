@@ -10,7 +10,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.diagnostic.access import assert_mock_access
+from app.notifications import preferences
 from app.security.entitlements import assert_premium_mock_access
+from app.security.rate_limit import enforce_speaking_submit_rate_limit
 from app.skill_program_gate import assert_skill_program_module_start
 from app.speaking import service
 from app.speaking.schemas import (
@@ -27,7 +29,6 @@ from app.speaking.schemas import (
     NotificationPreferencesResponse,
     PatchNotificationPreferencesRequest,
 )
-from app.notifications import preferences
 
 router = APIRouter(prefix="/api/speaking", tags=["speaking"])
 
@@ -203,6 +204,7 @@ def finalize_speaking(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
     background_tasks: BackgroundTasks,
 ) -> SubmitSpeakingResponse:
+    enforce_speaking_submit_rate_limit(user_id=str(current_user.id))
     return service.finalize_attempt(
         attempt_id=attempt_id,
         user_id=current_user.id,
@@ -221,6 +223,7 @@ async def submit_speaking(
     file: UploadFile = File(...),
     duration_sec: Annotated[int | None, Form()] = None,
 ) -> SubmitSpeakingResponse:
+    enforce_speaking_submit_rate_limit(user_id=str(current_user.id))
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:

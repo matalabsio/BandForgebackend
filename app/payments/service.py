@@ -275,7 +275,7 @@ def _compute_subscription_dates(
 ) -> tuple[datetime, datetime]:
     """Stack new subscription on top of any active one."""
     now = datetime.now(UTC)
-    existing = repository.get_active_subscription(user_id)
+    existing = repository.get_active_subscription(user_id, use_cache=False)
     starts_at = now
     if existing:
         current_expiry = _parse_dt(existing.get("expires_at"))
@@ -344,6 +344,7 @@ def confirm_payment_paid(
                 payment_id=str(payment["id"]),
                 order=razorpay_order_id,
             )
+            repository.invalidate_active_subscription_cache(payment_user_id)
             return get_subscription(user_id=payment_user_id)
         # Paid but missing subscription — continue into bundle/fallback to repair.
 
@@ -377,11 +378,16 @@ def confirm_payment_paid(
         starts_at=starts_at,
         expires_at=expires_at,
     )
+    repository.invalidate_active_subscription_cache(payment_user_id)
 
     if plan.get("slug") == "full_skill_program":
         from app.learning.ingest import load_user_exam_and_target
-        from app.learning.service import schedule_personalized_plan_generation
+        from app.learning.service import (
+            invalidate_learning_profile_cache,
+            schedule_personalized_plan_generation,
+        )
 
+        invalidate_learning_profile_cache(payment_user_id)
         schedule_personalized_plan_generation(payment_user_id)
         user_row = load_user_exam_and_target(payment_user_id)
         if not user_row or not user_row.get("exam_date"):

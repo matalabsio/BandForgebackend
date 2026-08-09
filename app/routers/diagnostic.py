@@ -35,6 +35,10 @@ from app.diagnostic.writing_evaluator import (
     get_diagnostic_writing_status,
     start_diagnostic_writing_evaluation,
 )
+from app.security.rate_limit import (
+    enforce_guest_session_rate_limit,
+    enforce_submit_review_rate_limit,
+)
 from app.services import user_activity
 
 router = APIRouter(prefix="/api/diagnostic", tags=["diagnostic"])
@@ -106,8 +110,10 @@ async def diagnostic_complete(
 @router.post("/submit-review", response_model=DiagnosticReviewSubmitResponse)
 async def diagnostic_submit_review(
     body: DiagnosticReviewSubmitRequest,
+    request: Request,
 ) -> DiagnosticReviewSubmitResponse:
     """Queue a marketing diagnostic for human examiner review (no login required)."""
+    enforce_submit_review_rate_limit(request)
     return await submit_diagnostic_review(body)
 
 
@@ -158,6 +164,7 @@ async def create_guest_session(
     current_user: Annotated[UserPublic | None, Depends(get_optional_user)] = None,
 ) -> AuthResponse:
     """Create or refresh a diagnostic guest JWT (no Google login required)."""
+    enforce_guest_session_rate_limit(request)
     auth, refresh = await service.create_guest_session(
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,

@@ -62,13 +62,28 @@ def test_estimate_writing_call_includes_cost():
 
 def test_budget_blocks_when_daily_limit_reached():
     with patch("app.ai_ops.budget.get_settings") as settings, patch(
-        "app.ai_ops.budget.ai_metrics.get_counter",
-        side_effect=lambda metric, period="day": 20 if period == "day" else 20,
+        "app.ai_ops.budget.ai_metrics.get_day_month_counters",
+        return_value=(20, 20),
     ):
         settings.return_value.claude_daily_limit = 20
         settings.return_value.claude_monthly_limit = 100
         settings.return_value.claude_warning_at = 16
         status = check_claude_budget()
+        assert status.ok is False
+        assert "daily" in (status.reason or "")
+
+
+def test_groq_budget_blocks_when_daily_limit_reached():
+    from app.ai_ops.budget import check_groq_budget
+
+    with patch("app.ai_ops.budget.get_settings") as settings, patch(
+        "app.ai_ops.budget.ai_metrics.get_day_month_counters",
+        return_value=(500, 500),
+    ):
+        settings.return_value.groq_daily_limit = 500
+        settings.return_value.groq_monthly_limit = 5000
+        settings.return_value.groq_warning_at = 400
+        status = check_groq_budget()
         assert status.ok is False
         assert "daily" in (status.reason or "")
 

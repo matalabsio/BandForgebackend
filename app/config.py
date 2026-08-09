@@ -94,6 +94,49 @@ class Settings(BaseSettings):
 
     redis_url: str = Field(default="", validation_alias="REDIS_URL")
 
+    # Rate limiting — None means auto (fail-closed in production when REDIS_URL is set).
+    rate_limit_fail_closed: bool | None = Field(
+        default=None,
+        validation_alias="RATE_LIMIT_FAIL_CLOSED",
+        description="When true, Redis outage returns 503 instead of memory fallback.",
+    )
+    rate_limit_login: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_LOGIN"
+    )
+    rate_limit_create_order: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_CREATE_ORDER"
+    )
+    rate_limit_verify: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_VERIFY"
+    )
+    rate_limit_register: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_REGISTER"
+    )
+    rate_limit_forgot_password: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_FORGOT_PASSWORD"
+    )
+    rate_limit_collect_lead: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_COLLECT_LEAD"
+    )
+    rate_limit_guest_session: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_GUEST_SESSION"
+    )
+    rate_limit_submit_review: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_SUBMIT_REVIEW"
+    )
+    rate_limit_evaluate_writing: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_EVALUATE_WRITING"
+    )
+    rate_limit_ai_writing_submit: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_AI_WRITING_SUBMIT"
+    )
+    rate_limit_ai_speaking_submit: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_AI_SPEAKING_SUBMIT"
+    )
+    rate_limit_ai_tutor_chat: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_AI_TUTOR_CHAT"
+    )
+
     msg91_auth_key: str = Field(default="", validation_alias="MSG91_AUTH_KEY")
     msg91_template_id: str = Field(default="", validation_alias="MSG91_TEMPLATE_ID")
 
@@ -219,6 +262,15 @@ class Settings(BaseSettings):
         validation_alias="CLAUDE_WARNING_AT",
         description="Warn when daily Claude evals reach this count (0 = 80% of daily limit).",
     )
+    groq_daily_limit: int = Field(default=500, validation_alias="GROQ_DAILY_LIMIT")
+    groq_monthly_limit: int = Field(
+        default=5000, validation_alias="GROQ_MONTHLY_LIMIT"
+    )
+    groq_warning_at: int = Field(
+        default=0,
+        validation_alias="GROQ_WARNING_AT",
+        description="Warn when daily Groq evals reach this count (0 = 80% of daily limit).",
+    )
     ai_circuit_fail_threshold: int = Field(
         default=5, validation_alias="AI_CIRCUIT_FAIL_THRESHOLD"
     )
@@ -314,6 +366,15 @@ class Settings(BaseSettings):
     )
     @classmethod
     def parse_bool_fields(cls, v: object) -> bool:
+        return _env_bool(v)
+
+    @field_validator("rate_limit_fail_closed", mode="before")
+    @classmethod
+    def parse_optional_bool(cls, v: object) -> bool | None:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
         return _env_bool(v)
 
     @field_validator(
