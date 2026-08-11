@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 MockStatus = Literal["draft", "published", "archived"]
 UserRole = Literal["student", "admin", "super_admin"]
@@ -1002,3 +1002,55 @@ class BankSpeakingPartResponse(BaseModel):
     practice_set_id: UUID
     part: int
     questions: list[SpeakingBuilderQuestionOut] = Field(default_factory=list)
+
+
+StreamVideoTag = Literal[
+    "bandforge-intro",
+    "ielts-intro",
+    "listening-intro",
+    "reading-intro",
+    "writing-intro",
+    "speaking-intro",
+]
+
+
+class StreamDirectUploadRequest(BaseModel):
+    tag: StreamVideoTag
+    title: str = ""
+    max_duration_seconds: int = Field(default=3600, ge=1, le=21600)
+
+
+class StreamDirectUploadResponse(BaseModel):
+    uid: str
+    uploadURL: str
+
+
+class StreamVideoCompleteRequest(BaseModel):
+    tag: StreamVideoTag
+    title: str = ""
+    stream_uid: str
+    duration_min: int = Field(default=0, ge=0, le=240)
+
+
+class StreamVideoItem(BaseModel):
+    id: str | None = None
+    tag: str
+    title: str = ""
+    stream_uid: str
+    playback_url: str = ""
+    duration_min: int = 0
+    status: str = "ready"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    hubs_updated: int | None = None
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def stringify_id(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        return str(v)
+
+
+class StreamVideoListResponse(BaseModel):
+    items: list[StreamVideoItem] = Field(default_factory=list)

@@ -15,6 +15,8 @@ class PracticeVideo(BaseModel):
     title: str = ""
     url: str = ""
     duration_min: int = 0
+    tag: str | None = None
+    stream_uid: str | None = None
 
 
 class PracticeHubOut(BaseModel):

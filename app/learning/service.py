@@ -869,6 +869,8 @@ def invalidate_learning_profile_cache(user_id: UUID | str) -> None:
         [
             f"learning:profile:{user_id}",
             f"practice:progress:{user_id}",
+            f"dashboard_streak:{user_id}",
+            f"dashboard_streak:v2:{user_id}",
         ]
     )
     try:

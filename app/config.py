@@ -394,6 +394,7 @@ class Settings(BaseSettings):
         "razorpay_key_id",
         "razorpay_key_secret",
         "razorpay_webhook_secret",
+        "cloudflare_api_token",
         mode="before",
     )
     @classmethod
@@ -405,6 +406,17 @@ class Settings(BaseSettings):
     r2_secret_access_key: str = ""
     r2_bucket_name: str = "bandforge-speaking-audio"
     r2_endpoint_url: str = ""
+
+    # Cloudflare API token (Stream Edit) — separate from R2 S3 keys
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: str = ""
+
+    # Cloudflare Stream playback (customer subdomain without .cloudflarestream.com)
+    stream_customer_code: str = ""
+    stream_signing_key_id: str = ""
+    stream_signing_key_jwk: str = ""
+    stream_token_ttl_seconds: int = 3600
+    practice_lock_public_videos: bool = True
 
     api_host: str = Field(
         default="0.0.0.0",

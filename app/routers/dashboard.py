@@ -421,16 +421,85 @@ class DashboardStreak(BaseModel):
     longest_streak: int = 0
     activity_days: list[ActivityDayLite] = Field(default_factory=list)
     week_active_days: int = 0
+    prep_start: str | None = None
+    exam_date: str | None = None
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _load_prep_window(user_id: str) -> tuple[date | None, date | None]:
+    """prep_start → exam_date from the learning profile, then users.exam_date."""
+    client = get_supabase()
+    prep: date | None = None
+    exam: date | None = None
+    try:
+        res = execute_with_retry(
+            lambda: (
+                client.table("user_learning_profiles")
+                .select("prep_start, exam_date, study_plan")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+        )
+        row = (res.data or [None])[0] or {}
+        plan = row.get("study_plan") if isinstance(row.get("study_plan"), dict) else {}
+        prep = _parse_iso_date(row.get("prep_start")) or _parse_iso_date(
+            plan.get("prep_start")
+        )
+        exam = _parse_iso_date(row.get("exam_date")) or _parse_iso_date(
+            plan.get("exam_date")
+        )
+    except Exception:
+        pass
+    if exam is None:
+        try:
+            ures = execute_with_retry(
+                lambda: (
+                    client.table("users")
+                    .select("exam_date")
+                    .eq("id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+            )
+            urow = (ures.data or [None])[0] or {}
+            exam = _parse_iso_date(urow.get("exam_date"))
+        except Exception:
+            pass
+    return prep, exam
+
+
+def _activity_span(
+    day_counts: dict[date, int], start: date, end: date
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    cursor = start
+    while cursor <= end:
+        out.append({"date": cursor.isoformat(), "count": int(day_counts.get(cursor, 0))})
+        cursor += timedelta(days=1)
+    return out
 
 
 @router.get("/streak", response_model=DashboardStreak)
 def dashboard_streak(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> DashboardStreak:
-    """Lite streak + recent activity strip (mocks + plan/hub days)."""
+    """Streak + heatmap from prep start through the user's exam date."""
     request_started = perf_counter()
     user_id = str(current_user.id)
-    cache_key = f"dashboard_streak:{user_id}"
+    cache_key = f"dashboard_streak:v2:{user_id}"
     cached = get_json(cache_key)
     if isinstance(cached, dict):
         try:
@@ -454,12 +523,29 @@ def dashboard_streak(
 
     day_counts = build_user_activity_day_counts(UUID(user_id))
     current_streak, longest_streak = streaks_from_counts(day_counts)
-    cal = ua_activity_calendar(day_counts, days=14)
+    today = datetime.now(APP_TZ).date()
+    prep, exam = _load_prep_window(user_id)
+    start = prep or (today - timedelta(days=55))
+    end = exam or today
+    if end < start:
+        start = end
+    max_days = 120
+    if (end - start).days + 1 > max_days:
+        if end >= today:
+            end = min(end, today + timedelta(days=max_days - 1))
+            start = max(start, end - timedelta(days=max_days - 1))
+            start = min(start, today)
+        else:
+            end = min(end, today)
+            start = end - timedelta(days=max_days - 1)
+    cal = _activity_span(day_counts, start, end)
     response = DashboardStreak(
         current_streak=current_streak,
         longest_streak=longest_streak,
         activity_days=[ActivityDayLite(**row) for row in cal],
         week_active_days=week_active_days(day_counts),
+        prep_start=prep.isoformat() if prep else None,
+        exam_date=exam.isoformat() if exam else None,
     )
     set_json(cache_key, response.model_dump(mode="json"), ttl_seconds=30)
     print(

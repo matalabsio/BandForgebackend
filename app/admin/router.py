@@ -24,6 +24,7 @@ from app.admin import (
     writing_builder,
     review_analytics as admin_review_analytics,
     speaking,
+    stream_videos as admin_stream_videos,
     users,
     writing,
 )
@@ -95,6 +96,11 @@ from app.admin.schemas import (
     SendDiagnosticReportResponse,
     SpeakingQueueResponse,
     SpeakingReviewDetail,
+    StreamDirectUploadRequest,
+    StreamDirectUploadResponse,
+    StreamVideoCompleteRequest,
+    StreamVideoItem,
+    StreamVideoListResponse,
     WritingQueueResponse,
     WritingReviewDetail,
 )
@@ -127,6 +133,45 @@ def get_ai_health_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
 ) -> admin_ai_ops.AiHealthResponse:
     return admin_ai_ops.get_ai_health()
+
+
+@router.get("/stream/videos", response_model=StreamVideoListResponse)
+def list_stream_videos_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> StreamVideoListResponse:
+    items = [
+        StreamVideoItem.model_validate(row)
+        for row in admin_stream_videos.list_stream_videos()
+    ]
+    return StreamVideoListResponse(items=items)
+
+
+@router.post("/stream/direct-upload", response_model=StreamDirectUploadResponse)
+def create_stream_direct_upload_route(
+    body: StreamDirectUploadRequest,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> StreamDirectUploadResponse:
+    created = admin_stream_videos.start_direct_upload(
+        tag=body.tag,
+        title=body.title,
+        max_duration_seconds=body.max_duration_seconds,
+    )
+    return StreamDirectUploadResponse(uid=created["uid"], uploadURL=created["uploadURL"])
+
+
+@router.post("/stream/videos/complete", response_model=StreamVideoItem)
+def complete_stream_video_route(
+    body: StreamVideoCompleteRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> StreamVideoItem:
+    saved = admin_stream_videos.complete_stream_video(
+        tag=body.tag,
+        title=body.title,
+        stream_uid=body.stream_uid,
+        duration_min=body.duration_min,
+        admin_id=admin.id,
+    )
+    return StreamVideoItem.model_validate(saved)
 
 
 @router.get("/dashboard/metrics", response_model=DashboardMetrics)
