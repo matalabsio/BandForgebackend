@@ -42,11 +42,13 @@ def playback_iframe_url(*, customer_code: str, stream_uid: str) -> str:
 
 def _credentials() -> tuple[str, str]:
     settings = get_settings()
-    account_id = (settings.cloudflare_account_id or settings.r2_account_id or "").strip()
+    account_id = (settings.cloudflare_account_id or "").strip()
     token = (settings.cloudflare_api_token or "").strip()
     if not account_id or not token:
         raise StreamError(
-            "Cloudflare Stream is not configured (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN).",
+            "Cloudflare Stream is not configured on Railway. Set CLOUDFLARE_ACCOUNT_ID, "
+            "CLOUDFLARE_API_TOKEN, and STREAM_CUSTOMER_CODE (Stream lives on a different "
+            "account than R2).",
             status_code=503,
         )
     return account_id, token

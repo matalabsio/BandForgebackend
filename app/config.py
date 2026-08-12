@@ -413,11 +413,32 @@ class Settings(BaseSettings):
     r2_endpoint_url: str = ""
 
     # Cloudflare API token (Stream Edit) — separate from R2 S3 keys
-    cloudflare_account_id: str = ""
-    cloudflare_api_token: str = ""
+    cloudflare_account_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID"),
+    )
+    cloudflare_api_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_API_TOKEN",
+            "CF_API_TOKEN",
+            "STREAM_API_TOKEN",
+        ),
+    )
+    public_api_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "PUBLIC_API_URL",
+            "RAILWAY_PUBLIC_DOMAIN",
+        ),
+        description="Public Railway API origin used for browser PUTs that skip Vercel.",
+    )
 
     # Cloudflare Stream playback (customer subdomain without .cloudflarestream.com)
-    stream_customer_code: str = ""
+    stream_customer_code: str = Field(
+        default="",
+        validation_alias=AliasChoices("STREAM_CUSTOMER_CODE", "CF_STREAM_CUSTOMER_CODE"),
+    )
     stream_signing_key_id: str = ""
     stream_signing_key_jwk: str = ""
     stream_token_ttl_seconds: int = 3600
@@ -467,6 +488,9 @@ class Settings(BaseSettings):
             ):
                 if local not in origins:
                     origins.append(local)
+        live_admin = "https://admin-rose-eight-52.vercel.app"
+        if live_admin not in origins:
+            origins.append(live_admin)
         return origins
 
 

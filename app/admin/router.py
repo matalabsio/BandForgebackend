@@ -105,15 +105,14 @@ from app.admin.schemas import (
     WritingQueueResponse,
     WritingReviewDetail,
 )
+from app.admin.audio_upload_ticket import (
+    mint_audio_upload_ticket,
+    parse_audio_upload_ticket,
+    public_api_origin,
+)
 from app.auth.schemas import UserPublic
 from app.listening.service import invalidate_listening_audio_caches
-from app.storage.r2 import (
-    ensure_browser_put_cors,
-    generate_presigned_put_url,
-    object_exists,
-    object_head,
-    upload_object,
-)
+from app.storage.r2 import object_exists, object_head, upload_object
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -305,32 +304,63 @@ class ListeningAudioUploadUrlRequest(BaseModel):
     content_type: str = "audio/mpeg"
 
 
-def _listening_audio_upload_url(*, key: str, size_bytes: int, content_type: str) -> dict[str, object]:
+def _listening_audio_upload_url(
+    *,
+    request: Request,
+    key: str,
+    size_bytes: int,
+    content_type: str,
+    admin_id: UUID,
+    direct_path: str,
+) -> dict[str, object]:
     mime = (content_type or "audio/mpeg").split(";")[0].strip() or "audio/mpeg"
     if not mime.startswith("audio/"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must be audio.")
-    try:
-        ensure_browser_put_cors()
-    except Exception:
-        pass
-    try:
-        upload_url = generate_presigned_put_url(
-            key,
-            content_type=mime,
-            expiry=900,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
+    ticket = mint_audio_upload_ticket(
+        key=key,
+        admin_id=str(admin_id),
+        size_bytes=size_bytes,
+    )
+    origin = public_api_origin(request)
+    direct_url = f"{origin}{direct_path}"
     return {
         "ok": True,
         "audio_key": key,
-        "upload_url": upload_url,
+        "upload_url": direct_url,
+        "direct_upload_url": direct_url,
+        "ticket": ticket,
         "content_type": mime,
         "expires_in": 900,
     }
+
+
+async def _store_ticketed_audio(
+    request: Request,
+    *,
+    expected_key: str,
+) -> bytes:
+    ticket = (request.headers.get("x-upload-ticket") or "").strip()
+    payload = parse_audio_upload_ticket(ticket)
+    if str(payload.get("k") or "") != expected_key:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Upload ticket key mismatch.")
+    body = await request.body()
+    expected_size = int(payload.get("s") or 0)
+    if len(body) != expected_size:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded bytes do not match the ticket size.",
+        )
+    if len(body) < ADMIN_AUDIO_MIN_BYTES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Audio file is too small to be a valid listening MP3.",
+        )
+    if len(body) > ADMIN_AUDIO_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Audio file is too large.",
+        )
+    return body
 
 
 # --- Question bank (standalone practice-set content) -------------------------
@@ -426,22 +456,44 @@ def save_bank_listening_route(
 
 @router.post("/question-bank/sets/{set_id}/listening/{part}/audio-upload-url")
 def bank_listening_audio_upload_url_route(
+    request: Request,
     set_id: UUID,
     part: int,
     body: ListeningAudioUploadUrlRequest,
-    _admin: Annotated[UserPublic, Depends(require_admin)],
+    admin: Annotated[UserPublic, Depends(require_admin)],
 ):
     if part < 1 or part > 4:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Part must be 1–4.")
     key = question_bank.default_bank_audio_key(set_id=set_id, part=part)
     return {
         **_listening_audio_upload_url(
+            request=request,
             key=key,
             size_bytes=body.size_bytes,
             content_type=body.content_type,
+            admin_id=admin.id,
+            direct_path=f"/admin/question-bank/sets/{set_id}/listening/{part}/audio-direct",
         ),
         "part": part,
     }
+
+
+@router.put("/question-bank/sets/{set_id}/listening/{part}/audio-direct")
+async def bank_listening_audio_direct_route(
+    request: Request,
+    set_id: UUID,
+    part: int,
+):
+    key = question_bank.default_bank_audio_key(set_id=set_id, part=part)
+    content = await _store_ticketed_audio(request, expected_key=key)
+    try:
+        upload_object(key=key, body=content, content_type="audio/mpeg")
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return {"ok": True, "audio_key": key, "part": part}
 
 
 @router.post("/question-bank/sets/{set_id}/listening/{part}/audio")
@@ -952,17 +1004,40 @@ def listening_audio_status_route(
 
 @router.post("/mocks/{mock_id}/ingest/audio-upload-url")
 def mock_listening_audio_upload_url_route(
+    request: Request,
     mock_id: UUID,
     body: ListeningAudioUploadUrlRequest,
-    _admin: Annotated[UserPublic, Depends(require_admin)],
+    admin: Annotated[UserPublic, Depends(require_admin)],
     part: int = Query(..., ge=1, le=4),
 ):
     key = f"listening/{mock_id}/part-{part}/full.mp3"
     return _listening_audio_upload_url(
+        request=request,
         key=key,
         size_bytes=body.size_bytes,
         content_type=body.content_type,
+        admin_id=admin.id,
+        direct_path=f"/admin/mocks/{mock_id}/ingest/audio-direct?part={part}",
     )
+
+
+@router.put("/mocks/{mock_id}/ingest/audio-direct")
+async def mock_listening_audio_direct_route(
+    request: Request,
+    mock_id: UUID,
+    part: int = Query(..., ge=1, le=4),
+):
+    key = f"listening/{mock_id}/part-{part}/full.mp3"
+    content = await _store_ticketed_audio(request, expected_key=key)
+    try:
+        upload_object(key=key, body=content, content_type="audio/mpeg")
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    invalidate_listening_audio_caches(mock_test_id=mock_id)
+    return {"ok": True, "audio_key": key}
 
 
 @router.post("/mocks/{mock_id}/ingest/audio")

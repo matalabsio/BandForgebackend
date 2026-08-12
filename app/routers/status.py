@@ -30,6 +30,18 @@ def _r2_state() -> str:
     return "off"
 
 
+def _stream_state() -> str:
+    s = get_settings()
+    account = (s.cloudflare_account_id or "").strip()
+    token = (s.cloudflare_api_token or "").strip()
+    customer = (s.stream_customer_code or "").strip()
+    if account and token and customer:
+        return "configured"
+    if account and token:
+        return "missing_customer_code"
+    return "missing_token" if account else "off"
+
+
 @router.get("/ping")
 def ping() -> dict[str, str]:
     """Minimal liveness — use for Railway/Vercel uptime checks."""
@@ -60,6 +72,7 @@ def status_summary(
         "redis": redis_status(),
         "google_oauth": _google_oauth_state(),
         "r2": _r2_state(),
+        "stream": _stream_state(),
     }
     if probe:
         host_status, hint = probe_supabase(
