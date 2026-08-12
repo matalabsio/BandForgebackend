@@ -155,6 +155,7 @@ def create_stream_direct_upload_route(
         tag=body.tag,
         title=body.title,
         max_duration_seconds=body.max_duration_seconds,
+        upload_length=body.upload_length,
     )
     return StreamDirectUploadResponse(uid=created["uid"], uploadURL=created["uploadURL"])
 
@@ -288,6 +289,7 @@ def delete_mock_route(
 
 
 ADMIN_AUDIO_MAX_BYTES = 200 * 1024 * 1024
+ADMIN_WATCH_VIDEO_MAX_BYTES = 200 * 1024 * 1024
 
 
 # --- Question bank (standalone practice-set content) -------------------------
@@ -442,6 +444,144 @@ def bank_listening_audio_status_route(
         "playable": playable,
         "size_bytes": size_bytes,
         "part": part,
+    }
+
+
+@router.post("/question-bank/sets/{set_id}/watch-video/direct-upload")
+def bank_watch_video_direct_upload_route(
+    set_id: UUID,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    upload_length: int = Query(..., ge=1, le=20_000_000_000),
+    title: str = Query(default="Set Watch explainer"),
+):
+    """Start Cloudflare Stream tus upload for this set (requireSignedURLs)."""
+    from app.storage.stream import StreamError, create_tus_upload
+
+    _ = admin
+    question_bank.get_question_bank_set(set_id=set_id)
+    try:
+        created = create_tus_upload(
+            upload_length=int(upload_length),
+            title=(title or "Set Watch explainer").strip() or "Set Watch explainer",
+            max_duration_seconds=3600,
+            require_signed_urls=True,
+        )
+    except StreamError as exc:
+        raise HTTPException(exc.status_code, detail=str(exc)) from exc
+    return {"uid": created["uid"], "uploadURL": created["uploadURL"], "set_id": str(set_id)}
+
+
+@router.post("/question-bank/sets/{set_id}/watch-video/complete")
+def bank_watch_video_complete_route(
+    set_id: UUID,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+    stream_uid: str = Query(...),
+    title: str = Query(default="Set Watch explainer"),
+    duration_min: int = Query(default=0, ge=0, le=240),
+):
+    """Finalize set Watch video on Stream and store UID on the practice set."""
+    from app.admin.stream_videos import _customer_code
+    from app.storage.stream import (
+        StreamError,
+        create_signed_playback_token,
+        get_video,
+        playback_signed_iframe_url,
+        set_require_signed_urls,
+    )
+
+    _ = admin
+    uid = (stream_uid or "").strip()
+    if not uid:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="stream_uid required")
+    try:
+        set_require_signed_urls(uid, required=True)
+    except StreamError as exc:
+        raise HTTPException(exc.status_code, detail=str(exc)) from exc
+    try:
+        meta = get_video(uid)
+    except StreamError:
+        meta = None
+    question_bank.set_intro_stream_uid(set_id=set_id, stream_uid=uid)
+    preview = ""
+    try:
+        token = create_signed_playback_token(uid)
+        preview = playback_signed_iframe_url(
+            customer_code=_customer_code(),
+            token=token,
+        )
+    except StreamError:
+        preview = ""
+    state = ""
+    if isinstance(meta, dict):
+        state = str((meta.get("status") or {}).get("state") or "").strip().lower()
+    return {
+        "ok": True,
+        "intro_stream_uid": uid,
+        "preview_url": preview,
+        "status": "ready" if state in {"ready", "complete"} else (state or "processing"),
+        "duration_min": duration_min,
+        "title": (title or "").strip() or "Set Watch explainer",
+        "locked": True,
+        "provider": "cloudflare_stream",
+    }
+
+
+@router.get("/question-bank/sets/{set_id}/watch-video-status")
+def bank_watch_video_status_route(
+    set_id: UUID,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+):
+    from app.admin.stream_videos import _customer_code
+    from app.storage.stream import (
+        StreamError,
+        create_signed_playback_token,
+        get_video,
+        playback_signed_iframe_url,
+    )
+
+    uid = question_bank.get_set_intro_stream_uid(set_id=set_id)
+    if not uid:
+        return {
+            "intro_stream_uid": None,
+            "exists": False,
+            "playable": False,
+            "preview_url": None,
+            "status": None,
+            "locked": True,
+            "provider": "cloudflare_stream",
+        }
+    status_label = "processing"
+    playable = False
+    try:
+        meta = get_video(uid)
+        state = str((meta.get("status") or {}).get("state") or "").strip().lower()
+        if state in {"ready", "complete"}:
+            status_label = "ready"
+            playable = True
+        elif state in {"error", "failed"}:
+            status_label = "error"
+        elif state:
+            status_label = state
+    except StreamError:
+        status_label = "unknown"
+    preview_url = None
+    if playable:
+        try:
+            token = create_signed_playback_token(uid)
+            preview_url = playback_signed_iframe_url(
+                customer_code=_customer_code(),
+                token=token,
+            )
+        except StreamError:
+            preview_url = None
+    return {
+        "intro_stream_uid": uid,
+        "exists": True,
+        "playable": playable,
+        "preview_url": preview_url,
+        "status": status_label,
+        "locked": True,
+        "provider": "cloudflare_stream",
     }
 
 

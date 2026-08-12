@@ -16,6 +16,7 @@ from app.admin.answer_format import (
     split_answers,
 )
 from app.admin.audit import log_admin_action
+from app.admin.stream_videos import videos_for_skill
 from app.admin.listening_question_types import (
     MCQ_CHOOSE_TWO_UI,
     listening_to_display,
@@ -50,7 +51,14 @@ from app.admin.schemas import (
 from app.db.supabase_client import get_supabase
 
 SKILLS = frozenset({"listening", "reading", "writing", "speaking"})
+# New custom bank sets are one named unit (part 1). Legacy sets may still have more.
 MAX_PARTS: dict[str, int] = {
+    "listening": 1,
+    "reading": 1,
+    "writing": 1,
+    "speaking": 1,
+}
+LEGACY_MAX_PARTS: dict[str, int] = {
     "listening": 4,
     "reading": 4,
     "writing": 2,
@@ -68,7 +76,7 @@ def _assert_skill(skill: str) -> str:
 
 
 def _assert_part(module: str, part: int) -> None:
-    max_p = MAX_PARTS.get(module, 0)
+    max_p = LEGACY_MAX_PARTS.get(module, MAX_PARTS.get(module, 0))
     if part < 1 or part > max_p:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -114,10 +122,10 @@ def _bank_href(skill: str, hub_id: str) -> dict[str, Any]:
 
 
 def refresh_hub_submit_configs(*, practice_set_id: UUID, skill: str) -> None:
-    """Prefer module targeting (Phase 2); fall back to bank exercise only when
-    content exists but has no mock mapping and admin wants bank UI.
+    """Wire hub submit_config for personalized practice.
 
-    Phase 0 / slug-mapped hubs always get type=module with catalog+part.
+    Custom (non–Phase0) hubs always use the bank exercise UI.
+    Legacy Phase0 slugs keep mock module targeting when they still have content.
     """
     from app.practice.module_href import config_from_slug_or_defaults
 
@@ -152,20 +160,15 @@ def refresh_hub_submit_configs(*, practice_set_id: UUID, skill: str) -> None:
     for hub in hubs:
         hub_id = str(hub["id"])
         slug = str(hub.get("slug") or "")
-        if total_q > 0:
-            # Module UI for Phase 0 slugs / known mappings; else bank smoke form.
-            if slug.startswith("phase0-"):
-                config = config_from_slug_or_defaults(
-                    skill=skill,
-                    slug=slug,
-                    hub_id=hub_id,
-                    section_part=first_part,
-                )
-            else:
-                # Custom bank content without MT mapping → bank exercise
-                config = _bank_href(skill, hub_id)
+        if slug.startswith("phase0-") and total_q > 0:
+            config = config_from_slug_or_defaults(
+                skill=skill,
+                slug=slug,
+                hub_id=hub_id,
+                section_part=first_part,
+            )
         else:
-            config = _module_href(skill)
+            config = _bank_href(skill, hub_id)
         sb.table("practice_hubs").update({"submit_config": config}).eq(
             "id", hub_id
         ).execute()
@@ -307,15 +310,16 @@ def list_question_bank(*, skill: str) -> QuestionBankListResponse:
             int(s.get("set_number") or 0),
         ),
     )
-    max_parts = MAX_PARTS[skill]
     for s in sets_sorted:
         set_id = str(s["id"])
         bank = bank_by_id.get(str(s["bank_id"]), {})
         sec_rows = sections_by_set.get(set_id, [])
         by_part = {int(r["part"]): r for r in sec_rows}
+        existing_max = max(by_part.keys()) if by_part else 0
+        show_parts = max(MAX_PARTS[skill], existing_max, 1)
         section_summaries: list[QuestionBankSectionSummary] = []
         total_q = 0
-        for p in range(1, max_parts + 1):
+        for p in range(1, show_parts + 1):
             row = by_part.get(p)
             count = int(row["question_count"]) if row else 0
             total_q += count
@@ -380,7 +384,6 @@ def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
         .execute()
     ).data or []
     hub = hubs[0] if hubs else None
-    max_parts = MAX_PARTS[skill]
     sections = (
         sb.table("bank_sections")
         .select("id, part")
@@ -397,13 +400,15 @@ def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
             .execute()
         )
         q_counts[int(sec["part"])] = int(count.count or 0)
+    existing_max = max(q_counts.keys()) if q_counts else 0
+    show_parts = max(MAX_PARTS[skill], existing_max, 1)
     section_summaries = [
         QuestionBankSectionSummary(
             part=p,
             question_count=q_counts.get(p, 0),
             has_content=q_counts.get(p, 0) > 0,
         )
-        for p in range(1, max_parts + 1)
+        for p in range(1, show_parts + 1)
     ]
     return QuestionBankSetItem(
         set_id=UUID(str(s["id"])),
@@ -665,15 +670,16 @@ def create_question_bank_set(
     ).data or []
     next_sort = int(sort_rows[0]["sort_order"] or 0) + 1 if sort_rows else 1
     slug = f"{skill}-custom-{uuid4().hex[:8]}"
+    hub_videos = videos_for_skill(skill)
     hub_rows = (
         sb.table("practice_hubs")
         .insert(
             {
                 "set_id": set_id,
                 "slug": slug,
-                "videos": [],
+                "videos": hub_videos,
                 "practice_prompt": "",
-                "submit_config": _module_href(skill),
+                "submit_config": {},
                 "estimated_min": 25,
                 "sort_order": next_sort,
             }
@@ -686,6 +692,9 @@ def create_question_bank_set(
             "Could not create practice hub for set.",
         )
     hub_id = str(hub_rows[0]["id"])
+    sb.table("practice_hubs").update(
+        {"submit_config": _bank_href(skill, hub_id)}
+    ).eq("id", hub_id).execute()
 
     log_admin_action(
         admin_id=admin_id,
@@ -1293,6 +1302,91 @@ def load_bank_speaking(*, set_id: UUID, part: int) -> BankSpeakingPartResponse:
 
 def default_bank_audio_key(*, set_id: UUID, part: int) -> str:
     return f"bank/{set_id}/listening/part{part}/audio.mp3"
+
+
+def default_bank_watch_video_key(*, set_id: UUID, ext: str = "mp4") -> str:
+    safe = (ext or "mp4").strip().lower().lstrip(".")
+    if safe not in {"mp4", "webm", "mov"}:
+        safe = "mp4"
+    return f"bank/{set_id}/watch/intro.{safe}"
+
+
+def get_set_intro_video_key(*, set_id: UUID) -> str | None:
+    sb = get_supabase()
+    rows = (
+        sb.table("practice_sets")
+        .select("intro_video_key")
+        .eq("id", str(set_id))
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    key = str(rows[0].get("intro_video_key") or "").strip()
+    return key or None
+
+
+def get_set_intro_stream_uid(*, set_id: UUID) -> str | None:
+    sb = get_supabase()
+    rows = (
+        sb.table("practice_sets")
+        .select("intro_stream_uid")
+        .eq("id", str(set_id))
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    uid = str(rows[0].get("intro_stream_uid") or "").strip()
+    return uid or None
+
+
+def set_intro_stream_uid(*, set_id: UUID, stream_uid: str) -> str:
+    sb = get_supabase()
+    value = (stream_uid or "").strip()
+    if not value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="stream_uid required")
+    updated = (
+        sb.table("practice_sets")
+        .update({"intro_stream_uid": value})
+        .eq("id", str(set_id))
+        .execute()
+    ).data
+    if not updated:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Practice set not found.")
+    try:
+        from app.cache.hybrid_cache import invalidate_prefix
+        from app.practice.repository import clear_hub_list_cache
+
+        clear_hub_list_cache()
+        invalidate_prefix("practice:hub:detail:")
+    except Exception:
+        pass
+    return value
+
+
+def set_intro_video_key(*, set_id: UUID, key: str) -> str:
+    sb = get_supabase()
+    value = (key or "").strip()
+    if not value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="video key required")
+    updated = (
+        sb.table("practice_sets")
+        .update({"intro_video_key": value})
+        .eq("id", str(set_id))
+        .execute()
+    ).data
+    if not updated:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Practice set not found.")
+    try:
+        from app.cache.hybrid_cache import invalidate_prefix
+        from app.practice.repository import clear_hub_list_cache
+
+        clear_hub_list_cache()
+        invalidate_prefix("practice:hub:detail:")
+    except Exception:
+        pass
+    return value
 
 
 def default_bank_writing_image_key(*, set_id: UUID, part: int) -> str:

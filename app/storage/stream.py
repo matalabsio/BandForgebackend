@@ -77,6 +77,7 @@ def create_direct_upload(
     max_duration_seconds: int = 3600,
     require_signed_urls: bool = False,
 ) -> dict[str, str]:
+    """Basic one-time upload URL (files must be under ~200MB). Prefer create_tus_upload for larger files."""
     account_id, token = _credentials()
     duration = max(1, min(int(max_duration_seconds or 3600), 21600))
     url = f"{STREAM_API_BASE}/accounts/{account_id}/stream/direct_upload"
@@ -112,6 +113,158 @@ def create_direct_upload(
     if not uid or not upload_url:
         raise StreamError("Cloudflare Stream did not return an upload URL.", status_code=502)
     return {"uid": uid, "uploadURL": upload_url}
+
+
+def create_tus_upload(
+    *,
+    upload_length: int,
+    title: str,
+    max_duration_seconds: int = 3600,
+    require_signed_urls: bool = False,
+) -> dict[str, str]:
+    """Provision a tus upload URL (required for files over 200MB; works for smaller too).
+
+    Uses Cloudflare's ``?direct_user=true`` creator-upload flow so the browser can
+    upload without seeing the API token.
+    """
+    account_id, token = _credentials()
+    length = int(upload_length or 0)
+    if length <= 0:
+        raise StreamError("upload_length must be a positive integer.", status_code=400)
+    duration = max(1, min(int(max_duration_seconds or 3600), 21600))
+    name = (title or "BandForge video").strip() or "BandForge video"
+
+    def _b64(value: str) -> str:
+        import base64
+
+        return base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+    meta_parts = [
+        f"name {_b64(name)}",
+        f"maxDurationSeconds {_b64(str(duration))}",
+    ]
+    if require_signed_urls:
+        meta_parts.append("requiresignedurls")
+    metadata = ",".join(meta_parts)
+
+    url = f"{STREAM_API_BASE}/accounts/{account_id}/stream?direct_user=true"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Tus-Resumable": "1.0.0",
+                    "Upload-Length": str(length),
+                    "Upload-Metadata": metadata,
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise StreamError(f"Could not reach Cloudflare Stream: {exc}", status_code=503) from exc
+
+    location = (response.headers.get("Location") or "").strip()
+    media_id = (response.headers.get("stream-media-id") or "").strip()
+    if response.status_code >= 400 or not location:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"errors": [{"message": response.text[:300] or "tus create failed"}]}
+        _raise_from_payload(payload if isinstance(payload, dict) else {}, http_status=response.status_code)
+
+    # Location may embed the uid; prefer stream-media-id header.
+    uid = media_id
+    if not uid:
+        # Fallback: last path segment of Location
+        uid = location.rstrip("/").rsplit("/", 1)[-1].split("?")[0].strip()
+    if not uid:
+        raise StreamError("Cloudflare Stream did not return a media id.", status_code=502)
+    return {"uid": uid, "uploadURL": location}
+
+
+def playback_signed_iframe_url(*, customer_code: str, token: str) -> str:
+    """Iframe URL where the path segment is a signed JWT (not the raw video UID)."""
+    code = normalize_customer_code(customer_code)
+    tok = (token or "").strip()
+    if not code or not tok:
+        return ""
+    return f"https://{code}.cloudflarestream.com/{tok}/iframe"
+
+
+def create_signed_playback_token(
+    stream_uid: str,
+    *,
+    ttl_seconds: int | None = None,
+) -> str:
+    """Mint a short-lived Stream playback token via Cloudflare ``/stream/{uid}/token``."""
+    uid = (stream_uid or "").strip()
+    if not uid:
+        raise StreamError("Missing Stream video UID.", status_code=400)
+
+    settings = get_settings()
+    ttl = int(ttl_seconds or settings.stream_token_ttl_seconds or 3600)
+    ttl = max(60, min(ttl, 86400))
+
+    account_id, token = _credentials()
+    url = f"{STREAM_API_BASE}/accounts/{account_id}/stream/{uid}/token"
+    import time
+
+    # Cloudflare expects absolute unix expiry for custom tokens.
+    body: dict[str, Any] = {"exp": int(time.time()) + ttl}
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise StreamError(f"Could not reach Cloudflare Stream: {exc}", status_code=503) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise StreamError("Cloudflare Stream returned an invalid response.", status_code=502) from exc
+
+    if not payload.get("success") or response.status_code >= 400:
+        _raise_from_payload(payload if isinstance(payload, dict) else {}, http_status=response.status_code)
+
+    result = payload.get("result") or {}
+    signed = str(result.get("token") or "").strip()
+    if not signed:
+        raise StreamError("Cloudflare Stream did not return a playback token.", status_code=502)
+    return signed
+
+
+def set_require_signed_urls(stream_uid: str, *, required: bool = True) -> None:
+    """Ensure a Stream video cannot be played with a bare public UID."""
+    account_id, token = _credentials()
+    uid = (stream_uid or "").strip()
+    if not uid:
+        raise StreamError("Missing Stream video UID.", status_code=400)
+    url = f"{STREAM_API_BASE}/accounts/{account_id}/stream/{uid}"
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"uid": uid, "requireSignedURLs": bool(required)},
+            )
+    except httpx.HTTPError as exc:
+        raise StreamError(f"Could not reach Cloudflare Stream: {exc}", status_code=503) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise StreamError("Cloudflare Stream returned an invalid response.", status_code=502) from exc
+
+    if not payload.get("success") or response.status_code >= 400:
+        _raise_from_payload(payload if isinstance(payload, dict) else {}, http_status=response.status_code)
 
 
 def get_video(stream_uid: str) -> dict[str, Any]:

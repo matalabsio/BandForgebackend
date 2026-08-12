@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
@@ -40,6 +41,26 @@ def get_practice_hub(
     user: Annotated[UserPublic, Depends(require_full_skill_program)],
 ) -> PracticeHubDetailOut:
     return service.get_hub_detail(user_id=UUID(str(user.id)), hub_id=hub_id)
+
+
+@router.get("/hubs/{hub_id}/watch-video")
+def stream_hub_watch_video_route(
+    hub_id: str,
+    request: Request,
+    user: Annotated[UserPublic, Depends(require_full_skill_program)],
+):
+    """Private set Watch video — auth + hub access; not a public shareable URL."""
+    body, headers, status_code = service.stream_hub_watch_video(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        range_header=request.headers.get("range"),
+    )
+    return StreamingResponse(
+        body,
+        status_code=status_code,
+        media_type=headers.get("Content-Type", "video/mp4"),
+        headers=headers,
+    )
 
 
 @router.post("/hubs/{hub_id}/complete", response_model=HubCompleteOut)

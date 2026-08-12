@@ -3,7 +3,12 @@
 Copies each mock part into bank_sections / bank_questions, creates a
 practice_set + hub, marks published, and archives empty catalogue shells.
 
-Usage:
+**DO NOT RUN ON PRODUCTION.** Personalized practice must come from Admin
+Question Bank uploads only (bank exercise UI). Re-seeding Phase0 re-couples
+practice hubs to Mock 1/2 module hrefs. Kept for historical reference / local
+experiments only.
+
+Usage (local/dev only):
     cd backend && source .venv/bin/activate
     python -m scripts.seed_phase0_practice_hubs_from_mocks
     python -m scripts.seed_phase0_practice_hubs_from_mocks --dry-run

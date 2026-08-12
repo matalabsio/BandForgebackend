@@ -31,7 +31,7 @@ def test_bank_href_and_module_fallback():
         "module": "listening",
         "href": f"/practice/listening/{HUB_ID}/exercise",
     }
-    assert qb._module_href("writing")["href"] == "/test/writing/task/1"
+    assert "/test/writing/task/1" in qb._module_href("writing")["href"]
 
 
 def test_save_bank_listening_writes_section_and_questions():
@@ -241,6 +241,7 @@ def test_create_question_bank_set_uses_custom_bank_and_hub():
         m.order.return_value = m
         m.limit.return_value = m
         m.insert.return_value = m
+        m.update.return_value = m
 
         def exec_fn():
             if name == "practice_banks":
@@ -279,6 +280,7 @@ def test_create_question_bank_set_uses_custom_bank_and_hub():
     with (
         patch("app.admin.question_bank.get_supabase", return_value=sb),
         patch("app.admin.question_bank.log_admin_action") as log,
+        patch("app.admin.question_bank.videos_for_skill", return_value=[]) as seed,
     ):
         res = qb.create_question_bank_set(body=body, admin_id=ADMIN_ID)
 
@@ -286,11 +288,83 @@ def test_create_question_bank_set_uses_custom_bank_and_hub():
     assert res.skill == "listening"
     assert res.title == "Named practice set"
     assert res.hub_id == UUID(HUB_ID)
-    assert res.parts == 4
+    assert res.parts == qb.MAX_PARTS["listening"]
     assert res.bank_number == qb.CUSTOM_BANK_NUMBER
     assert res.set_number == 3
     assert res.status == "draft"
     log.assert_called_once()
+    seed.assert_called_once_with("listening")
+    insert_payload = caches["practice_hubs"].insert.call_args.args[0]
+    assert insert_payload["videos"] == []
+    assert insert_payload["submit_config"] == {}
+    caches["practice_hubs"].update.assert_called()
+    update_payload = caches["practice_hubs"].update.call_args.args[0]
+    assert update_payload["submit_config"] == qb._bank_href("listening", HUB_ID)
+
+
+def test_create_question_bank_set_seeds_skill_intro_video():
+    body = QuestionBankCreateSetRequest(skill="listening", title="With intro")
+    seeded = [
+        {
+            "title": "Listening intro",
+            "url": "https://customer-x.cloudflarestream.com/abc/iframe",
+            "duration_min": 12,
+            "tag": "listening-intro",
+            "stream_uid": "abc",
+        }
+    ]
+    sb = MagicMock()
+    caches: dict[str, MagicMock] = {}
+    counters = {"banks": 0, "sets": 0, "hubs": 0}
+
+    def make_chain(name: str) -> MagicMock:
+        if name in caches:
+            return caches[name]
+        m = MagicMock()
+        m.select.return_value = m
+        m.eq.return_value = m
+        m.order.return_value = m
+        m.limit.return_value = m
+        m.insert.return_value = m
+        m.update.return_value = m
+
+        def exec_fn():
+            if name == "practice_banks":
+                counters["banks"] += 1
+                if counters["banks"] == 1:
+                    return MagicMock(data=[])
+                return MagicMock(data=[{"id": BANK_ID}])
+            if name == "practice_sets":
+                counters["sets"] += 1
+                if counters["sets"] == 1:
+                    return MagicMock(data=[])
+                return MagicMock(
+                    data=[{"id": str(SET_ID), "set_number": 1, "title": "With intro"}]
+                )
+            if name == "practice_hubs":
+                counters["hubs"] += 1
+                if counters["hubs"] == 1:
+                    return MagicMock(data=[])
+                return MagicMock(data=[{"id": HUB_ID}])
+            return MagicMock(data=[])
+
+        m.execute.side_effect = exec_fn
+        caches[name] = m
+        return m
+
+    sb.table.side_effect = make_chain
+
+    with (
+        patch("app.admin.question_bank.get_supabase", return_value=sb),
+        patch("app.admin.question_bank.log_admin_action"),
+        patch("app.admin.question_bank.videos_for_skill", return_value=seeded),
+    ):
+        res = qb.create_question_bank_set(body=body, admin_id=ADMIN_ID)
+
+    assert res.set_id == SET_ID
+    insert_payload = caches["practice_hubs"].insert.call_args.args[0]
+    assert insert_payload["videos"] == seeded
+    assert len(insert_payload["videos"]) == 1
 
 
 def test_create_question_bank_set_reuses_existing_custom_bank():
@@ -308,6 +382,7 @@ def test_create_question_bank_set_reuses_existing_custom_bank():
         m.order.return_value = m
         m.limit.return_value = m
         m.insert.return_value = m
+        m.update.return_value = m
 
         def exec_fn():
             if name == "practice_banks":
@@ -332,11 +407,15 @@ def test_create_question_bank_set_reuses_existing_custom_bank():
     with (
         patch("app.admin.question_bank.get_supabase", return_value=sb),
         patch("app.admin.question_bank.log_admin_action"),
+        patch("app.admin.question_bank.videos_for_skill", return_value=[]),
     ):
         res = qb.create_question_bank_set(body=body, admin_id=ADMIN_ID)
     assert res.set_number == 1
-    assert res.parts == 4
+    assert res.parts == qb.MAX_PARTS["reading"]
     assert res.skill == "reading"
+    caches["practice_hubs"].update.assert_called()
+    update_payload = caches["practice_hubs"].update.call_args.args[0]
+    assert update_payload["submit_config"] == qb._bank_href("reading", HUB_ID)
 
 
 def test_create_question_bank_set_rejects_published_without_content():

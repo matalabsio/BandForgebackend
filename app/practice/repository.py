@@ -15,7 +15,7 @@ DIFFICULTY_RANK = {"easy": 0, "medium": 1, "hard": 2}
 HUB_LIST_COLUMNS = (
     "id, slug, set_id, estimated_min, sort_order, practice_prompt, submit_config, "
     "practice_sets!inner("
-    "id, set_number, title, status, difficulty, "
+    "id, set_number, title, status, difficulty, intro_video_key, intro_stream_uid, "
     "practice_banks!inner(skill, bank_number, title, weakness_tags)"
     ")"
 )
@@ -23,7 +23,7 @@ HUB_LIST_COLUMNS = (
 HUB_DETAIL_COLUMNS = (
     "id, slug, set_id, videos, practice_prompt, submit_config, estimated_min, sort_order, "
     "practice_sets!inner("
-    "id, set_number, title, status, difficulty, "
+    "id, set_number, title, status, difficulty, intro_video_key, intro_stream_uid, "
     "practice_banks!inner(skill, bank_number, title, weakness_tags)"
     ")"
 )
@@ -407,4 +407,6 @@ def _flatten_hub_row(row: dict[str, Any]) -> dict[str, Any]:
         "videos": row.get("videos") or [],
         "practice_prompt": row.get("practice_prompt") or "",
         "submit_config": row.get("submit_config") or {},
+        "intro_video_key": (sets.get("intro_video_key") or None),
+        "intro_stream_uid": (sets.get("intro_stream_uid") or None),
     }

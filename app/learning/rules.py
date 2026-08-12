@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any
-from uuid import uuid4
 
 from app.learning.plan_sequencing import (
     SKILL_LABEL,
@@ -40,8 +40,9 @@ MODULE_HREF = {
     "reading": "/study-plan/today?skill=reading",
     "writing": "/study-plan/today?skill=writing",
     "speaking": "/study-plan/today?skill=speaking",
-    "vocabulary": "/content-library",
-    "grammar": "/content-library",
+    # No grammar/vocab practice bank yet — point tips back to Today.
+    "vocabulary": "/study-plan/today",
+    "grammar": "/study-plan/today",
 }
 
 # skill_tag → preferred display title for drill recommendations
@@ -234,7 +235,7 @@ def build_recommendations(aggregate: dict[str, Any]) -> list[RecommendationItem]
                 id="vocab-growth",
                 title="Expand academic vocabulary",
                 reason=f"Repeated weak lexical items: {words}.",
-                href="/content-library",
+                href="/study-plan/today",
                 module="vocabulary",
             )
         )
@@ -246,7 +247,7 @@ def build_recommendations(aggregate: dict[str, Any]) -> list[RecommendationItem]
                 id="grammar-trend",
                 title="Grammar accuracy drill",
                 reason=f"Top recurring issue: {top}.",
-                href="/content-library",
+                href="/study-plan/today",
                 module="grammar",
             )
         )
@@ -403,6 +404,20 @@ def apply_weekly_goal_completion(
     return out
 
 
+def _stable_task_id(
+    *,
+    week_start: date,
+    day_offset: int,
+    slot: int,
+    module: str,
+    kind: str,
+    title: str,
+) -> str:
+    """Stable across plan regenerations so PATCH / Continue do not churn."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:36] or "task"
+    return f"t-{week_start.isoformat()}-d{day_offset}-s{slot}-{module}-{kind}-{slug}"
+
+
 def _task(
     *,
     title: str,
@@ -412,13 +427,38 @@ def _task(
     subtitle: str = "",
     href: str | None = None,
     status: str = "pending",
+    week_start: date | None = None,
+    day_offset: int = 0,
+    slot: int = 0,
 ) -> StudyTask:
+    if week_start is not None:
+        task_id = _stable_task_id(
+            week_start=week_start,
+            day_offset=day_offset,
+            slot=slot,
+            module=module,
+            kind=kind,
+            title=title,
+        )
+    else:
+        # Fallback for unexpected callers — still deterministic from fields.
+        task_id = _stable_task_id(
+            week_start=date.today(),
+            day_offset=day_offset,
+            slot=slot,
+            module=module,
+            kind=kind,
+            title=title,
+        )
+    # Map homework/goal kinds onto practice task_type for Continue CTA eligibility.
+    task_type = "practice" if kind in ("practice", "homework", "goal") else "practice"
     return StudyTask(
-        id=f"t-{uuid4().hex[:10]}",
+        id=task_id,
         title=title,
         subtitle=subtitle or f"~{duration_min} min",
         module=module,
         kind=kind,  # type: ignore[arg-type]
+        task_type=task_type,  # type: ignore[arg-type]
         duration_min=duration_min,
         href=href or MODULE_HREF.get(module, "/mocks"),
         status=status,  # type: ignore[arg-type]
@@ -452,101 +492,102 @@ def build_study_plan(
                     if isinstance(task, dict) and task.get("id") and task.get("status"):
                         prior_status[str(task["id"])] = str(task["status"])
 
-    def day_tasks(offset: int) -> list[StudyTask]:
+    def day_tasks(offset: int, *, plan_week_start: date) -> list[StudyTask]:
         tasks: list[StudyTask] = []
-        if offset == 0:
+        slot = 0
+
+        def push(
+            *,
+            title: str,
+            module: str,
+            kind: str = "practice",
+            duration_min: int = 20,
+            subtitle: str = "",
+            href: str | None = None,
+        ) -> None:
+            nonlocal slot
             tasks.append(
                 _task(
-                    title=f"{focus_label} practice",
-                    module=focus_mod,
-                    kind="practice",
-                    duration_min=25,
-                    subtitle="Target your lowest module",
+                    title=title,
+                    module=module,
+                    kind=kind,
+                    duration_min=duration_min,
+                    subtitle=subtitle,
+                    href=href,
+                    week_start=plan_week_start,
+                    day_offset=offset,
+                    slot=slot,
                 )
             )
-            tasks.append(
-                _task(
-                    title="Homework: review feedback notes",
-                    module=focus_mod if focus_mod in ("writing", "speaking") else "writing",
-                    kind="homework",
-                    duration_min=15,
-                    subtitle="Capture 3 improvements",
-                )
+            slot += 1
+
+        if offset == 0:
+            push(
+                title=f"{focus_label} practice",
+                module=focus_mod,
+                kind="practice",
+                duration_min=25,
+                subtitle="Target your lowest module",
+            )
+            push(
+                title="Homework: review feedback notes",
+                module=focus_mod if focus_mod in ("writing", "speaking") else "writing",
+                kind="homework",
+                duration_min=15,
+                subtitle="Capture 3 improvements",
             )
         elif offset == 1:
             alt = "reading" if focus_mod != "reading" else "listening"
-            tasks.append(
-                _task(
-                    title=f"{MODULE_LABEL[alt]} timed set",
-                    module=alt,
-                    duration_min=30,
-                )
+            push(
+                title=f"{MODULE_LABEL[alt]} timed set",
+                module=alt,
+                duration_min=30,
             )
-            grammar = aggregate.get("grammar_stats") or {}
-            if int(grammar.get("mistake_count") or 0) >= 1:
-                tasks.append(
-                    _task(
-                        title="Grammar accuracy drill",
-                        module="grammar",
-                        kind="homework",
-                        duration_min=15,
-                        href="/content-library",
-                    )
-                )
-            else:
-                tasks.append(
-                    _task(
-                        title="Vocabulary flash set",
-                        module="vocabulary",
-                        kind="homework",
-                        duration_min=12,
-                        href="/content-library",
-                    )
-                )
+            # Prefer a real L/R/W/S follow-up — no grammar/vocab content bank yet.
+            follow = "writing" if focus_mod not in ("writing",) else "speaking"
+            if follow == alt:
+                follow = "listening" if alt != "listening" else "reading"
+            push(
+                title=f"{MODULE_LABEL[follow]} practice set",
+                module=follow,
+                kind="practice",
+                duration_min=20,
+                subtitle="Keep momentum on a core skill",
+            )
         elif offset == 2:
-            tasks.append(
-                _task(
-                    title=f"{focus_label} drill 2",
-                    module=focus_mod,
-                    duration_min=25,
-                )
+            push(
+                title=f"{focus_label} drill 2",
+                module=focus_mod,
+                duration_min=25,
             )
             for weak in (aggregate.get("top_weaknesses") or [])[:1]:
                 if isinstance(weak, dict):
-                    tasks.append(
-                        _task(
-                            title=str(weak.get("label") or "Weakness drill")[:72],
-                            module=str(weak.get("module") or focus_mod),
-                            kind="homework",
-                            duration_min=20,
-                        )
+                    push(
+                        title=str(weak.get("label") or "Weakness drill")[:72],
+                        module=str(weak.get("module") or focus_mod),
+                        kind="homework",
+                        duration_min=20,
                     )
         elif offset == 3:
             ws_mod = "writing" if focus_mod != "speaking" else "speaking"
-            tasks.append(
-                _task(
-                    title=f"{MODULE_LABEL[ws_mod]} production task",
-                    module=ws_mod,
-                    duration_min=40,
-                )
+            push(
+                title=f"{MODULE_LABEL[ws_mod]} production task",
+                module=ws_mod,
+                duration_min=40,
             )
         elif offset == 4:
-            tasks.append(
-                _task(
-                    title="Mini mock checkpoint",
-                    module=focus_mod,
-                    duration_min=35,
-                    subtitle="Track gap to target",
-                )
+            push(
+                title="Mini mock checkpoint",
+                module=focus_mod,
+                duration_min=35,
+                subtitle="Track gap to target",
             )
         else:
-            tasks.append(
-                _task(
-                    title="Light review + streak day",
-                    module=focus_mod,
-                    duration_min=15,
-                    kind="goal",
-                )
+            push(
+                title="Light review + streak day",
+                module=focus_mod,
+                duration_min=15,
+                kind="goal",
             )
         return tasks
 
@@ -557,8 +598,13 @@ def build_study_plan(
         for d in range(7):
             day_date = start + timedelta(days=d)
             label = day_date.strftime("%a")
-            tasks = day_tasks(d) if w == 0 else day_tasks(min(d, 4))
-            # Week 2: lighter duplicate with new ids (always fresh)
+            # Absolute day offset from plan week_start keeps IDs unique across weeks.
+            abs_offset = 7 * w + (d if w == 0 else min(d, 4))
+            tasks = day_tasks(
+                d if w == 0 else min(d, 4),
+                plan_week_start=week_start,
+            )
+            # Re-key week-2 tasks with absolute offset so IDs stay unique + stable.
             if w == 1:
                 tasks = [
                     _task(
@@ -568,8 +614,12 @@ def build_study_plan(
                         duration_min=t.duration_min,
                         subtitle=t.subtitle,
                         href=t.href,
+                        status=t.status,
+                        week_start=week_start,
+                        day_offset=abs_offset,
+                        slot=i,
                     )
-                    for t in tasks[:2]
+                    for i, t in enumerate(tasks[:2])
                 ]
             days.append(
                 StudyDay(

@@ -262,10 +262,49 @@ def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
     )
     progress = progress_map.get(str(hub_id), {})
     completed_at = progress.get("completed_at")
-    videos = [
-        PracticeVideo(**v) if isinstance(v, dict) else PracticeVideo()
-        for v in (flat.get("videos") or [])
-    ]
+    intro_uid = str(flat.get("intro_stream_uid") or "").strip()
+    intro_key = str(flat.get("intro_video_key") or "").strip()
+    if intro_uid:
+        # Signed Stream iframe — bare UID does not play (requireSignedURLs).
+        from app.admin.stream_videos import _customer_code
+        from app.storage.stream import (
+            StreamError,
+            create_signed_playback_token,
+            playback_signed_iframe_url,
+        )
+
+        try:
+            token = create_signed_playback_token(intro_uid)
+            signed_url = playback_signed_iframe_url(
+                customer_code=_customer_code(),
+                token=token,
+            )
+        except StreamError:
+            signed_url = ""
+        videos = [
+            PracticeVideo(
+                title=flat.get("title") or "Watch",
+                url=signed_url,
+                duration_min=0,
+                tag="set-intro",
+                stream_uid=intro_uid,
+            )
+        ] if signed_url else []
+    elif intro_key:
+        # Legacy R2 private proxy fallback
+        videos = [
+            PracticeVideo(
+                title=flat.get("title") or "Watch",
+                url=f"/api/practice/hubs/{hub_id}/watch-video",
+                duration_min=0,
+                tag="set-intro",
+            )
+        ]
+    else:
+        videos = [
+            PracticeVideo(**v) if isinstance(v, dict) else PracticeVideo()
+            for v in (flat.get("videos") or [])
+        ]
     return PracticeHubDetailOut(
         id=flat["id"],
         slug=flat["slug"],
@@ -285,6 +324,37 @@ def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
         practice_prompt=flat.get("practice_prompt") or "",
         submit_config=flat.get("submit_config") or {},
     )
+
+
+def stream_hub_watch_video(
+    *,
+    user_id: UUID,
+    hub_id: str,
+    range_header: str | None,
+) -> tuple[Any, dict[str, str], int]:
+    """Stream private set Watch video from R2 (auth + hub access required)."""
+    from app.storage.r2 import get_object_stream, object_head
+
+    flat = assert_hub_accessible(user_id=user_id, hub_id=hub_id)
+    key = str(flat.get("intro_video_key") or "").strip()
+    if not key:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="No Watch video configured for this practice set.",
+        )
+    meta = object_head(key)
+    if not meta:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Watch video not found in storage.",
+        )
+    try:
+        return get_object_stream(key, range_header=range_header)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 def complete_hub(*, user_id: UUID, hub_id: str) -> HubCompleteOut:

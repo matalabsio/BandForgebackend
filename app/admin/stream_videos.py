@@ -14,6 +14,7 @@ from app.db.supabase_client import get_supabase
 from app.storage.stream import (
     StreamError,
     create_direct_upload,
+    create_tus_upload,
     get_video,
     normalize_customer_code,
     playback_iframe_url,
@@ -61,8 +62,7 @@ def _raise_stream(exc: StreamError) -> None:
     raise HTTPException(exc.status_code, detail=str(exc)) from exc
 
 
-def merge_hub_videos(
-    existing: list[Any],
+def skill_hub_videos_entry(
     *,
     title: str,
     url: str,
@@ -70,37 +70,47 @@ def merge_hub_videos(
     tag: str,
     stream_uid: str,
 ) -> list[dict[str, Any]]:
-    entry = {
-        "title": title,
-        "url": url,
-        "duration_min": int(duration_min or 0),
-        "tag": tag,
-        "stream_uid": stream_uid,
-    }
-    videos: list[dict[str, Any]] = []
-    replaced_tag = False
-    for item in existing or []:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("tag") or "").strip() == tag:
-            videos.append(entry)
-            replaced_tag = True
-        else:
-            videos.append(item)
-    if replaced_tag:
-        return videos
+    """Exactly one Watch video for a skill hub (replace, never append)."""
+    return [
+        {
+            "title": title,
+            "url": url,
+            "duration_min": int(duration_min or 0),
+            "tag": tag,
+            "stream_uid": stream_uid,
+        }
+    ]
 
-    replaced_empty = False
-    out: list[dict[str, Any]] = []
-    for item in videos:
-        if not replaced_empty and not str(item.get("url") or "").strip():
-            out.append(entry)
-            replaced_empty = True
-        else:
-            out.append(item)
-    if not replaced_empty:
-        out.append(entry)
-    return out
+
+def videos_for_skill(skill: str) -> list[dict[str, Any]]:
+    """Load the current `{skill}-intro` library row as a single hub videos list."""
+    skill_key = (skill or "").strip().lower()
+    tag = f"{skill_key}-intro"
+    if tag not in SKILL_TAG_MAP:
+        return []
+    sb = get_supabase()
+    result = (
+        sb.table("stream_videos")
+        .select("tag, title, stream_uid, playback_url, duration_min")
+        .eq("tag", tag)
+        .limit(1)
+        .execute()
+    )
+    rows = list(result.data or [])
+    if not rows:
+        return []
+    row = rows[0]
+    url = str(row.get("playback_url") or "").strip()
+    uid = str(row.get("stream_uid") or "").strip()
+    if not url or not uid:
+        return []
+    return skill_hub_videos_entry(
+        title=str(row.get("title") or tag.replace("-", " ").title()),
+        url=url,
+        duration_min=int(row.get("duration_min") or 0),
+        tag=tag,
+        stream_uid=uid,
+    )
 
 
 def list_stream_videos() -> list[dict[str, Any]]:
@@ -114,11 +124,28 @@ def list_stream_videos() -> list[dict[str, Any]]:
     return list(result.data or [])
 
 
-def start_direct_upload(*, tag: str, title: str, max_duration_seconds: int = 3600) -> dict[str, str]:
+def start_direct_upload(
+    *,
+    tag: str,
+    title: str,
+    max_duration_seconds: int = 3600,
+    upload_length: int | None = None,
+) -> dict[str, str]:
     assert_valid_tag(tag)
     _customer_code()
     try:
-        created = create_direct_upload(title=title, max_duration_seconds=max_duration_seconds)
+        # Prefer tus creator upload whenever we know the byte length (supports >200MB).
+        if upload_length and int(upload_length) > 0:
+            created = create_tus_upload(
+                upload_length=int(upload_length),
+                title=title,
+                max_duration_seconds=max_duration_seconds,
+            )
+        else:
+            created = create_direct_upload(
+                title=title,
+                max_duration_seconds=max_duration_seconds,
+            )
     except StreamError as exc:
         _raise_stream(exc)
     return created
@@ -163,25 +190,24 @@ def _sync_skill_hubs(
     sb = get_supabase()
     result = (
         sb.table("practice_hubs")
-        .select("id, videos, practice_sets!inner(practice_banks!inner(skill))")
+        .select("id, practice_sets!inner(practice_banks!inner(skill))")
         .eq("practice_sets.practice_banks.skill", skill)
         .execute()
     )
     rows = list(result.data or [])
+    videos = skill_hub_videos_entry(
+        title=title,
+        url=playback_url,
+        duration_min=duration_min,
+        tag=tag,
+        stream_uid=stream_uid,
+    )
     updated = 0
     for row in rows:
         hub_id = str(row.get("id") or "")
         if not hub_id:
             continue
-        merged = merge_hub_videos(
-            list(row.get("videos") or []),
-            title=title,
-            url=playback_url,
-            duration_min=duration_min,
-            tag=tag,
-            stream_uid=stream_uid,
-        )
-        sb.table("practice_hubs").update({"videos": merged}).eq("id", hub_id).execute()
+        sb.table("practice_hubs").update({"videos": videos}).eq("id", hub_id).execute()
         updated += 1
     if updated:
         from app.cache.hybrid_cache import invalidate_prefix

@@ -1018,6 +1018,9 @@ class StreamDirectUploadRequest(BaseModel):
     tag: StreamVideoTag
     title: str = ""
     max_duration_seconds: int = Field(default=3600, ge=1, le=21600)
+    # Byte size of the file — enables tus creator URL (required for uploads >200MB).
+    upload_length: int | None = Field(default=None, ge=1, le=20_000_000_000)
+
 
 
 class StreamDirectUploadResponse(BaseModel):
