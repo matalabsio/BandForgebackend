@@ -37,6 +37,7 @@ async def lifespan(_app: FastAPI):
         f"env_local_active={diag['env_local_active']} "
         f"google_oauth={'on' if google_ok else 'off'} "
         f"frontend_url={settings.frontend_url} "
+        f"admin_url={settings.admin_url} "
         f"cors_origins={','.join(cors) or '(none)'} "
         f"redis={redis_status()}"
     )

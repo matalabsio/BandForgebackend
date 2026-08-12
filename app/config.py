@@ -86,6 +86,11 @@ class Settings(BaseSettings):
         default="http://localhost:3000",
         validation_alias=AliasChoices("FRONTEND_URL", "NEXT_PUBLIC_APP_URL"),
     )
+    admin_url: str = Field(
+        default="https://admin-rose-eight-52.vercel.app",
+        validation_alias=AliasChoices("ADMIN_URL", "ADMIN_FRONTEND_URL"),
+        description="Admin Vercel origin; always allowed in CORS alongside FRONTEND_URL.",
+    )
     cors_origins: str = Field(
         default="",
         validation_alias="CORS_ORIGINS",
@@ -448,7 +453,7 @@ class Settings(BaseSettings):
     def cors_allow_origins(self) -> list[str]:
         """Origins for CORSMiddleware (frontend + optional CORS_ORIGINS + localhost in dev)."""
         origins: list[str] = []
-        for raw in (self.frontend_url, self.cors_origins):
+        for raw in (self.frontend_url, self.admin_url, self.cors_origins):
             for part in raw.split(","):
                 origin = part.strip().rstrip("/")
                 if origin and origin not in origins:
