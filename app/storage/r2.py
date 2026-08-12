@@ -118,6 +118,52 @@ def generate_presigned_put_url(
     )
 
 
+_browser_cors_ready = False
+
+
+def ensure_browser_put_cors() -> None:
+    """Allow browser PUTs of presigned objects from student + admin origins."""
+    global _browser_cors_ready
+    if _browser_cors_ready:
+        return
+    settings = get_settings()
+    origins = [o for o in settings.cors_allow_origins() if o.startswith("http")]
+    if not origins:
+        return
+    client = _s3_client()
+    try:
+        existing = client.get_bucket_cors(Bucket=settings.r2_bucket_name)
+        rules = list(existing.get("CORSRules") or [])
+    except ClientError:
+        rules = []
+    have: set[str] = set()
+    allows_put = False
+    for rule in rules:
+        have.update(str(o) for o in (rule.get("AllowedOrigins") or []))
+        methods = {str(m).upper() for m in (rule.get("AllowedMethods") or [])}
+        if "PUT" in methods:
+            allows_put = True
+    needed = set(origins)
+    if needed <= have and allows_put:
+        _browser_cors_ready = True
+        return
+    client.put_bucket_cors(
+        Bucket=settings.r2_bucket_name,
+        CORSConfiguration={
+            "CORSRules": [
+                {
+                    "AllowedOrigins": sorted(have | needed),
+                    "AllowedMethods": ["GET", "PUT", "HEAD"],
+                    "AllowedHeaders": ["*"],
+                    "ExposeHeaders": ["ETag", "Content-Length", "Content-Type"],
+                    "MaxAgeSeconds": 3600,
+                }
+            ]
+        },
+    )
+    _browser_cors_ready = True
+
+
 def get_object_stream(
     key: str,
     *,

@@ -2,7 +2,11 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.storage.r2 import generate_presigned_put_url, generate_signed_url
+from app.storage.r2 import (
+    ensure_browser_put_cors,
+    generate_presigned_put_url,
+    generate_signed_url,
+)
 
 
 def test_generate_signed_url_uses_settings_bucket():
@@ -55,3 +59,35 @@ def test_generate_presigned_put_url_signs_content_type():
         },
         ExpiresIn=900,
     )
+
+
+def test_ensure_browser_put_cors_merges_admin_origin():
+    from app.storage import r2 as r2_mod
+
+    r2_mod._browser_cors_ready = False
+    with patch("app.storage.r2.get_settings") as gs, patch(
+        "app.storage.r2._s3_client"
+    ) as client_fn:
+        settings = MagicMock()
+        settings.r2_bucket_name = "my-bucket"
+        settings.cors_allow_origins.return_value = [
+            "https://bandforgeuinew.vercel.app",
+            "https://admin-rose-eight-52.vercel.app",
+        ]
+        gs.return_value = settings
+        client = MagicMock()
+        from botocore.exceptions import ClientError
+
+        client.get_bucket_cors.side_effect = ClientError(
+            {"Error": {"Code": "NoSuchCORSConfiguration", "Message": "none"}},
+            "GetBucketCors",
+        )
+        client_fn.return_value = client
+        ensure_browser_put_cors()
+
+    client.put_bucket_cors.assert_called_once()
+    cfg = client.put_bucket_cors.call_args.kwargs["CORSConfiguration"]
+    origins = set(cfg["CORSRules"][0]["AllowedOrigins"])
+    assert "https://admin-rose-eight-52.vercel.app" in origins
+    assert "PUT" in cfg["CORSRules"][0]["AllowedMethods"]
+    r2_mod._browser_cors_ready = False

@@ -6,6 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from pydantic import BaseModel, Field
 
 from app.admin import (
     ai_ops as admin_ai_ops,
@@ -106,7 +107,13 @@ from app.admin.schemas import (
 )
 from app.auth.schemas import UserPublic
 from app.listening.service import invalidate_listening_audio_caches
-from app.storage.r2 import object_exists, object_head, upload_object
+from app.storage.r2 import (
+    ensure_browser_put_cors,
+    generate_presigned_put_url,
+    object_exists,
+    object_head,
+    upload_object,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -290,6 +297,40 @@ def delete_mock_route(
 
 ADMIN_AUDIO_MAX_BYTES = 200 * 1024 * 1024
 ADMIN_WATCH_VIDEO_MAX_BYTES = 200 * 1024 * 1024
+ADMIN_AUDIO_MIN_BYTES = 10_000
+
+
+class ListeningAudioUploadUrlRequest(BaseModel):
+    size_bytes: int = Field(ge=ADMIN_AUDIO_MIN_BYTES, le=ADMIN_AUDIO_MAX_BYTES)
+    content_type: str = "audio/mpeg"
+
+
+def _listening_audio_upload_url(*, key: str, size_bytes: int, content_type: str) -> dict[str, object]:
+    mime = (content_type or "audio/mpeg").split(";")[0].strip() or "audio/mpeg"
+    if not mime.startswith("audio/"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must be audio.")
+    try:
+        ensure_browser_put_cors()
+    except Exception:
+        pass
+    try:
+        upload_url = generate_presigned_put_url(
+            key,
+            content_type=mime,
+            expiry=900,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return {
+        "ok": True,
+        "audio_key": key,
+        "upload_url": upload_url,
+        "content_type": mime,
+        "expires_in": 900,
+    }
 
 
 # --- Question bank (standalone practice-set content) -------------------------
@@ -381,6 +422,26 @@ def save_bank_listening_route(
     return question_bank.save_bank_listening(
         set_id=set_id, part=part, body=body, admin_id=admin.id
     )
+
+
+@router.post("/question-bank/sets/{set_id}/listening/{part}/audio-upload-url")
+def bank_listening_audio_upload_url_route(
+    set_id: UUID,
+    part: int,
+    body: ListeningAudioUploadUrlRequest,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+):
+    if part < 1 or part > 4:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Part must be 1–4.")
+    key = question_bank.default_bank_audio_key(set_id=set_id, part=part)
+    return {
+        **_listening_audio_upload_url(
+            key=key,
+            size_bytes=body.size_bytes,
+            content_type=body.content_type,
+        ),
+        "part": part,
+    }
 
 
 @router.post("/question-bank/sets/{set_id}/listening/{part}/audio")
@@ -887,6 +948,21 @@ def listening_audio_status_route(
         "size_bytes": size_bytes,
         "part": part,
     }
+
+
+@router.post("/mocks/{mock_id}/ingest/audio-upload-url")
+def mock_listening_audio_upload_url_route(
+    mock_id: UUID,
+    body: ListeningAudioUploadUrlRequest,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    part: int = Query(..., ge=1, le=4),
+):
+    key = f"listening/{mock_id}/part-{part}/full.mp3"
+    return _listening_audio_upload_url(
+        key=key,
+        size_bytes=body.size_bytes,
+        content_type=body.content_type,
+    )
 
 
 @router.post("/mocks/{mock_id}/ingest/audio")
