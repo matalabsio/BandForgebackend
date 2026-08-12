@@ -47,6 +47,54 @@ def test_submit_rejects_empty_essay():
         assert exc.value.status_code == 400
 
 
+def test_submit_accepts_empty_essay_on_expiry():
+    attempt = {
+        "id": str(ATTEMPT),
+        "user_id": str(USER),
+        "mock_test_id": str(M01),
+        "module": "writing",
+        "status": "in_progress",
+        "part": 1,
+        "mock_attempt_id": None,
+    }
+    question = {
+        "id": str(QUESTION),
+        "prompt": "Task",
+        "question_type": "task1_academic",
+        "part": 1,
+    }
+    mock_test = {"id": str(M01), "title": "Mock 1", "is_published": True}
+
+    with (
+        patch("app.writing.service.repo.get_attempt", return_value=attempt),
+        patch(
+            "app.writing.service.repo.list_questions_for_part",
+            return_value=[question],
+        ),
+        patch("app.writing.service.repo.get_mock_test", return_value=mock_test),
+        patch("app.writing.service.repo.upsert_answer") as upsert,
+        patch(
+            "app.writing.service.repo.insert_writing_review",
+            return_value={"id": "00000000-0000-4000-8000-000000000055"},
+        ),
+        patch(
+            "app.writing.service.repo.mark_attempt_completed",
+            return_value={"completed_at": "2026-05-27T12:00:00+00:00"},
+        ),
+        patch("app.writing.service.run_writing_evaluation"),
+    ):
+        res = submit_attempt(
+            attempt_id=ATTEMPT,
+            user_id=USER,
+            answers=[{"question_id": str(QUESTION), "user_answer": "  "}],
+            on_expiry=True,
+        )
+
+    upsert.assert_called_once()
+    assert upsert.call_args.kwargs["user_answer"] == "[No response]"
+    assert res.status == "completed"
+
+
 def test_submit_queues_review_without_module_score():
     attempt = {
         "id": str(ATTEMPT),

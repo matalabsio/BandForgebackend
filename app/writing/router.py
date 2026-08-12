@@ -159,6 +159,7 @@ def submit_writing(
             answers=payload,
             timing=timing,
             background_tasks=background_tasks,
+            on_expiry=body.on_expiry,
         )
         _timing_log(
             "/api/writing/attempts/{attempt_id}/submit",

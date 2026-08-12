@@ -58,6 +58,7 @@ class SubmitAnswer(BaseModel):
 
 class SubmitWritingRequest(BaseModel):
     answers: list[SubmitAnswer] = Field(default_factory=list)
+    on_expiry: bool = False
 
 
 class SubmitWritingResponse(BaseModel):

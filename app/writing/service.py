@@ -507,6 +507,9 @@ def autosave_answer(
     return response
 
 
+EMPTY_EXPIRY_PLACEHOLDER = "[No response]"
+
+
 def submit_attempt(
     *,
     attempt_id: UUID,
@@ -514,6 +517,7 @@ def submit_attempt(
     answers: list[dict[str, str]],
     timing: WritingSubmitTiming | None = None,
     background_tasks: BackgroundTasks | None = None,
+    on_expiry: bool = False,
 ) -> SubmitWritingResponse:
     t_request = perf_counter()
     t0 = perf_counter()
@@ -551,10 +555,13 @@ def submit_attempt(
 
     essay = answers_by_qid.get(str(question_id), "").strip()
     if not essay:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Essay cannot be empty.",
-        )
+        if on_expiry:
+            essay = EMPTY_EXPIRY_PLACEHOLDER
+        else:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Essay cannot be empty.",
+            )
 
     t0 = perf_counter()
     words = _word_count(essay)

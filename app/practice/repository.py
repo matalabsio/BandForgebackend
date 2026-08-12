@@ -6,27 +6,80 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from postgrest.exceptions import APIError
+
 from app.db.supabase_client import execute_with_retry, get_supabase
 
 SKILLS = ("listening", "reading", "writing", "speaking")
 VALID_DIFFICULTIES = frozenset({"easy", "medium", "hard"})
 DIFFICULTY_RANK = {"easy": 0, "medium": 1, "hard": 2}
 
+_SET_CORE = "id, set_number, title, status, difficulty"
+_SET_INTRO = "intro_video_key, intro_stream_uid"
+_BANKS = "practice_banks!inner(skill, bank_number, title, weakness_tags)"
+
 HUB_LIST_COLUMNS = (
     "id, slug, set_id, estimated_min, sort_order, practice_prompt, submit_config, "
-    "practice_sets!inner("
-    "id, set_number, title, status, difficulty, intro_video_key, intro_stream_uid, "
-    "practice_banks!inner(skill, bank_number, title, weakness_tags)"
-    ")"
+    f"practice_sets!inner({_SET_CORE}, {_SET_INTRO}, {_BANKS})"
+)
+HUB_LIST_COLUMNS_NO_INTRO = (
+    "id, slug, set_id, estimated_min, sort_order, practice_prompt, submit_config, "
+    f"practice_sets!inner({_SET_CORE}, {_BANKS})"
 )
 
 HUB_DETAIL_COLUMNS = (
     "id, slug, set_id, videos, practice_prompt, submit_config, estimated_min, sort_order, "
-    "practice_sets!inner("
-    "id, set_number, title, status, difficulty, intro_video_key, intro_stream_uid, "
-    "practice_banks!inner(skill, bank_number, title, weakness_tags)"
-    ")"
+    f"practice_sets!inner({_SET_CORE}, {_SET_INTRO}, {_BANKS})"
 )
+HUB_DETAIL_COLUMNS_NO_INTRO = (
+    "id, slug, set_id, videos, practice_prompt, submit_config, estimated_min, sort_order, "
+    f"practice_sets!inner({_SET_CORE}, {_BANKS})"
+)
+
+# Remote DBs that have not applied 20260811170000 fall back after first miss.
+_intro_columns_available: bool | None = None
+
+
+def _missing_intro_column(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "intro_video_key" in msg or "intro_stream_uid" in msg
+
+
+def _hub_columns(*, detail: bool, with_intro: bool) -> str:
+    if detail:
+        return HUB_DETAIL_COLUMNS if with_intro else HUB_DETAIL_COLUMNS_NO_INTRO
+    return HUB_LIST_COLUMNS if with_intro else HUB_LIST_COLUMNS_NO_INTRO
+
+
+def _execute_hub_query(build):
+    """Run a practice_hubs select; retry without intro columns if not migrated."""
+    global _intro_columns_available
+    try_intro = _intro_columns_available is not False
+    try:
+        result = build(_hub_columns(detail=False, with_intro=try_intro)).execute()
+        if try_intro:
+            _intro_columns_available = True
+        return result
+    except APIError as exc:
+        if not try_intro or not _missing_intro_column(exc):
+            raise
+        _intro_columns_available = False
+        return build(_hub_columns(detail=False, with_intro=False)).execute()
+
+
+def _execute_hub_detail_query(build):
+    global _intro_columns_available
+    try_intro = _intro_columns_available is not False
+    try:
+        result = build(_hub_columns(detail=True, with_intro=try_intro)).execute()
+        if try_intro:
+            _intro_columns_available = True
+        return result
+    except APIError as exc:
+        if not try_intro or not _missing_intro_column(exc):
+            raise
+        _intro_columns_available = False
+        return build(_hub_columns(detail=True, with_intro=False)).execute()
 
 
 def _exec(query):
@@ -178,13 +231,14 @@ def list_hubs_for_skill(skill: str) -> list[dict[str, Any]]:
     if isinstance(cached, list):
         return cached
     sb = get_supabase()
-    result = (
-        sb.table("practice_hubs")
-        .select(HUB_LIST_COLUMNS)
-        .eq("practice_sets.practice_banks.skill", skill)
-        .eq("practice_sets.status", "published")
-        .order("sort_order")
-        .execute()
+    result = _execute_hub_query(
+        lambda cols: (
+            sb.table("practice_hubs")
+            .select(cols)
+            .eq("practice_sets.practice_banks.skill", skill)
+            .eq("practice_sets.status", "published")
+            .order("sort_order")
+        )
     )
     rows = _filter_assignable_hub_rows(list(result.data or []))
     rows.sort(
@@ -219,12 +273,13 @@ def list_assignable_hubs_grouped() -> dict[str, list[dict[str, Any]]]:
         return {s: list(cached.get(s) or []) for s in SKILLS}
 
     sb = get_supabase()
-    result = (
-        sb.table("practice_hubs")
-        .select(HUB_LIST_COLUMNS)
-        .eq("practice_sets.status", "published")
-        .order("sort_order")
-        .execute()
+    result = _execute_hub_query(
+        lambda cols: (
+            sb.table("practice_hubs")
+            .select(cols)
+            .eq("practice_sets.status", "published")
+            .order("sort_order")
+        )
     )
     filtered = _filter_assignable_hub_rows(list(result.data or []))
     grouped: dict[str, list[dict[str, Any]]] = {s: [] for s in SKILLS}
@@ -268,12 +323,13 @@ def get_hub_by_id(hub_id: str | UUID) -> dict[str, Any] | None:
             return None
         return cached
     sb = get_supabase()
-    result = (
-        sb.table("practice_hubs")
-        .select(HUB_DETAIL_COLUMNS)
-        .eq("id", str(hub_id))
-        .limit(1)
-        .execute()
+    result = _execute_hub_detail_query(
+        lambda cols: (
+            sb.table("practice_hubs")
+            .select(cols)
+            .eq("id", str(hub_id))
+            .limit(1)
+        )
     )
     rows = result.data or []
     row = rows[0] if rows else None
