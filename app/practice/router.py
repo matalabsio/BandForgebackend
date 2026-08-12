@@ -82,6 +82,28 @@ def start_practice_exercise(
     )
 
 
+@router.get("/hubs/{hub_id}/exercise/{attempt_id}/part-audio")
+def stream_practice_exercise_audio(
+    hub_id: str,
+    attempt_id: str,
+    request: Request,
+    user: Annotated[UserPublic, Depends(require_full_skill_program)],
+):
+    """Private bank listening MP3 — auth + in-progress attempt; Range supported."""
+    body, headers, status_code = service.stream_hub_exercise_audio(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        attempt_id=attempt_id,
+        range_header=request.headers.get("range"),
+    )
+    return StreamingResponse(
+        body,
+        status_code=status_code,
+        media_type=headers.get("Content-Type", "audio/mpeg"),
+        headers=headers,
+    )
+
+
 @router.post(
     "/hubs/{hub_id}/exercise/{attempt_id}/submit",
     response_model=ExerciseSubmitOut,

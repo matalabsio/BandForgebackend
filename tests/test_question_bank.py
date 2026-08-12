@@ -188,6 +188,18 @@ def test_start_hub_exercise_returns_questions():
     assert out.part == 1
     assert len(out.section.questions) == 1
     assert out.section.questions[0].correct_answer is None
+    assert out.section.audio_url == (
+        f"/api/practice/hubs/{HUB_ID}/exercise/{out.attempt_id}/part-audio"
+    )
+    assert out.section.questions[0].audio_url == out.section.audio_url
+
+
+def test_score_user_answer_strips_exam_mcq_token():
+    from app.practice.service import _score_user_answer
+
+    assert _score_user_answer("0::A") == "A"
+    assert _score_user_answer("15") == "15"
+    assert _score_user_answer("semester") == "semester"
 
 
 def test_save_bank_reading_requires_reading_set():

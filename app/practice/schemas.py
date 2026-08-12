@@ -74,6 +74,8 @@ class BankExerciseQuestionOut(BaseModel):
     question_type: str
     prompt: str
     options: Any = None
+    instructions: str | None = None
+    audio_url: str | None = None
     correct_answer: str | None = None
     difficulty: str = "medium"
 
@@ -85,6 +87,7 @@ class BankExerciseSectionOut(BaseModel):
     title: str | None = None
     instructions: str | None = None
     audio_key: str | None = None
+    audio_url: str | None = None
     passage_text: str | None = None
     image_url: str | None = None
     questions: list[BankExerciseQuestionOut] = Field(default_factory=list)

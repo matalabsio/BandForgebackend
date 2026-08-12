@@ -446,7 +446,7 @@ def start_hub_exercise(
             sb.table("bank_questions")
             .select(
                 "id, question_number, question_type, prompt, options, "
-                "correct_answer, difficulty"
+                "passage_text, correct_answer, difficulty"
             )
             .eq("section_id", section_id)
             .order("question_number")
@@ -495,6 +495,20 @@ def start_hub_exercise(
             detail="Could not start exercise attempt.",
         )
     attempt_id = str(inserted[0]["id"])
+    playback_url = (
+        f"/api/practice/hubs/{hub_id}/exercise/{attempt_id}/part-audio"
+        if str(chosen.get("audio_key") or "").strip()
+        else None
+    )
+    image_url = chosen.get("image_url")
+    image_out = str(image_url).strip() if image_url else None
+    if image_out and not image_out.startswith(("http://", "https://", "/")):
+        try:
+            from app.storage.r2 import generate_signed_url
+
+            image_out = generate_signed_url(image_out)
+        except Exception:
+            image_out = None
     questions = [
         BankExerciseQuestionOut(
             id=str(q["id"]),
@@ -502,7 +516,13 @@ def start_hub_exercise(
             question_type=str(q["question_type"]),
             prompt=str(q.get("prompt") or ""),
             options=q.get("options"),
-            correct_answer=None,  # never leak to client on start for objective skills
+            instructions=(
+                str(q["passage_text"]).strip()
+                if q.get("passage_text")
+                else None
+            ),
+            audio_url=playback_url,
+            correct_answer=None,
             difficulty=(
                 str(q.get("difficulty") or "medium")
                 if str(q.get("difficulty") or "medium") in ("easy", "medium", "hard")
@@ -511,7 +531,6 @@ def start_hub_exercise(
         )
         for q in qrows
     ]
-    # Writing/speaking don't need hidden answers; L/R hide correct_answer
     return ExerciseStartOut(
         attempt_id=attempt_id,
         hub_id=str(hub_id),
@@ -525,11 +544,97 @@ def start_hub_exercise(
             title=chosen.get("title"),
             instructions=chosen.get("instructions"),
             audio_key=chosen.get("audio_key"),
+            audio_url=playback_url,
             passage_text=chosen.get("passage_text"),
-            image_url=chosen.get("image_url"),
+            image_url=image_out,
             questions=questions,
         ),
     )
+
+
+def _score_user_answer(given: Any) -> str:
+    """Strip exam MCQ tokens like ``0::A`` down to the letter/text."""
+    s = str(given).strip() if given is not None else ""
+    if "::" in s:
+        idx, rest = s.split("::", 1)
+        if idx.isdigit():
+            return rest.strip()
+    return s
+
+
+def stream_hub_exercise_audio(
+    *,
+    user_id: UUID,
+    hub_id: str,
+    attempt_id: str,
+    range_header: str | None,
+) -> tuple[Any, dict[str, str], int]:
+    """Same-origin stream of bank listening audio for an in-progress exercise."""
+    from app.db.supabase_client import get_supabase
+    from app.storage.r2 import get_object_stream, object_head
+
+    assert_hub_accessible(user_id=user_id, hub_id=hub_id)
+    sb = get_supabase()
+    rows = (
+        sb.table("practice_exercise_attempts")
+        .select("id, user_id, hub_id, section_id, status")
+        .eq("id", str(attempt_id))
+        .eq("user_id", str(user_id))
+        .eq("hub_id", str(hub_id))
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Attempt not found")
+    attempt = rows[0]
+    if str(attempt.get("status") or "") != "in_progress":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Listening audio is only available during an active attempt.",
+        )
+    section_id = attempt.get("section_id")
+    if not section_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail="No audio section on this attempt."
+        )
+    sections = (
+        sb.table("bank_sections")
+        .select("audio_key")
+        .eq("id", str(section_id))
+        .limit(1)
+        .execute()
+    ).data or []
+    key = str((sections[0] if sections else {}).get("audio_key") or "").strip()
+    if not key:
+        qrows = (
+            sb.table("bank_questions")
+            .select("audio_url")
+            .eq("section_id", str(section_id))
+            .limit(8)
+            .execute()
+        ).data or []
+        for q in qrows:
+            raw = str(q.get("audio_url") or "").strip()
+            if raw and not raw.startswith(("http://", "https://", "/")):
+                key = raw
+                break
+    if not key:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="No listening audio configured for this set.",
+        )
+    if not object_head(key):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Audio not found in storage.",
+        )
+    try:
+        return get_object_stream(key, range_header=range_header)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 def submit_hub_exercise(
@@ -588,7 +693,7 @@ def submit_hub_exercise(
                     continue
                 total += 1
                 given = answers.get(key)
-                given_s = str(given).strip() if given is not None else ""
+                given_s = _score_user_answer(given)
                 if is_answer_correct(given_s, expected):
                     correct += 1
             if total:
