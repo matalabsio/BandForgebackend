@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.admin.audio_upload_ticket import (
+    attach_ticket_to_url,
     mint_audio_upload_ticket,
     parse_audio_upload_ticket,
     public_api_origin,
@@ -67,3 +68,17 @@ def test_public_api_origin_prefers_settings():
         return_value=_settings(public_api_url="backend-production-a813.up.railway.app"),
     ):
         assert public_api_origin(request) == "https://backend-production-a813.up.railway.app"
+
+
+def test_attach_ticket_to_url_uses_query_or_ampersand():
+    assert (
+        attach_ticket_to_url("https://api.example/admin/audio-direct", "abc.def")
+        == "https://api.example/admin/audio-direct?ticket=abc.def"
+    )
+    assert (
+        attach_ticket_to_url(
+            "https://api.example/admin/audio-direct?part=1",
+            "abc.def",
+        )
+        == "https://api.example/admin/audio-direct?part=1&ticket=abc.def"
+    )

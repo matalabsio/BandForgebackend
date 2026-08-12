@@ -9,6 +9,8 @@ import json
 import time
 from typing import Any
 
+from urllib.parse import quote
+
 from fastapi import HTTPException, Request, status
 
 from app.config import get_settings
@@ -66,6 +68,18 @@ def parse_audio_upload_ticket(ticket: str) -> dict[str, Any]:
             detail="Upload ticket expired. Get a new one and retry.",
         )
     return payload
+
+
+def attach_ticket_to_url(url: str, ticket: str) -> str:
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}ticket={quote(ticket, safe='')}"
+
+
+def ticket_from_request(request: Request) -> str:
+    return (
+        (request.query_params.get("ticket") or "").strip()
+        or (request.headers.get("x-upload-ticket") or "").strip()
+    )
 
 
 def public_api_origin(request: Request) -> str:

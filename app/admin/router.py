@@ -106,9 +106,11 @@ from app.admin.schemas import (
     WritingReviewDetail,
 )
 from app.admin.audio_upload_ticket import (
+    attach_ticket_to_url,
     mint_audio_upload_ticket,
     parse_audio_upload_ticket,
     public_api_origin,
+    ticket_from_request,
 )
 from app.auth.schemas import UserPublic
 from app.listening.service import invalidate_listening_audio_caches
@@ -322,7 +324,7 @@ def _listening_audio_upload_url(
         size_bytes=size_bytes,
     )
     origin = public_api_origin(request)
-    direct_url = f"{origin}{direct_path}"
+    direct_url = attach_ticket_to_url(f"{origin}{direct_path}", ticket)
     return {
         "ok": True,
         "audio_key": key,
@@ -339,7 +341,12 @@ async def _store_ticketed_audio(
     *,
     expected_key: str,
 ) -> bytes:
-    ticket = (request.headers.get("x-upload-ticket") or "").strip()
+    ticket = ticket_from_request(request)
+    if not ticket:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Missing upload ticket.",
+        )
     payload = parse_audio_upload_ticket(ticket)
     if str(payload.get("k") or "") != expected_key:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Upload ticket key mismatch.")

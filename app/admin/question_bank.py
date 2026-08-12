@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
+from postgrest.exceptions import APIError
 
 from app.admin.answer_format import (
     expand_choose_two_rows,
@@ -1311,15 +1312,35 @@ def default_bank_watch_video_key(*, set_id: UUID, ext: str = "mp4") -> str:
     return f"bank/{set_id}/watch/intro.{safe}"
 
 
+def _missing_intro_column(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "intro_video_key" in msg or "intro_stream_uid" in msg
+
+
+def _intro_column_unavailable(exc: APIError) -> HTTPException:
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "practice_sets is missing intro_stream_uid / intro_video_key. "
+            "Apply backend/supabase/migrations/20260811170000_practice_sets_intro_video_key.sql."
+        ),
+    )
+
+
 def get_set_intro_video_key(*, set_id: UUID) -> str | None:
     sb = get_supabase()
-    rows = (
-        sb.table("practice_sets")
-        .select("intro_video_key")
-        .eq("id", str(set_id))
-        .limit(1)
-        .execute()
-    ).data or []
+    try:
+        rows = (
+            sb.table("practice_sets")
+            .select("intro_video_key")
+            .eq("id", str(set_id))
+            .limit(1)
+            .execute()
+        ).data or []
+    except APIError as exc:
+        if _missing_intro_column(exc):
+            return None
+        raise
     if not rows:
         return None
     key = str(rows[0].get("intro_video_key") or "").strip()
@@ -1328,13 +1349,18 @@ def get_set_intro_video_key(*, set_id: UUID) -> str | None:
 
 def get_set_intro_stream_uid(*, set_id: UUID) -> str | None:
     sb = get_supabase()
-    rows = (
-        sb.table("practice_sets")
-        .select("intro_stream_uid")
-        .eq("id", str(set_id))
-        .limit(1)
-        .execute()
-    ).data or []
+    try:
+        rows = (
+            sb.table("practice_sets")
+            .select("intro_stream_uid")
+            .eq("id", str(set_id))
+            .limit(1)
+            .execute()
+        ).data or []
+    except APIError as exc:
+        if _missing_intro_column(exc):
+            return None
+        raise
     if not rows:
         return None
     uid = str(rows[0].get("intro_stream_uid") or "").strip()
@@ -1346,12 +1372,17 @@ def set_intro_stream_uid(*, set_id: UUID, stream_uid: str) -> str:
     value = (stream_uid or "").strip()
     if not value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="stream_uid required")
-    updated = (
-        sb.table("practice_sets")
-        .update({"intro_stream_uid": value})
-        .eq("id", str(set_id))
-        .execute()
-    ).data
+    try:
+        updated = (
+            sb.table("practice_sets")
+            .update({"intro_stream_uid": value})
+            .eq("id", str(set_id))
+            .execute()
+        ).data
+    except APIError as exc:
+        if _missing_intro_column(exc):
+            raise _intro_column_unavailable(exc) from exc
+        raise
     if not updated:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Practice set not found.")
     try:
@@ -1370,12 +1401,17 @@ def set_intro_video_key(*, set_id: UUID, key: str) -> str:
     value = (key or "").strip()
     if not value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="video key required")
-    updated = (
-        sb.table("practice_sets")
-        .update({"intro_video_key": value})
-        .eq("id", str(set_id))
-        .execute()
-    ).data
+    try:
+        updated = (
+            sb.table("practice_sets")
+            .update({"intro_video_key": value})
+            .eq("id", str(set_id))
+            .execute()
+        ).data
+    except APIError as exc:
+        if _missing_intro_column(exc):
+            raise _intro_column_unavailable(exc) from exc
+        raise
     if not updated:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Practice set not found.")
     try:
