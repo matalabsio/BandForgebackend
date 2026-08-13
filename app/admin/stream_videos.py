@@ -16,7 +16,9 @@ from app.storage.stream import (
     create_direct_upload,
     create_tus_upload,
     get_video,
+    list_account_videos,
     normalize_customer_code,
+    parse_stream_uid,
     playback_iframe_url,
 )
 
@@ -124,6 +126,46 @@ def list_stream_videos() -> list[dict[str, Any]]:
     return list(result.data or [])
 
 
+def list_stream_library() -> list[dict[str, Any]]:
+    """Cloudflare Stream account videos merged with BandForge tag assignments."""
+    try:
+        remote = list_account_videos()
+    except StreamError as exc:
+        _raise_stream(exc)
+    assigned = {
+        str(row.get("stream_uid") or "").strip(): str(row.get("tag") or "").strip()
+        for row in list_stream_videos()
+        if str(row.get("stream_uid") or "").strip()
+    }
+    items: list[dict[str, Any]] = []
+    for row in remote:
+        uid = str(row.get("uid") or "").strip()
+        if not uid:
+            continue
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        name = str(meta.get("name") or row.get("meta", {}).get("name") or "").strip()
+        if not name:
+            name = str(row.get("preview") or uid)
+        status = _status_from_video(row)
+        try:
+            secs = float(row.get("duration") or 0)
+        except (TypeError, ValueError):
+            secs = 0.0
+        items.append(
+            {
+                "uid": uid,
+                "name": name,
+                "duration_sec": int(secs) if secs > 0 else 0,
+                "status": status,
+                "thumbnail": str(row.get("thumbnail") or "").strip(),
+                "require_signed_urls": bool(row.get("requireSignedURLs")),
+                "assigned_tag": assigned.get(uid) or None,
+                "created": str(row.get("created") or "").strip() or None,
+            }
+        )
+    return items
+
+
 def start_direct_upload(
     *,
     tag: str,
@@ -227,9 +269,10 @@ def complete_stream_video(
     admin_id,
 ) -> dict[str, Any]:
     tag = assert_valid_tag(tag)
-    uid = (stream_uid or "").strip()
-    if not uid:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="stream_uid is required.")
+    try:
+        uid = parse_stream_uid(stream_uid)
+    except StreamError as exc:
+        raise HTTPException(exc.status_code, detail=str(exc)) from exc
     label = (title or "").strip() or tag.replace("-", " ").title()
     try:
         stream_meta = get_video(uid)

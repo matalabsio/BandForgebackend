@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import httpx
 
 from app.config import get_settings
 
 STREAM_API_BASE = "https://api.cloudflare.com/client/v4"
+_STREAM_UID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
 class StreamError(Exception):
@@ -38,6 +41,33 @@ def playback_iframe_url(*, customer_code: str, stream_uid: str) -> str:
     if not code or not uid:
         return ""
     return f"https://{code}.cloudflarestream.com/{uid}/iframe"
+
+
+def parse_stream_uid(raw: str) -> str:
+    """Accept a raw Stream UID or a Cloudflare playback / watch URL."""
+    value = unquote((raw or "").strip())
+    if not value:
+        raise StreamError("Stream UID is required.", status_code=400)
+    if "://" in value or value.startswith("www."):
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        host = (parsed.hostname or "").lower()
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if host.endswith("cloudflarestream.com") and parts:
+            if parts[0] in {"watch", "iframe"} and len(parts) > 1:
+                value = parts[1]
+            else:
+                value = parts[0]
+        elif parts:
+            value = parts[0]
+        value = value.split("?", 1)[0].strip()
+    if value.lower() in {"iframe", "watch", "manifest", "thumbnails"}:
+        raise StreamError("Could not read a Stream video UID from that URL.", status_code=400)
+    if not _STREAM_UID_RE.match(value) or "." in value:
+        raise StreamError(
+            "Enter a Stream video UID or a cloudflarestream.com iframe / watch URL.",
+            status_code=400,
+        )
+    return value
 
 
 def _credentials() -> tuple[str, str]:
@@ -294,3 +324,32 @@ def get_video(stream_uid: str) -> dict[str, Any]:
 
     result = payload.get("result")
     return result if isinstance(result, dict) else {}
+
+
+def list_account_videos(*, limit: int = 100) -> list[dict[str, Any]]:
+    """List videos in the Cloudflare Stream account (not BandForge tags)."""
+    account_id, token = _credentials()
+    page_size = max(1, min(int(limit or 100), 1000))
+    url = f"{STREAM_API_BASE}/accounts/{account_id}/stream"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": page_size},
+            )
+    except httpx.HTTPError as exc:
+        raise StreamError(f"Could not reach Cloudflare Stream: {exc}", status_code=503) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise StreamError("Cloudflare Stream returned an invalid response.", status_code=502) from exc
+
+    if not payload.get("success") or response.status_code >= 400:
+        _raise_from_payload(payload if isinstance(payload, dict) else {}, http_status=response.status_code)
+
+    result = payload.get("result")
+    if isinstance(result, list):
+        return [row for row in result if isinstance(row, dict)]
+    return []

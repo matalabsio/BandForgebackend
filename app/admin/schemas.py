@@ -1057,3 +1057,18 @@ class StreamVideoItem(BaseModel):
 
 class StreamVideoListResponse(BaseModel):
     items: list[StreamVideoItem] = Field(default_factory=list)
+
+
+class StreamLibraryItem(BaseModel):
+    uid: str
+    name: str = ""
+    duration_sec: int = 0
+    status: str = "processing"
+    thumbnail: str = ""
+    require_signed_urls: bool = False
+    assigned_tag: str | None = None
+    created: str | None = None
+
+
+class StreamLibraryResponse(BaseModel):
+    items: list[StreamLibraryItem] = Field(default_factory=list)

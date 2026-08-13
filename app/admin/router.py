@@ -99,6 +99,8 @@ from app.admin.schemas import (
     SpeakingReviewDetail,
     StreamDirectUploadRequest,
     StreamDirectUploadResponse,
+    StreamLibraryItem,
+    StreamLibraryResponse,
     StreamVideoCompleteRequest,
     StreamVideoItem,
     StreamVideoListResponse,
@@ -152,6 +154,17 @@ def list_stream_videos_route(
         for row in admin_stream_videos.list_stream_videos()
     ]
     return StreamVideoListResponse(items=items)
+
+
+@router.get("/stream/library", response_model=StreamLibraryResponse)
+def list_stream_library_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> StreamLibraryResponse:
+    items = [
+        StreamLibraryItem.model_validate(row)
+        for row in admin_stream_videos.list_stream_library()
+    ]
+    return StreamLibraryResponse(items=items)
 
 
 @router.post("/stream/direct-upload", response_model=StreamDirectUploadResponse)
