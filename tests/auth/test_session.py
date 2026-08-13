@@ -42,6 +42,8 @@ def _user_row(**kwargs) -> dict:
         "avatar_url": None,
         "is_active": True,
         "email_verified_at": "2026-01-01T00:00:00+00:00",
+        "ielts_purpose": None,
+        "ielts_goal": None,
     }
     defaults.update(kwargs)
     return defaults
@@ -65,6 +67,18 @@ def test_get_session_user_by_id_returns_session_user():
     assert user.full_name == "Test Student"
     assert user.role == "student"
     assert user.is_active is True
+    assert user.ielts_purpose is None
+    assert user.ielts_goal is None
+
+
+def test_get_session_user_by_id_includes_ielts_purpose_and_goal():
+    mock_sb = _mock_supabase_execute(
+        [_user_row(ielts_purpose="immigration", ielts_goal="australian_pr")]
+    )
+    with patch("app.auth.service.get_supabase", return_value=mock_sb):
+        user = asyncio.run(service.get_session_user_by_id(USER_ID))
+    assert user.ielts_purpose == "immigration"
+    assert user.ielts_goal == "australian_pr"
 
 
 def test_get_session_user_by_id_not_found():
@@ -108,6 +122,8 @@ def test_session_route_returns_200():
         assert body["id"] == str(USER_ID)
         assert body["full_name"] == "Test Student"
         assert body["role"] == "student"
+        assert body["ielts_purpose"] is None
+        assert body["ielts_goal"] is None
         assert "target_band" not in body
         assert "phone" not in body
     finally:

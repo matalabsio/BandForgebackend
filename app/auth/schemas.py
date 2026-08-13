@@ -1,8 +1,19 @@
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.auth.utils import is_valid_india_phone, normalize_india_phone
+
+IeltsPurpose = Literal["immigration", "university", "professional", "general"]
+IeltsGoal = Literal[
+    "australian_pr",
+    "canada_pr",
+    "uk_visa",
+    "study_abroad",
+    "professional_registration",
+    "other",
+]
 
 
 class RegisterRequest(BaseModel):
@@ -80,6 +91,8 @@ class UserPublic(BaseModel):
     avatar_url: str | None = None
     avatar_display_url: str | None = None
     target_band: float | None = None
+    ielts_purpose: IeltsPurpose | None = None
+    ielts_goal: IeltsGoal | None = None
     role: str = "student"
     is_active: bool = True
 
@@ -93,6 +106,8 @@ class SessionUser(BaseModel):
     role: str = "student"
     avatar_display_url: str | None = None
     is_active: bool = True
+    ielts_purpose: IeltsPurpose | None = None
+    ielts_goal: IeltsGoal | None = None
 
 
 class UpdateProfileRequest(BaseModel):
@@ -100,6 +115,8 @@ class UpdateProfileRequest(BaseModel):
     phone: str | None = None
     target_band: float | None = Field(default=None, ge=4.0, le=9.0)
     exam_date: str | None = Field(default=None, max_length=10)
+    ielts_purpose: IeltsPurpose | None = None
+    ielts_goal: IeltsGoal | None = None
 
     @field_validator("phone")
     @classmethod
@@ -117,6 +134,16 @@ class UpdateProfileRequest(BaseModel):
         if v is None:
             return None
         return round(v * 2) / 2
+
+    @field_validator("ielts_purpose", "ielts_goal", mode="before")
+    @classmethod
+    def empty_ielts_to_none(cls, v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            trimmed = v.strip().lower()
+            return trimmed or None
+        return v
 
 
 class UpdateProfileResponse(BaseModel):

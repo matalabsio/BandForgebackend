@@ -132,3 +132,66 @@ def test_update_user_profile_sets_phone_when_free():
     update_payload = mock_sb.table.return_value.update.call_args[0][0]
     assert update_payload["phone"] == "+919876543210"
     assert update_payload["exam_date"] == "2026-09-01"
+
+
+def test_update_user_profile_writes_ielts_purpose_and_goal():
+    user_id = uuid4()
+    body = UpdateProfileRequest(
+        full_name="Dream Student",
+        target_band=7.0,
+        ielts_purpose="university",
+        ielts_goal="study_abroad",
+    )
+
+    mock_sb = MagicMock()
+    returned = UserPublic(
+        id=user_id,
+        email="dream@example.com",
+        full_name="Dream Student",
+        target_band=7.0,
+        ielts_purpose="university",
+        ielts_goal="study_abroad",
+        role="student",
+    )
+
+    with (
+        patch("app.auth.service.get_supabase", return_value=mock_sb),
+        patch(
+            "app.auth.service.get_user_by_id",
+            new=AsyncMock(return_value=returned),
+        ),
+    ):
+        result = asyncio.run(update_user_profile(user_id=user_id, body=body))
+
+    assert result.user.ielts_purpose == "university"
+    assert result.user.ielts_goal == "study_abroad"
+    update_payload = mock_sb.table.return_value.update.call_args[0][0]
+    assert update_payload["ielts_purpose"] == "university"
+    assert update_payload["ielts_goal"] == "study_abroad"
+
+
+def test_update_user_profile_omits_ielts_fields_when_unset():
+    user_id = uuid4()
+    body = UpdateProfileRequest(full_name="No Dream", target_band=6.5)
+
+    mock_sb = MagicMock()
+    returned = UserPublic(
+        id=user_id,
+        email="nodream@example.com",
+        full_name="No Dream",
+        target_band=6.5,
+        role="student",
+    )
+
+    with (
+        patch("app.auth.service.get_supabase", return_value=mock_sb),
+        patch(
+            "app.auth.service.get_user_by_id",
+            new=AsyncMock(return_value=returned),
+        ),
+    ):
+        asyncio.run(update_user_profile(user_id=user_id, body=body))
+
+    update_payload = mock_sb.table.return_value.update.call_args[0][0]
+    assert "ielts_purpose" not in update_payload
+    assert "ielts_goal" not in update_payload

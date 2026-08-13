@@ -1714,20 +1714,6 @@ def export_users_overview_csv(
     return admin_exports.users_overview_csv()
 
 
-@router.get("/exports/reliability-snapshot.csv")
-def export_reliability_snapshot_csv(
-    _admin: Annotated[UserPublic, Depends(require_admin)],
-):
-    return admin_exports.reliability_snapshot_csv()
-
-
-@router.get("/exports/hub-progress-7d.csv")
-def export_hub_progress_7d_csv(
-    _admin: Annotated[UserPublic, Depends(require_admin)],
-):
-    return admin_exports.hub_progress_7d_csv()
-
-
 @router.get("/audit", response_model=AuditLogResponse)
 def list_audit_route(
     admin: Annotated[UserPublic, Depends(require_admin)],

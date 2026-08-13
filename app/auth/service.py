@@ -111,6 +111,8 @@ def _row_to_user(row: dict[str, Any]) -> UserPublic:
         avatar_url=row.get("avatar_url"),
         avatar_display_url=_avatar_display_url(row.get("avatar_url")),
         target_band=float(target) if target is not None else None,
+        ielts_purpose=row.get("ielts_purpose"),
+        ielts_goal=row.get("ielts_goal"),
         role=str(row.get("role") or "student"),
         is_active=bool(row.get("is_active", True)),
     )
@@ -124,6 +126,8 @@ def _row_to_session(row: dict[str, Any]) -> SessionUser:
         role=str(row.get("role") or "student"),
         avatar_display_url=_avatar_display_url(row.get("avatar_url")),
         is_active=bool(row.get("is_active", True)),
+        ielts_purpose=row.get("ielts_purpose"),
+        ielts_goal=row.get("ielts_goal"),
     )
 
 
@@ -669,6 +673,10 @@ async def update_user_profile(
     }
     if body.exam_date is not None:
         payload["exam_date"] = body.exam_date.strip() or None
+    if body.ielts_purpose is not None:
+        payload["ielts_purpose"] = body.ielts_purpose
+    if body.ielts_goal is not None:
+        payload["ielts_goal"] = body.ielts_goal
 
     raw_phone = (body.phone or "").strip()
     if not raw_phone:
@@ -778,7 +786,10 @@ async def get_session_user_by_id(user_id: UUID) -> SessionUser:
     sb = get_supabase()
     result = (
         sb.table("users")
-        .select("id, full_name, email, role, avatar_url, is_active, email_verified_at")
+        .select(
+            "id, full_name, email, role, avatar_url, is_active, email_verified_at, "
+            "ielts_purpose, ielts_goal"
+        )
         .eq("id", str(user_id))
         .limit(1)
         .execute()
