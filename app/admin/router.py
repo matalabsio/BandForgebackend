@@ -101,6 +101,7 @@ from app.admin.schemas import (
     StreamDirectUploadResponse,
     StreamLibraryItem,
     StreamLibraryResponse,
+    DeleteStreamLibraryVideoResponse,
     StreamVideoCompleteRequest,
     StreamVideoItem,
     StreamVideoListResponse,
@@ -194,6 +195,21 @@ def complete_stream_video_route(
         admin_id=admin.id,
     )
     return StreamVideoItem.model_validate(saved)
+
+
+@router.delete(
+    "/stream/library/{stream_uid}",
+    response_model=DeleteStreamLibraryVideoResponse,
+)
+def delete_stream_library_video_route(
+    stream_uid: str,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> DeleteStreamLibraryVideoResponse:
+    saved = admin_stream_videos.delete_stream_library_video(
+        stream_uid=stream_uid,
+        admin_id=admin.id,
+    )
+    return DeleteStreamLibraryVideoResponse.model_validate(saved)
 
 
 @router.get("/dashboard/metrics", response_model=DashboardMetrics)

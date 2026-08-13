@@ -18,7 +18,7 @@ from app.reading import router as reading_router
 from app.speaking.router import router as speaking_router
 from app.notifications.router import router as notifications_router
 from app.writing.router import router as writing_router
-from app.routers import attempts, dashboard, diagnostic, mock_attempts, status, tests
+from app.routers import attempts, dashboard, diagnostic, marketing, mock_attempts, status, tests
 
 
 @asynccontextmanager
@@ -193,6 +193,7 @@ app.add_middleware(
 )
 
 app.include_router(status.router)
+app.include_router(marketing.router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(tests.router)

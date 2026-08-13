@@ -1007,6 +1007,7 @@ class BankSpeakingPartResponse(BaseModel):
 StreamVideoTag = Literal[
     "bandforge-intro",
     "ielts-intro",
+    "hero-intro",
     "listening-intro",
     "reading-intro",
     "writing-intro",
@@ -1072,3 +1073,10 @@ class StreamLibraryItem(BaseModel):
 
 class StreamLibraryResponse(BaseModel):
     items: list[StreamLibraryItem] = Field(default_factory=list)
+
+
+class DeleteStreamLibraryVideoResponse(BaseModel):
+    ok: bool = True
+    uid: str
+    unassigned_tag: str | None = None
+    hubs_updated: int = 0

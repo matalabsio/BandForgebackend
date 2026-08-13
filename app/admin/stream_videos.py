@@ -15,6 +15,7 @@ from app.storage.stream import (
     StreamError,
     create_direct_upload,
     create_tus_upload,
+    delete_video,
     get_video,
     list_account_videos,
     normalize_customer_code,
@@ -25,11 +26,15 @@ from app.storage.stream import (
 STREAM_TAGS = (
     "bandforge-intro",
     "ielts-intro",
+    "hero-intro",
     "listening-intro",
     "reading-intro",
     "writing-intro",
     "speaking-intro",
 )
+
+HERO_TAG = "hero-intro"
+HERO_CACHE_KEY = "marketing:hero"
 
 SKILL_TAG_MAP = {
     "listening-intro": "listening",
@@ -37,6 +42,105 @@ SKILL_TAG_MAP = {
     "writing-intro": "writing",
     "speaking-intro": "speaking",
 }
+
+
+def invalidate_hero_cache() -> None:
+    from app.cache.hybrid_cache import delete_many
+
+    delete_many([HERO_CACHE_KEY])
+
+
+def _hero_poster(customer: str, uid: str) -> str:
+    if not customer or not uid:
+        return ""
+    return (
+        f"https://{customer}.cloudflarestream.com/{uid}"
+        "/thumbnails/thumbnail.jpg?time=2s&height=720"
+    )
+
+
+def _hero_payload(
+    *,
+    configured: bool,
+    stream_uid: str = "",
+    customer_code: str = "",
+    poster_url: str = "",
+    status: str = "",
+    title: str = "",
+) -> dict[str, Any]:
+    return {
+        "configured": configured,
+        "stream_uid": stream_uid,
+        "customer_code": customer_code,
+        "poster_url": poster_url,
+        "status": status,
+        "title": title,
+    }
+
+
+def get_marketing_hero() -> dict[str, Any]:
+    """Public landing hero. Only `hero-intro`. Never lists other Stream tags."""
+    from app.cache.hybrid_cache import get_json, set_json
+
+    cached = get_json(HERO_CACHE_KEY)
+    if isinstance(cached, dict) and "configured" in cached:
+        return cached
+
+    sb = get_supabase()
+    result = (
+        sb.table("stream_videos")
+        .select("title, stream_uid, status")
+        .eq("tag", HERO_TAG)
+        .limit(1)
+        .execute()
+    )
+    rows = list(result.data or [])
+    customer = normalize_customer_code(get_settings().stream_customer_code)
+    if not rows:
+        payload = _hero_payload(configured=False)
+        set_json(HERO_CACHE_KEY, payload, 60)
+        return payload
+
+    row = rows[0]
+    uid = str(row.get("stream_uid") or "").strip()
+    title = str(row.get("title") or "").strip()
+    video_status = str(row.get("status") or "").strip().lower() or "processing"
+
+    if video_status == "processing" and uid:
+        try:
+            live = _status_from_video(get_video(uid))
+            if live != video_status:
+                video_status = live
+                sb.table("stream_videos").update(
+                    {
+                        "status": video_status,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                    }
+                ).eq("tag", HERO_TAG).execute()
+        except StreamError:
+            pass
+
+    if video_status != "ready" or not uid or not customer:
+        payload = _hero_payload(
+            configured=False,
+            stream_uid=uid,
+            customer_code=customer,
+            status=video_status,
+            title=title,
+        )
+        set_json(HERO_CACHE_KEY, payload, 5 if video_status == "processing" else 60)
+        return payload
+
+    payload = _hero_payload(
+        configured=True,
+        stream_uid=uid,
+        customer_code=customer,
+        poster_url=_hero_poster(customer, uid),
+        status="ready",
+        title=title or "Talking head",
+    )
+    set_json(HERO_CACHE_KEY, payload, 60)
+    return payload
 
 
 def assert_valid_tag(tag: str) -> str:
@@ -260,6 +364,86 @@ def _sync_skill_hubs(
     return updated
 
 
+def _clear_skill_hubs(tag: str) -> int:
+    skill = SKILL_TAG_MAP.get(tag)
+    if not skill:
+        return 0
+    sb = get_supabase()
+    result = (
+        sb.table("practice_hubs")
+        .select("id, practice_sets!inner(practice_banks!inner(skill))")
+        .eq("practice_sets.practice_banks.skill", skill)
+        .execute()
+    )
+    rows = list(result.data or [])
+    updated = 0
+    for row in rows:
+        hub_id = str(row.get("id") or "")
+        if not hub_id:
+            continue
+        sb.table("practice_hubs").update({"videos": []}).eq("id", hub_id).execute()
+        updated += 1
+    if updated:
+        from app.cache.hybrid_cache import invalidate_prefix
+        from app.practice.repository import clear_hub_list_cache
+
+        clear_hub_list_cache()
+        invalidate_prefix("practice:hub:detail:")
+    return updated
+
+
+def delete_stream_library_video(*, stream_uid: str, admin_id) -> dict[str, Any]:
+    try:
+        uid = parse_stream_uid(stream_uid)
+    except StreamError as exc:
+        raise HTTPException(exc.status_code, detail=str(exc)) from exc
+
+    sb = get_supabase()
+    assigned = (
+        sb.table("stream_videos")
+        .select("tag")
+        .eq("stream_uid", uid)
+        .execute()
+    )
+    tags = [
+        str(row.get("tag") or "").strip()
+        for row in list(assigned.data or [])
+        if str(row.get("tag") or "").strip()
+    ]
+
+    try:
+        delete_video(uid)
+    except StreamError as exc:
+        if exc.status_code != 404:
+            _raise_stream(exc)
+
+    if tags:
+        sb.table("stream_videos").delete().eq("stream_uid", uid).execute()
+
+    hubs_updated = 0
+    for tag in tags:
+        hubs_updated += _clear_skill_hubs(tag)
+    if HERO_TAG in tags:
+        invalidate_hero_cache()
+
+    log_admin_action(
+        admin_id=admin_id,
+        action="stream.video_delete",
+        resource_type="stream_video",
+        resource_id=uid,
+        metadata={
+            "unassigned_tag": tags[0] if tags else None,
+            "hubs_updated": hubs_updated,
+        },
+    )
+    return {
+        "ok": True,
+        "uid": uid,
+        "unassigned_tag": tags[0] if tags else None,
+        "hubs_updated": hubs_updated,
+    }
+
+
 def complete_stream_video(
     *,
     tag: str,
@@ -306,6 +490,8 @@ def complete_stream_video(
         duration_min=minutes,
         stream_uid=uid,
     )
+    if tag == HERO_TAG:
+        invalidate_hero_cache()
     log_admin_action(
         admin_id=admin_id,
         action="stream.video_complete",

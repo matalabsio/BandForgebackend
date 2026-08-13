@@ -326,6 +326,37 @@ def get_video(stream_uid: str) -> dict[str, Any]:
     return result if isinstance(result, dict) else {}
 
 
+def delete_video(stream_uid: str) -> None:
+    """Permanently delete a video from the Cloudflare Stream account."""
+    account_id, token = _credentials()
+    uid = (stream_uid or "").strip()
+    if not uid:
+        raise StreamError("Missing Stream video UID.", status_code=400)
+    url = f"{STREAM_API_BASE}/accounts/{account_id}/stream/{uid}"
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.delete(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise StreamError(f"Could not reach Cloudflare Stream: {exc}", status_code=503) from exc
+
+    if response.status_code == 404:
+        return
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        if response.status_code < 400:
+            return
+        raise StreamError("Cloudflare Stream returned an invalid response.", status_code=502) from exc
+
+    if isinstance(payload, dict) and payload.get("success"):
+        return
+    if response.status_code >= 400 or (isinstance(payload, dict) and not payload.get("success")):
+        _raise_from_payload(payload if isinstance(payload, dict) else {}, http_status=response.status_code)
+
+
 def list_account_videos(*, limit: int = 100) -> list[dict[str, Any]]:
     """List videos in the Cloudflare Stream account (not BandForge tags)."""
     account_id, token = _credentials()
