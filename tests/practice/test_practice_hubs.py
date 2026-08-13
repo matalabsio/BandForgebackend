@@ -533,6 +533,22 @@ def test_set_content_ok_reading_writing_speaking():
         sections=[{"id": "s1", "audio_key": None, "passage_text": None}],
         questions_by_section=s_qs,
     )
+    video_only = {
+        "s1": [
+            {
+                "prompt": "",
+                "options": {"video_url": "bank/set/speaking/part1/clip.mp4"},
+                "correct_answer": None,
+                "audio_url": None,
+                "passage_text": None,
+            }
+        ]
+    }
+    assert _set_content_ok(
+        skill="speaking",
+        sections=[{"id": "s1", "audio_key": None, "passage_text": None}],
+        questions_by_section=video_only,
+    )
 
 
 def test_filter_assignable_excludes_draft(monkeypatch):
@@ -561,3 +577,111 @@ def test_assert_hub_accessible_404_when_not_assignable():
         with pytest.raises(HTTPException) as exc:
             service.assert_hub_accessible(user_id=USER_ID, hub_id="h1")
     assert exc.value.status_code == 404
+
+
+def _hub_detail_flat(**overrides: object) -> dict:
+    base = {
+        "id": "h1",
+        "slug": "listening-b1-s1",
+        "skill": "listening",
+        "bank_number": 1,
+        "set_number": 1,
+        "title": "Listening Set 1.1",
+        "estimated_min": 25,
+        "sort_order": 1,
+        "intro_stream_uid": None,
+        "intro_video_key": None,
+        "videos": [
+            {
+                "title": "Listening intro",
+                "url": "https://skill.example/iframe",
+                "duration_min": 12,
+                "tag": "listening-intro",
+                "stream_uid": "skill-uid",
+            }
+        ],
+        "practice_prompt": "",
+        "submit_config": {},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_get_hub_detail_ready_set_uid_uses_signed_set_intro():
+    flat = _hub_detail_flat(intro_stream_uid="set-uid-ready")
+    with (
+        patch(
+            "app.practice.service._assert_hub_accessible_with_progress",
+            return_value=(flat, {}),
+        ),
+        patch(
+            "app.storage.stream.get_video",
+            return_value={"status": {"state": "ready"}},
+        ),
+        patch("app.storage.stream.create_signed_playback_token", return_value="tok"),
+        patch(
+            "app.storage.stream.playback_signed_iframe_url",
+            return_value="https://signed.example/set-intro",
+        ),
+        patch("app.admin.stream_videos._customer_code", return_value="customer-test"),
+    ):
+        out = service.get_hub_detail(user_id=USER_ID, hub_id="h1")
+    assert len(out.videos) == 1
+    assert out.videos[0].tag == "set-intro"
+    assert out.videos[0].stream_uid == "set-uid-ready"
+    assert out.videos[0].url == "https://signed.example/set-intro"
+
+
+def test_get_hub_detail_unready_set_uid_falls_back_to_skill_videos():
+    flat = _hub_detail_flat(intro_stream_uid="set-uid-processing")
+    with (
+        patch(
+            "app.practice.service._assert_hub_accessible_with_progress",
+            return_value=(flat, {}),
+        ),
+        patch(
+            "app.storage.stream.get_video",
+            return_value={"status": {"state": "inprogress"}},
+        ),
+        patch("app.storage.stream.create_signed_playback_token") as sign,
+    ):
+        out = service.get_hub_detail(user_id=USER_ID, hub_id="h1")
+    sign.assert_not_called()
+    assert len(out.videos) == 1
+    assert out.videos[0].tag == "listening-intro"
+    assert out.videos[0].url == "https://skill.example/iframe"
+
+
+def test_get_hub_detail_missing_uid_uses_skill_videos():
+    flat = _hub_detail_flat()
+    with patch(
+        "app.practice.service._assert_hub_accessible_with_progress",
+        return_value=(flat, {}),
+    ):
+        out = service.get_hub_detail(user_id=USER_ID, hub_id="h1")
+    assert len(out.videos) == 1
+    assert out.videos[0].tag == "listening-intro"
+
+
+def test_get_hub_detail_signed_url_fail_falls_back_to_skill_videos():
+    from app.storage.stream import StreamError
+
+    flat = _hub_detail_flat(intro_stream_uid="set-uid-ready")
+    with (
+        patch(
+            "app.practice.service._assert_hub_accessible_with_progress",
+            return_value=(flat, {}),
+        ),
+        patch(
+            "app.storage.stream.get_video",
+            return_value={"status": {"state": "ready"}},
+        ),
+        patch(
+            "app.storage.stream.create_signed_playback_token",
+            side_effect=StreamError("sign failed"),
+        ),
+        patch("app.admin.stream_videos._customer_code", return_value="customer-test"),
+    ):
+        out = service.get_hub_detail(user_id=USER_ID, hub_id="h1")
+    assert len(out.videos) == 1
+    assert out.videos[0].tag == "listening-intro"

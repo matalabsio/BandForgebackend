@@ -462,7 +462,9 @@ def bank_publish_blockers(*, set_id: UUID | str, skill: str) -> list[str]:
     if section_ids:
         questions = (
             sb.table("bank_questions")
-            .select("id, section_id, prompt, passage_text, audio_url, correct_answer")
+            .select(
+                "id, section_id, prompt, passage_text, audio_url, correct_answer, options"
+            )
             .in_("section_id", section_ids)
             .execute()
         ).data or []
@@ -521,9 +523,20 @@ def bank_publish_blockers(*, set_id: UUID | str, skill: str) -> list[str]:
             blockers.append("Writing: task prompt is required.")
 
     elif skill == "speaking":
-        prompts = [q for q in questions if str(q.get("prompt") or "").strip()]
-        if not prompts:
-            blockers.append("Speaking: add at least one prompt before publishing.")
+        ready = [
+            q
+            for q in questions
+            if str(q.get("prompt") or "").strip()
+            or str(
+                (q.get("options") or {}).get("video_url")
+                if isinstance(q.get("options"), dict)
+                else ""
+            ).strip()
+        ]
+        if not ready:
+            blockers.append(
+                "Speaking: add at least one question with a prompt or video before publishing."
+            )
 
     return blockers
 
@@ -1217,6 +1230,12 @@ def save_bank_speaking(
     if skill != "speaking":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set is not a speaking set.")
     _assert_part("speaking", part)
+    for q in body.questions:
+        if part == 2 and not (q.video_url or "").strip():
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Part 2 requires a short examiner video (upload 10–15s clip).",
+            )
     section_id = _upsert_section(
         sb,
         practice_set_id=str(set_id),
@@ -1230,7 +1249,7 @@ def save_bank_speaking(
             {
                 "question_number": i,
                 "question_type": f"speaking_part{part}",
-                "prompt": q.prompt,
+                "prompt": q.prompt.strip(),
                 "options": _speaking_options(part, q),
                 "skill_tag": "speaking",
             }

@@ -135,12 +135,6 @@ def save_speaking_part(
         )
 
     for i, q in enumerate(body.questions, start=1):
-        if not q.prompt.strip():
-            label = "Cue card" if part == 2 else "Prompt"
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"{label} is required for question {i}.",
-            )
         if part == 2 and not (q.video_url or "").strip():
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,

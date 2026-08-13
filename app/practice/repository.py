@@ -133,7 +133,13 @@ def _set_content_ok(*, skill: str, sections: list[dict[str, Any]], questions_by_
         return any(str(q.get("prompt") or "").strip() for q in all_questions)
 
     if skill == "speaking":
-        return any(str(q.get("prompt") or "").strip() for q in all_questions)
+        for q in all_questions:
+            if str(q.get("prompt") or "").strip():
+                return True
+            opts = q.get("options") if isinstance(q.get("options"), dict) else {}
+            if str(opts.get("video_url") or "").strip():
+                return True
+        return False
 
     return False
 
@@ -154,7 +160,9 @@ def _assignable_set_ids(set_ids: list[str], skill_by_set: dict[str, str]) -> set
     if section_ids:
         questions = (
             sb.table("bank_questions")
-            .select("id, section_id, prompt, passage_text, audio_url, correct_answer")
+            .select(
+                "id, section_id, prompt, passage_text, audio_url, correct_answer, options"
+            )
             .in_("section_id", section_ids)
             .execute()
         ).data or []

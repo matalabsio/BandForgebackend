@@ -824,7 +824,7 @@ class WritingPartResponse(BaseModel):
 
 
 class SpeakingBuilderQuestionIn(BaseModel):
-    prompt: str = Field(min_length=1)
+    prompt: str = ""
     speak_time_sec: int | None = Field(default=15, ge=1, le=300)
     min_skip_sec: int | None = Field(default=5, ge=0, le=300)
     prep_sec: int | None = Field(default=None, ge=0, le=300)

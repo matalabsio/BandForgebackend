@@ -256,6 +256,50 @@ def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut
     return out
 
 
+def _skill_hub_videos(flat: dict[str, Any]) -> list[PracticeVideo]:
+    return [
+        PracticeVideo(**v) if isinstance(v, dict) else PracticeVideo()
+        for v in (flat.get("videos") or [])
+    ]
+
+
+def _set_intro_watch_videos(*, intro_uid: str, title: str) -> list[PracticeVideo] | None:
+    """Signed set Watch video when Stream is ready; None to fall back to skill intro."""
+    from app.admin.stream_videos import _customer_code, _status_from_video
+    from app.storage.stream import (
+        StreamError,
+        create_signed_playback_token,
+        get_video,
+        playback_signed_iframe_url,
+    )
+
+    try:
+        meta = get_video(intro_uid)
+    except StreamError:
+        return None
+    if _status_from_video(meta) != "ready":
+        return None
+    try:
+        token = create_signed_playback_token(intro_uid)
+        signed_url = playback_signed_iframe_url(
+            customer_code=_customer_code(),
+            token=token,
+        )
+    except StreamError:
+        return None
+    if not signed_url:
+        return None
+    return [
+        PracticeVideo(
+            title=title or "Watch",
+            url=signed_url,
+            duration_min=0,
+            tag="set-intro",
+            stream_uid=intro_uid,
+        )
+    ]
+
+
 def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
     flat, progress_map = _assert_hub_accessible_with_progress(
         user_id=user_id, hub_id=hub_id
@@ -264,34 +308,14 @@ def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
     completed_at = progress.get("completed_at")
     intro_uid = str(flat.get("intro_stream_uid") or "").strip()
     intro_key = str(flat.get("intro_video_key") or "").strip()
+    videos: list[PracticeVideo] | None = None
     if intro_uid:
-        # Signed Stream iframe — bare UID does not play (requireSignedURLs).
-        from app.admin.stream_videos import _customer_code
-        from app.storage.stream import (
-            StreamError,
-            create_signed_playback_token,
-            playback_signed_iframe_url,
+        videos = _set_intro_watch_videos(
+            intro_uid=intro_uid,
+            title=str(flat.get("title") or "Watch"),
         )
-
-        try:
-            token = create_signed_playback_token(intro_uid)
-            signed_url = playback_signed_iframe_url(
-                customer_code=_customer_code(),
-                token=token,
-            )
-        except StreamError:
-            signed_url = ""
-        videos = [
-            PracticeVideo(
-                title=flat.get("title") or "Watch",
-                url=signed_url,
-                duration_min=0,
-                tag="set-intro",
-                stream_uid=intro_uid,
-            )
-        ] if signed_url else []
-    elif intro_key:
-        # Legacy R2 private proxy fallback
+    if videos is None and intro_key and not intro_uid:
+        # Legacy R2 private proxy — only when no Stream UID is bound to the set.
         videos = [
             PracticeVideo(
                 title=flat.get("title") or "Watch",
@@ -300,11 +324,8 @@ def get_hub_detail(*, user_id: UUID, hub_id: str) -> PracticeHubDetailOut:
                 tag="set-intro",
             )
         ]
-    else:
-        videos = [
-            PracticeVideo(**v) if isinstance(v, dict) else PracticeVideo()
-            for v in (flat.get("videos") or [])
-        ]
+    if videos is None:
+        videos = _skill_hub_videos(flat)
     return PracticeHubDetailOut(
         id=flat["id"],
         slug=flat["slug"],
@@ -500,15 +521,7 @@ def start_hub_exercise(
         if str(chosen.get("audio_key") or "").strip()
         else None
     )
-    image_url = chosen.get("image_url")
-    image_out = str(image_url).strip() if image_url else None
-    if image_out and not image_out.startswith(("http://", "https://", "/")):
-        try:
-            from app.storage.r2 import generate_signed_url
-
-            image_out = generate_signed_url(image_out)
-        except Exception:
-            image_out = None
+    image_out = _signed_media_url(chosen.get("image_url"))
     questions = [
         BankExerciseQuestionOut(
             id=str(q["id"]),
@@ -522,6 +535,7 @@ def start_hub_exercise(
                 else None
             ),
             audio_url=playback_url,
+            video_url=_question_video_url(q.get("options")),
             correct_answer=None,
             difficulty=(
                 str(q.get("difficulty") or "medium")
@@ -550,6 +564,26 @@ def start_hub_exercise(
             questions=questions,
         ),
     )
+
+
+def _signed_media_url(raw: Any) -> str | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if value.startswith(("http://", "https://", "/")):
+        return value
+    try:
+        from app.storage.r2 import generate_signed_url
+
+        return generate_signed_url(value)
+    except Exception:
+        return None
+
+
+def _question_video_url(options: Any) -> str | None:
+    if not isinstance(options, dict):
+        return None
+    return _signed_media_url(options.get("video_url"))
 
 
 def _score_user_answer(given: Any) -> str:

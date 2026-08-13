@@ -76,6 +76,7 @@ class BankExerciseQuestionOut(BaseModel):
     options: Any = None
     instructions: str | None = None
     audio_url: str | None = None
+    video_url: str | None = None
     correct_answer: str | None = None
     difficulty: str = "medium"
 

@@ -181,6 +181,8 @@ def test_start_hub_exercise_returns_questions():
             return_value=[hub_row],
         ),
         patch("app.db.supabase_client.get_supabase", return_value=sb),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.cache.hybrid_cache.set_json"),
     ):
         out = service.start_hub_exercise(user_id=USER_ID, hub_id=HUB_ID)
 
@@ -192,6 +194,160 @@ def test_start_hub_exercise_returns_questions():
         f"/api/practice/hubs/{HUB_ID}/exercise/{out.attempt_id}/part-audio"
     )
     assert out.section.questions[0].audio_url == out.section.audio_url
+    assert out.section.questions[0].video_url is None
+
+
+def _speaking_hub_row() -> dict:
+    return {
+        "id": HUB_ID,
+        "slug": "speaking-b1-s1",
+        "set_id": str(SET_ID),
+        "practice_prompt": "",
+        "submit_config": {},
+        "estimated_min": 25,
+        "sort_order": 1,
+        "videos": [],
+        "practice_sets": {
+            "id": str(SET_ID),
+            "set_number": 1,
+            "title": "Speaking Set 1.1",
+            "practice_banks": {"skill": "speaking", "bank_number": 1, "title": "S1"},
+        },
+    }
+
+
+def _start_exercise_supabase(*, questions: list[dict], module: str = "speaking"):
+    sb = MagicMock()
+
+    def table(name: str):
+        m = MagicMock()
+        m.select.return_value = m
+        m.eq.return_value = m
+        m.order.return_value = m
+        m.update.return_value = m
+        m.insert.return_value = m
+        m.limit.return_value = m
+        if name == "bank_sections":
+            m.execute.return_value = MagicMock(
+                data=[
+                    {
+                        "id": "55555555-5555-4555-8555-555555555555",
+                        "part": 1,
+                        "module": module,
+                        "title": "Part 1",
+                        "instructions": None,
+                        "audio_key": None,
+                        "passage_text": None,
+                        "image_url": None,
+                    }
+                ]
+            )
+        elif name == "bank_questions":
+            m.execute.return_value = MagicMock(data=questions)
+        elif name == "practice_exercise_attempts":
+            m.execute.return_value = MagicMock(
+                data=[{"id": "77777777-7777-4777-8777-777777777777"}]
+            )
+        else:
+            m.execute.return_value = MagicMock(data=[])
+        return m
+
+    sb.table.side_effect = table
+    return sb
+
+
+def test_start_hub_exercise_signs_speaking_r2_video():
+    from app.practice import service
+
+    hub_row = _speaking_hub_row()
+    sb = _start_exercise_supabase(
+        questions=[
+            {
+                "id": "66666666-6666-4666-8666-666666666666",
+                "question_number": 1,
+                "question_type": "speaking_part1",
+                "prompt": "Tell me about yourself",
+                "options": {
+                    "kind": "question",
+                    "video_url": "bank/set/speaking/part1/clip.mp4",
+                },
+                "correct_answer": None,
+            },
+            {
+                "id": "88888888-8888-4888-8888-888888888888",
+                "question_number": 2,
+                "question_type": "speaking_part1",
+                "prompt": "What is best about your hometown",
+                "options": {"kind": "question"},
+                "correct_answer": None,
+            },
+        ]
+    )
+
+    with (
+        patch("app.practice.service.repository.get_hub_by_id", return_value=hub_row),
+        patch("app.practice.service.repository.is_hub_assignable", return_value=True),
+        patch(
+            "app.practice.service.repository.get_user_progress_map",
+            return_value={},
+        ),
+        patch(
+            "app.practice.service.repository.list_hubs_for_skill",
+            return_value=[hub_row],
+        ),
+        patch("app.db.supabase_client.get_supabase", return_value=sb),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.cache.hybrid_cache.set_json"),
+        patch(
+            "app.storage.r2.generate_signed_url",
+            return_value="https://signed.example/clip.mp4",
+        ) as sign,
+    ):
+        out = service.start_hub_exercise(user_id=USER_ID, hub_id=HUB_ID)
+
+    assert out.skill == "speaking"
+    assert out.section.questions[0].video_url == "https://signed.example/clip.mp4"
+    assert out.section.questions[1].video_url is None
+    sign.assert_called_once_with("bank/set/speaking/part1/clip.mp4")
+
+
+def test_start_hub_exercise_speaking_without_video_key():
+    from app.practice import service
+
+    hub_row = _speaking_hub_row()
+    sb = _start_exercise_supabase(
+        questions=[
+            {
+                "id": "66666666-6666-4666-8666-666666666666",
+                "question_number": 1,
+                "question_type": "speaking_part1",
+                "prompt": "Tell me about yourself",
+                "options": {"kind": "question", "video_url": ""},
+                "correct_answer": None,
+            }
+        ]
+    )
+
+    with (
+        patch("app.practice.service.repository.get_hub_by_id", return_value=hub_row),
+        patch("app.practice.service.repository.is_hub_assignable", return_value=True),
+        patch(
+            "app.practice.service.repository.get_user_progress_map",
+            return_value={},
+        ),
+        patch(
+            "app.practice.service.repository.list_hubs_for_skill",
+            return_value=[hub_row],
+        ),
+        patch("app.db.supabase_client.get_supabase", return_value=sb),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.cache.hybrid_cache.set_json"),
+        patch("app.storage.r2.generate_signed_url") as sign,
+    ):
+        out = service.start_hub_exercise(user_id=USER_ID, hub_id=HUB_ID)
+
+    assert out.section.questions[0].video_url is None
+    sign.assert_not_called()
 
 
 def test_score_user_answer_strips_exam_mcq_token():
@@ -540,3 +696,89 @@ def test_patch_question_bank_set_status_blocks_incomplete_publish():
             )
     assert exc.value.status_code == 400
     assert exc.value.detail["code"] == "publish_blocked"
+
+
+def test_set_intro_stream_uid_updates_only_that_set():
+    other_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    store = {
+        str(SET_ID): {"id": str(SET_ID), "intro_stream_uid": None},
+        str(other_id): {"id": str(other_id), "intro_stream_uid": "keep-me"},
+    }
+
+    class _Chain:
+        def __init__(self) -> None:
+            self._id: str | None = None
+            self._payload: dict | None = None
+
+        def update(self, payload):
+            self._payload = payload
+            return self
+
+        def eq(self, _col, value):
+            self._id = str(value)
+            return self
+
+        def execute(self):
+            row = store.get(self._id or "")
+            if not row or not self._payload:
+                return MagicMock(data=[])
+            row.update(self._payload)
+            return MagicMock(data=[dict(row)])
+
+    sb = MagicMock()
+    sb.table.return_value = _Chain()
+    with (
+        patch("app.admin.question_bank.get_supabase", return_value=sb),
+        patch("app.practice.repository.clear_hub_list_cache"),
+        patch("app.cache.hybrid_cache.invalidate_prefix"),
+    ):
+        uid = qb.set_intro_stream_uid(set_id=SET_ID, stream_uid="new-set-uid")
+
+    assert uid == "new-set-uid"
+    assert store[str(SET_ID)]["intro_stream_uid"] == "new-set-uid"
+    assert store[str(other_id)]["intro_stream_uid"] == "keep-me"
+    sb.table.assert_called_with("practice_sets")
+
+
+def test_bank_watch_complete_does_not_write_stream_videos():
+    from app.admin.router import bank_watch_video_complete_route
+    from app.auth.schemas import UserPublic
+
+    admin = UserPublic(id=ADMIN_ID, email="admin@test.com", role="admin")
+    stream_tables: list[str] = []
+
+    def _table(name: str):
+        stream_tables.append(name)
+        raise AssertionError(f"complete route must not touch {name}")
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    with (
+        patch("app.admin.question_bank.set_intro_stream_uid", return_value="uid-set-only") as set_uid,
+        patch("app.admin.stream_videos.complete_stream_video") as complete_skill,
+        patch("app.admin.stream_videos.get_supabase", return_value=sb),
+        patch("app.storage.stream.set_require_signed_urls"),
+        patch(
+            "app.storage.stream.get_video",
+            return_value={"status": {"state": "ready"}},
+        ),
+        patch("app.storage.stream.create_signed_playback_token", return_value="tok"),
+        patch(
+            "app.storage.stream.playback_signed_iframe_url",
+            return_value="https://signed.example/iframe",
+        ),
+        patch("app.admin.stream_videos._customer_code", return_value="customer-test"),
+    ):
+        out = bank_watch_video_complete_route(
+            set_id=SET_ID,
+            admin=admin,
+            stream_uid="uid-set-only",
+            title="Set Watch explainer",
+        )
+
+    set_uid.assert_called_once_with(set_id=SET_ID, stream_uid="uid-set-only")
+    complete_skill.assert_not_called()
+    assert "stream_videos" not in stream_tables
+    assert out["intro_stream_uid"] == "uid-set-only"
+    assert out["status"] == "ready"
