@@ -13,10 +13,7 @@ from app.admin.schemas import (
     RecentActivityItem,
 )
 from app.db.supabase_client import get_supabase
-from app.mock_catalog.constants import (
-    MAX_CANDIDATE_CATALOG_NUMBER,
-    is_candidate_live_catalog_number,
-)
+from app.mock_catalog.constants import is_candidate_live_catalog_number
 from app.perf.timing import timed_call, timed_supabase
 
 
@@ -177,7 +174,7 @@ def _fetch_counts(since_7d: str, since_14d: str) -> dict[str, int]:
         except Exception:
             return 0
 
-    def published_mocks() -> int:
+    def catalog_mock_counts() -> dict[str, int]:
         rows = timed_supabase(
             "dashboard.mock_tests.catalog",
             lambda: (
@@ -188,10 +185,15 @@ def _fetch_counts(since_7d: str, since_14d: str) -> dict[str, int]:
                 .execute()
             ),
         ).data or []
-        live = [
+        catalog = [
             r for r in rows if is_candidate_live_catalog_number(r.get("catalog_number"))
         ]
-        return sum(1 for r in live if r.get("status") == "published")
+        return {
+            "total_mocks": len(catalog),
+            "published_mocks": sum(
+                1 for r in catalog if r.get("status") == "published"
+            ),
+        }
 
     results = timed_call(
         "dashboard.counts_parallel",
@@ -205,13 +207,14 @@ def _fetch_counts(since_7d: str, since_14d: str) -> dict[str, int]:
                 "speaking_pending": speaking_pending,
                 "writing_pending_mock": writing_pending_mock,
                 "writing_pending_diag": writing_pending_diag,
-                "published_mocks": published_mocks,
+                "catalog_mock_counts": catalog_mock_counts,
             }
         ),
     )
     writing_pending = int(results["writing_pending_mock"]) + int(
         results["writing_pending_diag"]
     )
+    catalog_counts = results["catalog_mock_counts"]
     return {
         "total_users": int(results["total_users"]),
         "signups_7d": int(results["signups_7d"]),
@@ -220,7 +223,8 @@ def _fetch_counts(since_7d: str, since_14d: str) -> dict[str, int]:
         "mock_attempts_prev_7d": int(results["mock_attempts_prev_7d"]),
         "speaking_pending": int(results["speaking_pending"]),
         "writing_pending": writing_pending,
-        "published_mocks": int(results["published_mocks"]),
+        "total_mocks": int(catalog_counts["total_mocks"]),
+        "published_mocks": int(catalog_counts["published_mocks"]),
     }
 
 
@@ -344,7 +348,7 @@ def _build_metrics_core(
         mock_attempts_7d=counts["mock_attempts_7d"],
         speaking_pending=counts["speaking_pending"],
         writing_pending=counts["writing_pending"],
-        total_mocks=MAX_CANDIDATE_CATALOG_NUMBER,
+        total_mocks=counts["total_mocks"],
         published_mocks=counts["published_mocks"],
         users_trend_pct=_trend_pct(len(active_user_ids), len(prev_active_user_ids)),
         signups_trend_pct=_trend_pct(counts["signups_7d"], counts["signups_prev_7d"]),
