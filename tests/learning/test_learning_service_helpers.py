@@ -92,7 +92,7 @@ def test_serve_rewritten_plan_updates_hubs_for_today():
     }
     with (
         patch(
-            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            "app.practice.catalog.get_ordered_question_bank_ids_by_skill",
             return_value={
                 "listening": ["current-hub", "l2"],
                 "reading": [],
@@ -101,14 +101,16 @@ def test_serve_rewritten_plan_updates_hubs_for_today():
             },
         ),
         patch(
-            "app.practice.assignment.cursors_by_skill",
-            return_value={
-                "listening": 0,
-                "reading": 0,
-                "writing": 0,
-                "speaking": 0,
-            },
+            "app.practice.catalog.get_hub_set_ids",
+            return_value={"old-locked-hub": "set-old", "current-hub": "set-cur", "l2": "set-l2"},
         ),
+        patch(
+            "app.practice.assignment_ledger.list_user_assignment_ids",
+            return_value=(set(), set()),
+        ),
+        patch("app.practice.repository.get_practice_catalog_version", return_value=1),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.practice.catalog.get_hub_submit_configs_by_id", return_value={}),
     ):
         rewritten = _serve_rewritten_study_plan(
             plan,
@@ -119,14 +121,13 @@ def test_serve_rewritten_plan_updates_hubs_for_today():
         tasks = _todays_tasks(rewritten)
 
     assert len(tasks) == 2
-    assert tasks[0].hub_id == "current-hub"
+    assert tasks[0].hub_id == "old-locked-hub"
     assert tasks[0].href == (
-        "/practice/listening/current-hub?from=plan&task=watch&taskId=watch-l"
+        "/practice/listening/old-locked-hub?from=plan&task=watch&taskId=watch-l"
     )
     assert tasks[1].href == (
         "/test/1/listening?part=1&auto=1&skill_context=listening"
-        "&from=plan&task=practice&taskId=practice-l"
-        "&hubId=current-hub"
+        "&from=plan&task=practice&hubId=old-locked-hub&taskId=practice-l"
     )
 
 
@@ -150,7 +151,7 @@ def test_serve_rewritten_plan_unavailable_when_empty_pool():
                                 "title": "Watch",
                                 "module": "writing",
                                 "task_type": "watch",
-                                "hub_id": "gone",
+                                "hub_id": None,
                                 "href": "/practice/writing/gone",
                                 "status": "pending",
                             }
@@ -162,7 +163,7 @@ def test_serve_rewritten_plan_unavailable_when_empty_pool():
     }
     with (
         patch(
-            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            "app.practice.catalog.get_ordered_question_bank_ids_by_skill",
             return_value={
                 "listening": [],
                 "reading": [],
@@ -170,15 +171,14 @@ def test_serve_rewritten_plan_unavailable_when_empty_pool():
                 "speaking": [],
             },
         ),
+        patch("app.practice.catalog.get_hub_set_ids", return_value={}),
         patch(
-            "app.practice.assignment.cursors_by_skill",
-            return_value={
-                "listening": 0,
-                "reading": 0,
-                "writing": 0,
-                "speaking": 0,
-            },
+            "app.practice.assignment_ledger.list_user_assignment_ids",
+            return_value=(set(), set()),
         ),
+        patch("app.practice.repository.get_practice_catalog_version", return_value=1),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.practice.catalog.get_hub_submit_configs_by_id", return_value={}),
     ):
         rewritten = _serve_rewritten_study_plan(
             plan,

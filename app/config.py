@@ -162,6 +162,18 @@ class Settings(BaseSettings):
     notification_worker_poll_seconds: float = Field(
         default=2.0, validation_alias="NOTIFICATION_WORKER_POLL_SECONDS"
     )
+    practice_job_batch_size: int = Field(
+        default=5, validation_alias="PRACTICE_JOB_BATCH_SIZE"
+    )
+    practice_job_user_batch_size: int = Field(
+        default=50, validation_alias="PRACTICE_JOB_USER_BATCH_SIZE"
+    )
+    practice_job_lease_seconds: int = Field(
+        default=300, validation_alias="PRACTICE_JOB_LEASE_SECONDS"
+    )
+    practice_job_poll_seconds: float = Field(
+        default=2.0, validation_alias="PRACTICE_JOB_POLL_SECONDS"
+    )
     meta_whatsapp_enabled: bool = Field(
         default=False, validation_alias="META_WHATSAPP_ENABLED"
     )
@@ -294,7 +306,7 @@ class Settings(BaseSettings):
 
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     groq_model: str = Field(
-        default="llama-3.3-70b-versatile",
+        default="openai/gpt-oss-120b",
         validation_alias="GROQ_MODEL",
     )
     groq_whisper_model: str = Field(

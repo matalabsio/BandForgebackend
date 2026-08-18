@@ -6,7 +6,7 @@ from collections import Counter
 from functools import lru_cache
 
 from app.practice import repository
-from app.practice.assignment import assign_hub_for_day
+from app.practice.assignment_ledger import is_question_bank_hub
 
 SKILLS = repository.SKILLS
 DIFFICULTY_RANK = repository.DIFFICULTY_RANK
@@ -20,6 +20,8 @@ def _catalog_cache_key() -> int:
 
 def clear_hub_catalog_cache() -> None:
     get_ordered_hub_ids_by_skill.cache_clear()
+    get_ordered_question_bank_ids_by_skill.cache_clear()
+    get_hub_set_ids.cache_clear()
     get_hub_submit_configs_by_id.cache_clear()
     get_hub_skill_tags_by_id.cache_clear()
     from app.practice.repository import clear_hub_list_cache
@@ -27,24 +29,73 @@ def clear_hub_catalog_cache() -> None:
     clear_hub_list_cache()
 
 
+def _sorted_assignable_flats(skill: str) -> list[dict]:
+    grouped = repository.list_assignable_hubs_grouped()
+    flats = [repository._flatten_hub_row(row) for row in grouped.get(skill, [])]
+    flats.sort(
+        key=lambda h: (
+            DIFFICULTY_RANK.get(str(h.get("difficulty") or ""), 99),
+            int(h.get("bank_number") or 0),
+            int(h.get("set_number") or 0),
+            int(h.get("sort_order") or 0),
+            str(h.get("set_id") or ""),
+            str(h.get("id") or ""),
+        )
+    )
+    return flats
+
+
 @lru_cache(maxsize=1)
 def get_ordered_hub_ids_by_skill() -> dict[str, list[str]]:
     """Assignable hubs only, ordered easy → medium → hard then catalogue order."""
     _catalog_cache_key()
+    result: dict[str, list[str]] = {}
+    for skill in SKILLS:
+        result[skill] = [h["id"] for h in _sorted_assignable_flats(skill)]
+    return result
+
+
+@lru_cache(maxsize=1)
+def get_ordered_question_bank_ids_by_skill() -> dict[str, list[str]]:
+    """Assignable Question Bank hubs only (excludes Mock / Phase-0 module hubs)."""
+    _catalog_cache_key()
     grouped = repository.list_assignable_hubs_grouped()
     result: dict[str, list[str]] = {}
     for skill in SKILLS:
-        flat = [repository._flatten_hub_row(row) for row in grouped.get(skill, [])]
-        flat.sort(
+        rows = grouped.get(skill, [])
+        flats = []
+        for row, flat in zip(rows, [repository._flatten_hub_row(r) for r in rows]):
+            if not is_question_bank_hub(row) and not is_question_bank_hub(flat):
+                continue
+            flats.append(flat)
+        flats.sort(
             key=lambda h: (
                 DIFFICULTY_RANK.get(str(h.get("difficulty") or ""), 99),
                 int(h.get("bank_number") or 0),
                 int(h.get("set_number") or 0),
                 int(h.get("sort_order") or 0),
+                str(h.get("set_id") or ""),
+                str(h.get("id") or ""),
             )
         )
-        result[skill] = [h["id"] for h in flat]
+        result[skill] = [h["id"] for h in flats]
     return result
+
+
+@lru_cache(maxsize=1)
+def get_hub_set_ids() -> dict[str, str]:
+    """Assignable hub_id → practice_set_id."""
+    _catalog_cache_key()
+    out: dict[str, str] = {}
+    grouped = repository.list_assignable_hubs_grouped()
+    for skill in SKILLS:
+        for row in grouped.get(skill, []):
+            flat = repository._flatten_hub_row(row)
+            hid = str(flat.get("id") or "")
+            sid = str(flat.get("set_id") or "")
+            if hid and sid:
+                out[hid] = sid
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -139,27 +190,50 @@ def get_hub_skill_tags_by_id() -> dict[str, list[str]]:
 def pick_hub_for_slot(
     *,
     skill: str,
-    day_index: int,
+    day_index: int = 0,
     slot_index: int = 0,
     completed_count: int | None = None,
     previous_hub_id: str | None = None,
     weak_tags: list[str] | None = None,
+    used_hub_ids: set[str] | None = None,
+    used_set_ids: set[str] | None = None,
+    hub_to_set: dict[str, str] | None = None,
+    hub_ids: list[str] | None = None,
+    user_id=None,
+    source: str = "plan_generate",
+    assigned_on=None,
+    claim: bool = False,
+    hub_tags_by_id: dict[str, list[str]] | None = None,
 ) -> str | None:
-    """Pick a hub via soft-repeat; prefer weakness-matching hubs when tags given."""
-    del slot_index
-    from app.practice.weakness import order_pool_for_weakness
+    """Unique unused Question Bank pick. Never wraps."""
+    from app.practice.assignment import pick_hub_for_slot as pick_unique
 
-    hub_ids = get_ordered_hub_ids_by_skill().get(skill) or []
-    if weak_tags:
-        hub_ids = order_pool_for_weakness(
-            hub_ids,
-            weak_tags=weak_tags,
-            hub_tags_by_id=get_hub_skill_tags_by_id(),
-        )
-    cursor = int(completed_count) if completed_count is not None else 0
-    return assign_hub_for_day(
-        hub_ids=hub_ids,
-        cursor=cursor,
-        day_offset=max(int(day_index), 0),
+    ids = hub_ids
+    if ids is None:
+        ids = get_ordered_question_bank_ids_by_skill().get(skill) or []
+    mapping = hub_to_set
+    if mapping is None:
+        try:
+            mapping = get_hub_set_ids()
+        except Exception:
+            mapping = {}
+    tags = hub_tags_by_id
+    if weak_tags and tags is None:
+        tags = get_hub_skill_tags_by_id()
+    return pick_unique(
+        skill=skill,
+        day_index=day_index,
+        slot_index=slot_index,
+        completed_count=completed_count,
         previous_hub_id=previous_hub_id,
+        hub_ids=ids,
+        weak_tags=weak_tags,
+        hub_tags_by_id=tags,
+        used_hub_ids=used_hub_ids,
+        used_set_ids=used_set_ids,
+        hub_to_set=mapping,
+        user_id=user_id,
+        source=source,
+        assigned_on=assigned_on,
+        claim=claim,
     )

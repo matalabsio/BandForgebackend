@@ -321,6 +321,37 @@ def clear_hub_list_cache() -> None:
     invalidate_prefix("practice:hubs:list:")
 
 
+def get_practice_catalog_version() -> int:
+    """Durable catalog version for rewrite fingerprints. 0 if unavailable."""
+    try:
+        sb = get_supabase()
+        rows = (
+            _exec(
+                sb.table("practice_catalog_meta")
+                .select("version")
+                .eq("id", 1)
+                .limit(1)
+            )
+        ).data or []
+        if rows:
+            return int(rows[0].get("version") or 0)
+    except Exception:
+        return 0
+    return 0
+
+
+def bump_practice_catalog_version() -> int:
+    """Atomically increment the student-visible catalog version (Postgres)."""
+    sb = get_supabase()
+    result = _exec(sb.rpc("bump_practice_catalog_version"))
+    raw = result.data
+    if isinstance(raw, list) and raw:
+        raw = raw[0]
+    if isinstance(raw, dict):
+        raw = raw.get("bump_practice_catalog_version", raw.get("version", 0))
+    return int(raw or 0)
+
+
 def get_hub_by_id(hub_id: str | UUID) -> dict[str, Any] | None:
     from app.cache.hybrid_cache import get_json, set_json
 

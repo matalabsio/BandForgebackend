@@ -782,3 +782,48 @@ def test_bank_watch_complete_does_not_write_stream_videos():
     assert "stream_videos" not in stream_tables
     assert out["intro_stream_uid"] == "uid-set-only"
     assert out["status"] == "ready"
+
+
+def test_delete_custom_set_clears_assignment_ledger_first():
+    deleted: list[tuple[str, str, str]] = []
+
+    def table(name: str):
+        m = MagicMock()
+        m.delete.return_value = m
+
+        def eq(col, val):
+            m._eq = (name, str(col), str(val))
+            return m
+
+        def execute():
+            deleted.append(m._eq)
+            return MagicMock(data=[])
+
+        m.eq.side_effect = eq
+        m.execute.side_effect = execute
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = table
+    set_row = {
+        "id": str(SET_ID),
+        "title": "Custom listening",
+        "set_number": 3,
+        "status": "draft",
+        "practice_banks": {"skill": "listening", "bank_number": 5},
+    }
+    with (
+        patch("app.admin.question_bank.get_supabase", return_value=sb),
+        patch(
+            "app.admin.question_bank._load_set_skill",
+            return_value=(set_row, "listening"),
+        ),
+        patch("app.admin.question_bank._after_question_bank_mutation"),
+        patch("app.admin.question_bank.log_admin_action"),
+    ):
+        res = qb.delete_question_bank_set(set_id=SET_ID, admin_id=ADMIN_ID)
+
+    assert res["ok"] is True
+    assert deleted[0] == ("user_practice_assignments", "practice_set_id", str(SET_ID))
+    assert deleted[1] == ("practice_sets", "id", str(SET_ID))
+

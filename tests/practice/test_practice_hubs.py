@@ -321,21 +321,21 @@ def test_build_personalized_study_plan_assigns_hub_ids():
     def fake_pick(
         *,
         skill: str,
-        day_index: int,
-        slot_index: int = 0,
-        completed_count: int | None = None,
-        previous_hub_id: str | None = None,
+        used_hub_ids: set[str] | None = None,
+        used_set_ids: set[str] | None = None,
+        hub_to_set: dict[str, str] | None = None,
+        **_kwargs,
     ) -> str | None:
+        from app.practice.assignment import pick_unused_hub
+
         ids = fake_catalog.get(skill) or []
-        if not ids:
-            return None
-        cursor = int(completed_count or 0)
-        idx = (cursor + max(day_index, 0)) % len(ids)
-        hub = ids[idx]
-        if previous_hub_id and len(ids) > 1 and hub == previous_hub_id:
-            idx = (idx + 1) % len(ids)
-            hub = ids[idx]
-        return hub
+        mapping = hub_to_set or {h: f"set-{h}" for h in ids}
+        return pick_unused_hub(
+            hub_ids=ids,
+            used_hub_ids=used_hub_ids,
+            used_set_ids=used_set_ids,
+            hub_to_set=mapping,
+        )
 
     with patch("app.practice.catalog.pick_hub_for_slot", side_effect=fake_pick):
         plan = build_personalized_study_plan(
@@ -355,29 +355,53 @@ def test_build_personalized_study_plan_assigns_hub_ids():
     assert "task=watch" in watch.href
 
 
-def test_pick_hub_for_slot_soft_repeat_wraps():
-    from app.practice.catalog import pick_hub_for_slot
+def test_pick_hub_for_slot_does_not_wrap():
+    from app.practice.assignment import pick_hub_for_slot
 
-    with patch(
-        "app.practice.catalog.get_ordered_hub_ids_by_skill",
-        return_value={"listening": ["l1", "l2", "l3"]},
-    ):
-        # cursor=1, day=0 → l2; day=2 → (1+2)%3=0 → l1 wrap
-        assert pick_hub_for_slot(skill="listening", day_index=0, completed_count=1) == "l2"
-        assert pick_hub_for_slot(skill="listening", day_index=2, completed_count=1) == "l1"
-        # clamp gone: large day still wraps
-        assert pick_hub_for_slot(skill="listening", day_index=5, completed_count=2) == "l2"
+    used_h: set[str] = set()
+    used_s: set[str] = set()
+    mapping = {"l1": "s1", "l2": "s2", "l3": "s3"}
+    hubs = ["l1", "l2", "l3"]
+    # former wrap: cursor=1, day=2 → (1+2)%3 = l1. Unique picker never returns used.
+    assert (
+        pick_hub_for_slot(
+            skill="listening",
+            hub_ids=hubs,
+            hub_to_set=mapping,
+            used_hub_ids={"l2", "l3"},
+            used_set_ids={"s2", "s3"},
+            day_index=2,
+            completed_count=1,
+        )
+        == "l1"
+    )
+    picks = []
+    for _ in range(5):
+        picks.append(
+            pick_hub_for_slot(
+                skill="listening",
+                hub_ids=hubs,
+                hub_to_set=mapping,
+                used_hub_ids=used_h,
+                used_set_ids=used_s,
+            )
+        )
+    assert picks == ["l1", "l2", "l3", None, None]
 
 
-def test_assign_hub_for_day_anti_consecutive():
+def test_assign_hub_for_day_never_repeats_used():
     from app.practice.assignment import assign_hub_for_day
 
     hubs = ["a", "b", "c"]
-    # (0+0)%3 = a; previous a → skip to b
-    assert assign_hub_for_day(hub_ids=hubs, cursor=0, day_offset=0, previous_hub_id="a") == "b"
-    # pool size 1 may repeat
-    assert assign_hub_for_day(hub_ids=["only"], cursor=0, day_offset=0, previous_hub_id="only") == "only"
-    assert assign_hub_for_day(hub_ids=[], cursor=0, day_offset=0) is None
+    used: set[str] = set()
+    mapping = {"a": "sa", "b": "sb", "c": "sc"}
+    assert assign_hub_for_day(hub_ids=hubs, used_hub_ids=used, hub_to_set=mapping) == "a"
+    used.add("a")
+    assert assign_hub_for_day(hub_ids=hubs, used_hub_ids=used, hub_to_set=mapping) == "b"
+    used.update({"a", "b", "c"})
+    assert assign_hub_for_day(hub_ids=hubs, used_hub_ids=used, hub_to_set=mapping) is None
+    assert assign_hub_for_day(hub_ids=["only"], used_hub_ids={"only"}, hub_to_set={"only": "s"}) is None
+    assert assign_hub_for_day(hub_ids=[], used_hub_ids=used) is None
 
 
 def test_skill_cursor_counts_completed_in_pool():
@@ -399,12 +423,13 @@ def test_skill_cursor_counts_completed_in_pool():
     assert skill_cursor(skill="listening", progress_map={}, hub_ids=["l1"]) == 0
 
 
-def test_rewrite_plan_hubs_syncs_today_and_calendar():
+def test_rewrite_plan_hubs_keeps_assigned_and_fills_empty():
     from datetime import date, timedelta
 
     from app.practice.assignment import rewrite_plan_hubs
 
     start = date(2026, 8, 1)
+    today = date(2026, 8, 2)
     plan = {
         "prep_start": start.isoformat(),
         "weeks": [
@@ -436,7 +461,7 @@ def test_rewrite_plan_hubs_syncs_today_and_calendar():
                         ],
                     },
                     {
-                        "date": (start + timedelta(days=1)).isoformat(),
+                        "date": today.isoformat(),
                         "label": "Sun",
                         "tasks": [
                             {
@@ -444,8 +469,22 @@ def test_rewrite_plan_hubs_syncs_today_and_calendar():
                                 "title": "L Watch",
                                 "module": "listening",
                                 "task_type": "watch",
-                                "hub_id": "stale2",
+                                "hub_id": "today-assigned",
                                 "href": "/old",
+                            },
+                        ],
+                    },
+                    {
+                        "date": (today + timedelta(days=1)).isoformat(),
+                        "label": "Mon",
+                        "tasks": [
+                            {
+                                "id": "t4",
+                                "title": "L Watch",
+                                "module": "listening",
+                                "task_type": "watch",
+                                "hub_id": None,
+                                "href": "/study-plan/today?skill=listening&unavailable=1",
                             },
                         ],
                     },
@@ -455,22 +494,31 @@ def test_rewrite_plan_hubs_syncs_today_and_calendar():
     }
     out = rewrite_plan_hubs(
         plan,
-        cursors={"listening": 0, "reading": 0, "writing": 0, "speaking": 0},
-        prep_start=start,
         ordered_ids={
             "listening": ["L-easy", "L-med", "L-hard"],
             "reading": [],
             "writing": [],
             "speaking": [],
         },
+        hub_to_set={
+            "stale": "set-stale",
+            "today-assigned": "set-today",
+            "L-easy": "set-easy",
+            "L-med": "set-med",
+            "L-hard": "set-hard",
+        },
         href_builder=lambda **kw: f"/ok/{kw.get('hub_id')}",
+        today=today,
+        claim=False,
     )
     d0 = out["weeks"][0]["days"][0]["tasks"]
     d1 = out["weeks"][0]["days"][1]["tasks"]
-    assert d0[0]["hub_id"] == "L-easy"
-    assert d0[1]["hub_id"] == "L-easy"  # same day same skill
-    assert d1[0]["hub_id"] == "L-med"  # next day advances; not consecutive same
-    assert d0[0]["href"] == "/ok/L-easy"
+    d2 = out["weeks"][0]["days"][2]["tasks"]
+    assert d0[0]["hub_id"] == "stale"
+    assert d0[1]["hub_id"] == "stale"
+    assert d1[0]["hub_id"] == "today-assigned"
+    assert d2[0]["hub_id"] == "L-easy"
+    assert d0[0]["href"] == "/ok/stale"
 
 
 
@@ -478,9 +526,9 @@ def test_pick_hub_for_slot_returns_none_when_empty():
     from app.practice.catalog import pick_hub_for_slot
 
     with patch(
-        "app.practice.catalog.get_ordered_hub_ids_by_skill",
+        "app.practice.catalog.get_ordered_question_bank_ids_by_skill",
         return_value={"listening": []},
-    ):
+    ), patch("app.practice.catalog.get_hub_set_ids", return_value={}):
         assert pick_hub_for_slot(skill="listening", day_index=0, completed_count=0) is None
 
 
