@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -50,6 +51,8 @@ from app.admin.schemas import (
     WritingBuilderSaveResponse,
 )
 from app.db.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
 
 SKILLS = frozenset({"listening", "reading", "writing", "speaking"})
 # New custom bank sets are one named unit (part 1). Legacy sets may still have more.
@@ -430,6 +433,19 @@ def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
     )
 
 
+def _is_published_status(value: Any) -> bool:
+    return str(value or "").strip().lower() == "published"
+
+
+def _student_visible_status_change(prev: str, next_status: str) -> bool:
+    """True when the assignable pool can change (enter or leave published)."""
+    prev_s = str(prev or "").strip().lower()
+    next_s = str(next_status or "").strip().lower()
+    if prev_s == next_s:
+        return False
+    return _is_published_status(prev_s) or _is_published_status(next_s)
+
+
 def _clear_practice_catalog_cache() -> None:
     try:
         from app.practice.catalog import clear_hub_catalog_cache
@@ -443,6 +459,44 @@ def _clear_practice_catalog_cache() -> None:
         invalidate_prefix("practice:section:")
     except Exception:
         pass
+
+
+def _after_question_bank_mutation(
+    *,
+    student_visible: bool,
+    bump_version: bool | None = None,
+) -> None:
+    """After a successful DB write: bump version if students can see it, always drop catalog caches.
+
+    Status changes bump inside ``apply_practice_set_status`` (same transaction as
+    the publish/unpublish write). Pass ``bump_version=False`` for that path so
+    Python does not increment a second time. Content saves still bump here.
+    Failures are retried, then raised — never swallowed.
+    """
+    do_bump = student_visible if bump_version is None else bump_version
+    if do_bump:
+        _bump_catalog_version_strict()
+    _clear_practice_catalog_cache()
+
+
+def _bump_catalog_version_strict(*, attempts: int = 3) -> int:
+    from app.practice.repository import bump_practice_catalog_version
+
+    last: BaseException | None = None
+    for i in range(max(1, attempts)):
+        try:
+            return bump_practice_catalog_version()
+        except Exception as exc:
+            last = exc
+            logger.exception("catalog version bump failed attempt=%s", i + 1)
+    try:
+        from app.reliability.metrics import record_event
+
+        record_event("practice.catalog_version_bump_failed", detail="retries_exhausted")
+    except Exception:
+        pass
+    assert last is not None
+    raise last
 
 
 def bank_publish_blockers(*, set_id: UUID | str, skill: str) -> list[str]:
@@ -548,9 +602,9 @@ def patch_question_bank_set_status(
     admin_id: UUID,
 ) -> PatchQuestionBankSetStatusResponse:
     sb = get_supabase()
-    row, skill = _load_set_skill(sb, str(set_id))
+    set_row, skill = _load_set_skill(sb, str(set_id))
     next_status = body.status
-    prev = str(row.get("status") or "draft")
+    prev = str(set_row.get("status") or "draft")
 
     if next_status == "published":
         blockers = bank_publish_blockers(set_id=set_id, skill=skill)
@@ -564,14 +618,37 @@ def patch_question_bank_set_status(
                 },
             )
 
-    (
-        sb.table("practice_sets")
-        .update({"status": next_status})
-        .eq("id", str(set_id))
-        .execute()
-    )
+    used_db_bump = True
+    try:
+        applied = sb.rpc(
+            "apply_practice_set_status",
+            {"p_set_id": str(set_id), "p_status": next_status},
+        ).execute()
+        payload = applied.data
+        if isinstance(payload, list):
+            payload = payload[0] if payload else {}
+        job_id = payload.get("job_id") if isinstance(payload, dict) else None
+    except APIError as exc:
+        msg = str(exc).lower()
+        # Backward-compatible fallback for environments missing catalog bump SQL function.
+        if "bump_practice_catalog_version" not in msg:
+            raise
+        used_db_bump = False
+        job_id = None
+        sb.table("practice_sets").update({"status": next_status}).eq("id", str(set_id)).execute()
+
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
-    _clear_practice_catalog_cache()
+    _after_question_bank_mutation(
+        student_visible=_student_visible_status_change(prev, next_status),
+        bump_version=False if used_db_bump else None,
+    )
+    if job_id:
+        logger.info(
+            "practice.catalog_changed enqueued set=%s skill=%s job_id=%s",
+            set_id,
+            skill,
+            job_id,
+        )
 
     log_admin_action(
         admin_id=admin_id,
@@ -743,8 +820,8 @@ def delete_question_bank_set(
 ) -> dict[str, Any]:
     """Delete a custom (bank 5) practice set. Seeded catalogue sets are protected."""
     sb = get_supabase()
-    row, skill = _load_set_skill(sb, str(set_id))
-    bank = row.get("practice_banks") or {}
+    set_row, skill = _load_set_skill(sb, str(set_id))
+    bank = set_row.get("practice_banks") or {}
     if isinstance(bank, list):
         bank = bank[0] if bank else {}
     bank_number = int(bank.get("bank_number") or 0)
@@ -754,11 +831,25 @@ def delete_question_bank_set(
             "Only custom practice sets can be deleted. Archive seeded catalogue sets instead.",
         )
 
-    title = str(row.get("title") or "")
-    set_number = int(row.get("set_number") or 0)
-    sb.table("practice_sets").delete().eq("id", str(set_id)).execute()
+    title = str(set_row.get("title") or "")
+    set_number = int(set_row.get("set_number") or 0)
+    was_published = _is_published_status(set_row.get("status"))
+    sid = str(set_id)
+    # Ledger FKs are ON DELETE RESTRICT so assignments must be removed first.
+    sb.table("user_practice_assignments").delete().eq("practice_set_id", sid).execute()
+    try:
+        sb.table("practice_sets").delete().eq("id", sid).execute()
+    except APIError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Cannot delete this practice set because it is still referenced.",
+                "code": "delete_blocked",
+                "detail": getattr(exc, "message", None) or str(exc),
+            },
+        ) from exc
 
-    _clear_practice_catalog_cache()
+    _after_question_bank_mutation(student_visible=was_published)
 
     log_admin_action(
         admin_id=admin_id,
@@ -792,7 +883,7 @@ def save_bank_listening(
     admin_id: UUID,
 ) -> ListeningBuilderSaveResponse:
     sb = get_supabase()
-    _, skill = _load_set_skill(sb, str(set_id))
+    set_row, skill = _load_set_skill(sb, str(set_id))
     if skill != "listening":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set is not a listening set.")
     _assert_part("listening", part)
@@ -849,7 +940,9 @@ def save_bank_listening(
             qnum += 1
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
-    _clear_practice_catalog_cache()
+    _after_question_bank_mutation(
+        student_visible=_is_published_status(set_row.get("status"))
+    )
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.listening_save",
@@ -953,7 +1046,7 @@ def save_bank_reading(
     admin_id: UUID,
 ) -> ReadingBuilderSaveResponse:
     sb = get_supabase()
-    _, skill = _load_set_skill(sb, str(set_id))
+    set_row, skill = _load_set_skill(sb, str(set_id))
     if skill != "reading":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set is not a reading set.")
     _assert_part("reading", part)
@@ -1000,7 +1093,9 @@ def save_bank_reading(
             qnum += 1
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
-    _clear_practice_catalog_cache()
+    _after_question_bank_mutation(
+        student_visible=_is_published_status(set_row.get("status"))
+    )
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.reading_save",
@@ -1081,7 +1176,7 @@ def save_bank_writing(
     admin_id: UUID,
 ) -> WritingBuilderSaveResponse:
     sb = get_supabase()
-    _, skill = _load_set_skill(sb, str(set_id))
+    set_row, skill = _load_set_skill(sb, str(set_id))
     if skill != "writing":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set is not a writing set.")
     _assert_part("writing", part)
@@ -1121,7 +1216,9 @@ def save_bank_writing(
     ]
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
-    _clear_practice_catalog_cache()
+    _after_question_bank_mutation(
+        student_visible=_is_published_status(set_row.get("status"))
+    )
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.writing_save",
@@ -1226,7 +1323,7 @@ def save_bank_speaking(
     admin_id: UUID,
 ) -> SpeakingBuilderSaveResponse:
     sb = get_supabase()
-    _, skill = _load_set_skill(sb, str(set_id))
+    set_row, skill = _load_set_skill(sb, str(set_id))
     if skill != "speaking":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set is not a speaking set.")
     _assert_part("speaking", part)
@@ -1256,7 +1353,9 @@ def save_bank_speaking(
         )
     _replace_questions(sb, section_id=section_id, inserts=inserts)
     refresh_hub_submit_configs(practice_set_id=set_id, skill=skill)
-    _clear_practice_catalog_cache()
+    _after_question_bank_mutation(
+        student_visible=_is_published_status(set_row.get("status"))
+    )
     log_admin_action(
         admin_id=admin_id,
         action="question_bank.speaking_save",
@@ -1386,6 +1485,16 @@ def get_set_intro_stream_uid(*, set_id: UUID) -> str | None:
     return uid or None
 
 
+def _after_intro_update(*, status: Any = None) -> None:
+    _after_question_bank_mutation(student_visible=_is_published_status(status))
+    try:
+        from app.cache.hybrid_cache import invalidate_prefix
+
+        invalidate_prefix("practice:hub:detail:")
+    except Exception:
+        pass
+
+
 def set_intro_stream_uid(*, set_id: UUID, stream_uid: str) -> str:
     sb = get_supabase()
     value = (stream_uid or "").strip()
@@ -1405,11 +1514,8 @@ def set_intro_stream_uid(*, set_id: UUID, stream_uid: str) -> str:
     if not updated:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Practice set not found.")
     try:
-        from app.cache.hybrid_cache import invalidate_prefix
-        from app.practice.repository import clear_hub_list_cache
-
-        clear_hub_list_cache()
-        invalidate_prefix("practice:hub:detail:")
+        row = updated[0] if isinstance(updated, list) else updated
+        _after_intro_update(status=(row or {}).get("status") if isinstance(row, dict) else None)
     except Exception:
         pass
     return value
@@ -1434,11 +1540,8 @@ def set_intro_video_key(*, set_id: UUID, key: str) -> str:
     if not updated:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Practice set not found.")
     try:
-        from app.cache.hybrid_cache import invalidate_prefix
-        from app.practice.repository import clear_hub_list_cache
-
-        clear_hub_list_cache()
-        invalidate_prefix("practice:hub:detail:")
+        row = updated[0] if isinstance(updated, list) else updated
+        _after_intro_update(status=(row or {}).get("status") if isinstance(row, dict) else None)
     except Exception:
         pass
     return value

@@ -42,6 +42,49 @@ REFRESH_MAX_AGE = timedelta(hours=24)
 FULL_SKILL_PROGRAM_TIER = "full_skill_program"
 
 
+def _record_persisted_plan_assignments(
+    user_id: UUID,
+    study_plan: dict[str, Any] | None,
+    *,
+    source: str,
+) -> None:
+    """Record Question Bank hubs placed on a persisted plan. Never fail plan writes."""
+    try:
+        from app.practice.assignment_ledger import record_assignments_from_study_plan
+
+        record_assignments_from_study_plan(
+            user_id=user_id,
+            study_plan=study_plan,
+            source=source,
+        )
+    except Exception:
+        logger.exception("failed to record practice assignments for %s", user_id)
+
+
+def _persist_filled_study_plan(
+    user_id: UUID,
+    study_plan: dict[str, Any],
+    *,
+    expected_updated_at: str | None = None,
+) -> bool:
+    """Persist serve-time unique fills with updated_at CAS. Returns True if written."""
+    try:
+        client = get_supabase()
+        now = datetime.now(UTC).isoformat()
+        q = (
+            client.table("user_learning_profiles")
+            .update({"study_plan": study_plan, "updated_at": now})
+            .eq("user_id", str(user_id))
+        )
+        if expected_updated_at:
+            q = q.eq("updated_at", expected_updated_at)
+        rows = execute_with_retry(lambda: q.execute()).data or []
+        return bool(rows)
+    except Exception:
+        logger.exception("failed to persist serve-time assignment fills for %s", user_id)
+        return False
+
+
 def _personalized_plan_is_bloated(study_plan: dict[str, Any] | None) -> bool:
     """True when a day repeats the same skill's watch (old per-slot expansion)."""
     if not isinstance(study_plan, dict):
@@ -382,8 +425,9 @@ def _progress_fingerprint(
     progress_map: dict[str, dict[str, Any]] | None,
     *,
     weak_tags_by_skill: dict[str, list[str]] | None = None,
+    catalog_version: int | None = None,
 ) -> str:
-    """Stable hash of completed hub ids (+ weak tags) for rewritten-plan cache keys."""
+    """Stable hash of completed hub ids (+ weak tags + catalog version) for rewritten-plan cache keys."""
     import hashlib
 
     if not progress_map:
@@ -402,7 +446,7 @@ def _progress_fingerprint(
             tags = ",".join(weak_tags_by_skill[skill] or [])
             bits.append(f"{skill}:{tags}")
         weak_part = "|".join(bits)
-    raw = f"{completed_part}#{weak_part}"
+    raw = f"{completed_part}#{weak_part}#{int(catalog_version or 0)}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -413,13 +457,24 @@ def _serve_rewritten_study_plan(
     prep_start: date | None,
     progress_map: dict[str, dict[str, Any]] | None,
     skill_weaknesses: list[dict[str, Any]] | None = None,
+    expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
-    """Apply soft-repeat (+ weakness-weighted) assignment so calendar + Today share hubs."""
+    """Preserve sticky assignments and uniquely fill empty eligible slots."""
     from app.cache.hybrid_cache import get_json, set_json
     from app.practice.weakness import weak_tags_from_profile
 
     weak_tags = weak_tags_from_profile(skill_weaknesses)
-    fp = _progress_fingerprint(progress_map, weak_tags_by_skill=weak_tags)
+    try:
+        from app.practice.repository import get_practice_catalog_version
+
+        catalog_version = get_practice_catalog_version()
+    except Exception:
+        catalog_version = 0
+    fp = _progress_fingerprint(
+        progress_map,
+        weak_tags_by_skill=weak_tags,
+        catalog_version=catalog_version,
+    )
     cache_key = f"learning:plan_rewritten:{user_id}:{fp}"
     cached = get_json(cache_key)
     if isinstance(cached, dict) and (
@@ -428,21 +483,21 @@ def _serve_rewritten_study_plan(
         return cached
 
     try:
-        from app.practice.assignment import cursors_by_skill, rewrite_plan_hubs
+        from app.practice.assignment import rewrite_plan_hubs
         from app.practice.catalog import (
             get_hub_skill_tags_by_id,
+            get_hub_set_ids,
             get_hub_submit_configs_by_id,
-            get_ordered_hub_ids_by_skill,
+            get_ordered_question_bank_ids_by_skill,
         )
 
-        ordered = get_ordered_hub_ids_by_skill()
+        ordered = get_ordered_question_bank_ids_by_skill()
         submit_by_hub = get_hub_submit_configs_by_id()
         hub_tags = get_hub_skill_tags_by_id() if weak_tags else None
-        cursors = cursors_by_skill(
-            user_id=user_id,
-            progress_map=progress_map,
-            ordered_ids=ordered,
-        )
+        try:
+            hub_to_set = get_hub_set_ids()
+        except Exception:
+            hub_to_set = {}
 
         def href_builder(
             *,
@@ -475,13 +530,27 @@ def _serve_rewritten_study_plan(
 
         rewritten = rewrite_plan_hubs(
             study_plan_raw,
-            cursors=cursors,
             prep_start=prep_start,
             ordered_ids=ordered,
             href_builder=href_builder,
             weak_tags_by_skill=weak_tags or None,
             hub_tags_by_id=hub_tags,
+            user_id=user_id,
+            progress_map=progress_map,
+            hub_to_set=hub_to_set,
+            source="serve_fill",
+            claim=True,
         )
+        new_fills = rewritten.pop("_new_assignment_hub_ids", None)
+        if new_fills:
+            persisted = _persist_filled_study_plan(
+                user_id,
+                rewritten,
+                expected_updated_at=expected_updated_at,
+            )
+            if persisted:
+                set_json(cache_key, rewritten, 60)
+            return rewritten
         set_json(cache_key, rewritten, 60)
         return rewritten
     except Exception:
@@ -565,6 +634,7 @@ def row_to_response(row: dict[str, Any]) -> LearningProfileResponse:
         prep_start=timeline["prep_start"],
         progress_map=progress_map,
         skill_weaknesses=list(row.get("skill_weaknesses") or []),
+        expected_updated_at=str(row.get("updated_at") or "") or None,
     )
 
     todays = _todays_tasks(
@@ -1031,13 +1101,21 @@ def generate_personalized_plan(
             bands[skill] = val
     weak_tags = _weak_tags_from_aggregate(aggregate)
 
-    completed_by_skill: dict[str, int] = {}
+    used_hub_ids: set[str] = set()
+    used_set_ids: set[str] = set()
+    hub_to_set: dict[str, str] = {}
     try:
-        from app.practice.assignment import cursors_by_skill
+        from app.practice.assignment import collect_used_assignment_ids
+        from app.practice.catalog import get_hub_set_ids
 
-        completed_by_skill = cursors_by_skill(user_id=user_id)
+        hub_to_set = dict(get_hub_set_ids())
+        used_hub_ids, used_set_ids = collect_used_assignment_ids(
+            user_id=user_id,
+            study_plan=prior_plan,
+            hub_to_set=hub_to_set,
+        )
     except Exception:
-        logger.exception("could not load skill cursors for plan generation %s", user_id)
+        logger.exception("could not load used assignments for plan generation %s", user_id)
 
     plan_kwargs = dict(
         bands=bands,
@@ -1046,8 +1124,13 @@ def generate_personalized_plan(
         prep_start=prep_start,
         plan_tier=plan_tier,
         diagnostic_attempt_id=str(attempt.get("id") or ""),
-        completed_by_skill=completed_by_skill,
         weak_tags_by_skill=weak_tags,
+        user_id=user_id,
+        used_hub_ids=used_hub_ids,
+        used_set_ids=used_set_ids,
+        hub_to_set=hub_to_set,
+        assignment_source="plan_generate",
+        claim_assignments=True,
     )
     if prior_plan:
         prior_exam = _parse_date(prior.get("exam_date")) or _parse_date(prior_plan.get("exam_date"))
@@ -1118,6 +1201,7 @@ def generate_personalized_plan(
         ).data or []
 
     invalidate_learning_profile_cache(user_id)
+    _record_persisted_plan_assignments(user_id, plan_dump, source="plan_generate")
     if rows:
         return row_to_response(rows[0])
     row = fetch_profile_row(user_id)
@@ -1158,13 +1242,21 @@ def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
     plan_tier = str(prior.get("plan_tier") or FULL_SKILL_PROGRAM_TIER)
     weak_tags = _weak_tags_from_aggregate(aggregate)
 
-    completed_by_skill: dict[str, int] = {}
+    used_hub_ids: set[str] = set()
+    used_set_ids: set[str] = set()
+    hub_to_set: dict[str, str] = {}
     try:
-        from app.practice.assignment import cursors_by_skill
+        from app.practice.assignment import collect_used_assignment_ids
+        from app.practice.catalog import get_hub_set_ids
 
-        completed_by_skill = cursors_by_skill(user_id=user_id)
+        hub_to_set = dict(get_hub_set_ids())
+        used_hub_ids, used_set_ids = collect_used_assignment_ids(
+            user_id=user_id,
+            study_plan=prior_plan,
+            hub_to_set=hub_to_set,
+        )
     except Exception:
-        logger.exception("could not load skill cursors for replan %s", user_id)
+        logger.exception("could not load used assignments for replan %s", user_id)
 
     rebuilt = build_personalized_study_plan(
         bands=bands,
@@ -1178,8 +1270,13 @@ def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
             else None
         ),
         prior_plan=None,
-        completed_by_skill=completed_by_skill,
         weak_tags_by_skill=weak_tags,
+        user_id=user_id,
+        used_hub_ids=used_hub_ids,
+        used_set_ids=used_set_ids,
+        hub_to_set=hub_to_set,
+        assignment_source="replan",
+        claim_assignments=True,
     )
     rebuilt_dump = rebuilt.model_dump(mode="json")
     today = date.today()
@@ -1240,6 +1337,7 @@ def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
         )
     ).data or []
     invalidate_learning_profile_cache(user_id)
+    _record_persisted_plan_assignments(user_id, merged, source="replan")
     if rows:
         return row_to_response(rows[0])
     row = fetch_profile_row(user_id)

@@ -765,7 +765,7 @@ def _personalized_task(
             task_id=task_id,
         )
     else:
-        href = f"/practice/{skill}"
+        href = f"/study-plan/today?skill={skill}&unavailable=1"
     return StudyTask(
         id=task_id,
         title=titles[task_type],
@@ -837,6 +837,12 @@ def build_personalized_study_plan(
     prior_plan: dict[str, Any] | None = None,
     completed_by_skill: dict[str, int] | None = None,
     weak_tags_by_skill: dict[str, list[str]] | None = None,
+    user_id: Any | None = None,
+    used_hub_ids: set[str] | None = None,
+    used_set_ids: set[str] | None = None,
+    hub_to_set: dict[str, str] | None = None,
+    assignment_source: str = "plan_generate",
+    claim_assignments: bool = False,
 ) -> StudyPlan:
     """Build an exam-date-bound calendar plan with watch/practice/submit task stubs."""
     start = prep_start or date.today()
@@ -868,9 +874,27 @@ def build_personalized_study_plan(
         pick_hub_for_slot = None  # type: ignore[assignment,misc]
 
     assigned_hub_ids: list[str] = []
-    previous_hub_by_skill: dict[str, str | None] = {
-        k: None for k in SKILL_ORDER
-    }
+    used_hubs = set(used_hub_ids or [])
+    used_sets = set(used_set_ids or [])
+    mapping = dict(hub_to_set or {})
+    if prior_plan:
+        try:
+            from app.practice.assignment_ledger import hub_ids_from_study_plan
+
+            for hid in hub_ids_from_study_plan(prior_plan):
+                used_hubs.add(hid)
+                sid = str(mapping.get(hid) or "").strip()
+                if sid:
+                    used_sets.add(sid)
+        except Exception:
+            pass
+    if not mapping:
+        try:
+            from app.practice.catalog import get_hub_set_ids
+
+            mapping = dict(get_hub_set_ids())
+        except Exception:
+            mapping = {}
     days: list[StudyDay] = []
     for d in range(total_days):
         day_date = start + timedelta(days=d)
@@ -885,14 +909,23 @@ def build_personalized_study_plan(
                         day_index=d,
                         slot_index=slot_index,
                         completed_count=int(completed_by_skill.get(skill, 0)),
-                        previous_hub_id=previous_hub_by_skill.get(skill),
+                        used_hub_ids=used_hubs,
+                        used_set_ids=used_sets,
+                        hub_to_set=mapping,
                         weak_tags=weak_tags_by_skill.get(skill) or None,
+                        user_id=user_id,
+                        source=assignment_source,
+                        assigned_on=day_date,
+                        claim=bool(claim_assignments and user_id),
                     )
                 except Exception:
                     hub_id = None
                 if hub_id:
                     assigned_hub_ids.append(hub_id)
-                    previous_hub_by_skill[skill] = hub_id
+                    used_hubs.add(hub_id)
+                    sid = str(mapping.get(hub_id) or "").strip()
+                    if sid:
+                        used_sets.add(sid)
             tasks.extend(
                 _tasks_for_session_skill(
                     skill,

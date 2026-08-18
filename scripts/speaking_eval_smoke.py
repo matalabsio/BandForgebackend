@@ -19,6 +19,7 @@ from app.speaking.providers.factory import (
     eval_configured,
     get_asr_provider,
     get_eval_provider,
+    get_eval_provider_chain,
 )
 
 REVIEW_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -113,25 +114,36 @@ async def _live_asr_smoke() -> bool:
 
 
 async def _live_eval_smoke() -> bool:
-    eval_provider = get_eval_provider()
-
-    try:
-        evaluation = await eval_provider.evaluate(
-            transcript=SAMPLE_TRANSCRIPT,
-            fluency_metrics=SAMPLE_METRICS,
-            prompts=["Where are you from?"],
-            part=1,
-        )
-    except Exception as exc:
-        print(f"FAIL  eval live call ({eval_provider.name}) — {exc}")
+    providers = get_eval_provider_chain()
+    if not providers:
+        print("FAIL  no configured speaking evaluation providers")
         return False
 
-    overall = evaluation.band_scores.overall
-    print(
-        f"OK    eval live {eval_provider.name}/{eval_provider.model} "
-        f"(overall band {overall})"
-    )
-    return True
+    last_exc: Exception | None = None
+    for eval_provider in providers:
+        try:
+            evaluation = await eval_provider.evaluate(
+                transcript=SAMPLE_TRANSCRIPT,
+                fluency_metrics=SAMPLE_METRICS,
+                prompts=["Where are you from?"],
+                part=1,
+            )
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"WARN  eval live call ({eval_provider.name}) failed — trying fallback: {exc}"
+            )
+            continue
+
+        overall = evaluation.band_scores.overall
+        print(
+            f"OK    eval live {eval_provider.name}/{eval_provider.model} "
+            f"(overall band {overall})"
+        )
+        return True
+
+    print(f"FAIL  all eval providers failed — last error: {last_exc}")
+    return False
 
 
 def main() -> int:
@@ -159,7 +171,8 @@ def main() -> int:
     print(f"  ASR_PROVIDER={settings.asr_provider} ({asr.name}, configured={asr_configured()})")
     print(
         f"  LLM_PROVIDER={settings.llm_provider} "
-        f"({eval_provider.name}, configured={eval_configured()})"
+        f"SPEAKING_LLM_FALLBACK={settings.speaking_llm_fallback} "
+        f"(configured={eval_configured()})"
     )
 
     if not _stub_smoke():

@@ -7,6 +7,12 @@ dockerfilePath = "Dockerfile"
 # Schedule: 0 * * * * — see Razorpay.md → Phase 9 — Production readiness.
 # Speaking release delivery must run as a separate always-on Railway service
 # using the same image/env and start command: bash scripts/run_notification_worker.sh
+# Question Bank publish fan-out (practice.catalog_changed) is a separate always-on
+# service: bash scripts/run_practice_job_worker.sh — the API process only enqueues.
+# Env (optional): PRACTICE_JOB_BATCH_SIZE=5 PRACTICE_JOB_USER_BATCH_SIZE=50
+# PRACTICE_JOB_LEASE_SECONDS=300 PRACTICE_JOB_POLL_SECONDS=2
+# Health: python -m app.practice.catalog_jobs --check
+# Staging invariants (read-only): python -m scripts.diagnose_practice_assignments
 # Optional recovery cron (every 5 minutes): bash scripts/sweep_notification_outbox.sh
 # Plan reminders (Phase 6.5): daily cron ~07:00 IST → bash scripts/sweep_plan_reminders.sh
 # (enqueues learning.daily_reminder; the always-on worker above sends via Resend).
