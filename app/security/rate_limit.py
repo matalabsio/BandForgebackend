@@ -3,6 +3,7 @@
 Used by:
 - POST /auth/login — per IP
 - POST /auth/send-otp — per phone
+- POST /auth/send-email-otp — per IP and per email
 - POST /auth/verify-otp — per IP (login bucket)
 - POST /auth/register, /forgot-password, /collect-lead — per IP
 - POST /api/payments/create-order|verify — per user
@@ -266,6 +267,36 @@ def enforce_send_otp_rate_limit(*, phone: str) -> None:
         limit=OTP_RATE_LIMIT_PER_PHONE,
         window_sec=OTP_RATE_LIMIT_WINDOW_SECONDS,
         detail="Too many OTP requests for this number. Please try again later.",
+    )
+
+
+def enforce_send_email_otp_ip_rate_limit(request: Request) -> None:
+    from app.auth.constants import (
+        OTP_RATE_LIMIT_PER_PHONE,
+        OTP_RATE_LIMIT_WINDOW_SECONDS,
+    )
+
+    enforce_ip_rate_limit(
+        request,
+        bucket="auth:send-email-otp-ip",
+        limit=OTP_RATE_LIMIT_PER_PHONE,
+        window_sec=OTP_RATE_LIMIT_WINDOW_SECONDS,
+        detail="Too many OTP requests from this address. Please try again later.",
+    )
+
+
+def enforce_send_email_otp_rate_limit(*, email: str) -> None:
+    from app.auth.constants import (
+        OTP_RATE_LIMIT_PER_PHONE,
+        OTP_RATE_LIMIT_WINDOW_SECONDS,
+    )
+
+    enforce_rate_limit(
+        bucket="auth:send-email-otp",
+        identity=email,
+        limit=OTP_RATE_LIMIT_PER_PHONE,
+        window_sec=OTP_RATE_LIMIT_WINDOW_SECONDS,
+        detail="Too many OTP requests for this email. Please try again later.",
     )
 
 

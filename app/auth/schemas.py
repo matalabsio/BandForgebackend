@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.auth.utils import is_valid_india_phone, normalize_india_phone
+from app.auth.utils import is_valid_india_phone, normalize_email, normalize_india_phone
 
 IeltsPurpose = Literal["immigration", "university", "professional", "general"]
 IeltsGoal = Literal[
@@ -59,6 +59,41 @@ class VerifyOtpRequest(BaseModel):
         digits = "".join(c for c in v if c.isdigit())
         if len(digits) != OTP_LENGTH:
             raise ValueError(f"OTP must be {OTP_LENGTH} digits.")
+        return digits
+
+
+class SendEmailOtpRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        normalized = normalize_email(str(v))
+        if not normalized:
+            raise ValueError("Email is required.")
+        return normalized
+
+
+class VerifyEmailOtpRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        normalized = normalize_email(str(v))
+        if not normalized:
+            raise ValueError("Email is required.")
+        return normalized
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: str) -> str:
+        from app.auth.constants import EMAIL_OTP_LENGTH
+
+        digits = "".join(c for c in v if c.isdigit())
+        if len(digits) != EMAIL_OTP_LENGTH:
+            raise ValueError(f"OTP must be {EMAIL_OTP_LENGTH} digits.")
         return digits
 
 

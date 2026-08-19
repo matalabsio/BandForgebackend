@@ -15,6 +15,7 @@ from app.auth.constants import (
 )
 from app.auth.email import send_password_reset_email, send_verification_email
 from app.auth.jwt import create_access_token, create_refresh_token, decode_refresh_token
+from app.auth.email_otp import create_and_send_email_otp, verify_email_otp_code
 from app.auth.otp import OtpError, create_and_send_otp, verify_otp_code
 from app.auth.schemas import (
     AuthResponse,
@@ -30,6 +31,7 @@ from app.auth.utils import (
     generate_opaque_token,
     hash_token,
     is_valid_india_phone,
+    normalize_email,
     normalize_india_phone,
     phone_e164,
     utcnow,
@@ -40,11 +42,18 @@ from app.db.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 PHONE_OTP_DISABLED_MSG = "Phone OTP is not enabled yet."
+EMAIL_OTP_DISABLED_MSG = "Email OTP is not enabled yet."
+EMAIL_OTP_STUDENTS_ONLY_MSG = "Email OTP sign-in is available for student accounts only."
 
 
 def _ensure_phone_otp_enabled() -> None:
     if not get_settings().phone_otp_enabled:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, PHONE_OTP_DISABLED_MSG)
+
+
+def _ensure_email_otp_enabled() -> None:
+    if not get_settings().email_otp_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, EMAIL_OTP_DISABLED_MSG)
 
 
 def _email_verification_required() -> bool:
@@ -404,6 +413,72 @@ async def verify_phone_otp(*, phone_digits: str, code: str) -> tuple[AuthRespons
         user_id=user_id,
         email=row.get("email"),
         phone=e164,
+    )
+    return _auth_response(_row_to_user(row), access), refresh, session_id
+
+
+async def send_email_otp(*, email: str) -> str | None:
+    _ensure_email_otp_enabled()
+    try:
+        return await create_and_send_email_otp(email=email, purpose=OTP_PURPOSE_LOGIN)
+    except OtpError as exc:
+        raise HTTPException(exc.status_code, exc.message) from exc
+
+
+async def verify_email_otp(*, email: str, code: str) -> tuple[AuthResponse, str, str]:
+    _ensure_email_otp_enabled()
+    email_normalized = normalize_email(email)
+    if not email_normalized:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email is required.")
+    try:
+        await verify_email_otp_code(
+            email=email_normalized, code=code, purpose=OTP_PURPOSE_LOGIN
+        )
+    except OtpError as exc:
+        raise HTTPException(exc.status_code, exc.message) from exc
+
+    sb = get_supabase()
+    now = utcnow().isoformat()
+    existing = (
+        sb.table("users")
+        .select("*")
+        .eq("email", email_normalized)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        row = existing.data[0]
+        if str(row.get("role") or "student") != "student":
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, EMAIL_OTP_STUDENTS_ONLY_MSG
+            )
+        sb.table("users").update(
+            {"email_verified_at": now, "updated_at": now}
+        ).eq("id", row["id"]).execute()
+        row = {**row, "email_verified_at": now}
+    else:
+        inserted = (
+            sb.table("users")
+            .insert(
+                {
+                    "email": email_normalized,
+                    "email_verified_at": now,
+                    "updated_at": now,
+                }
+            )
+            .execute()
+        )
+        if not inserted.data:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not create user."
+            )
+        row = inserted.data[0]
+
+    user_id = UUID(str(row["id"]))
+    access, refresh, session_id = await _issue_tokens(
+        user_id=user_id,
+        email=email_normalized,
+        phone=row.get("phone"),
     )
     return _auth_response(_row_to_user(row), access), refresh, session_id
 

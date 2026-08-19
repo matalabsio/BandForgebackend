@@ -19,6 +19,10 @@ def normalize_india_phone(raw: str) -> str:
     return digits
 
 
+def normalize_email(raw: str) -> str:
+    return (raw or "").strip().lower()
+
+
 def is_valid_india_phone(digits10: str) -> bool:
     return bool(INDIA_MOBILE_RE.match(digits10))
 

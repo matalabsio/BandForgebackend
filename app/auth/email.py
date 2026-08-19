@@ -69,3 +69,17 @@ async def send_password_reset_email(*, to: str, token: str) -> bool:
 <p style="color:#999;font-size:12px;">If you did not request this, ignore this email.</p>
 </div>"""
     return await _send_resend(to=to, subject="Reset your BandForge password", html=html)
+
+
+async def send_login_otp_email(
+    *, to: str, code: str, expires_minutes: int
+) -> bool:
+    safe_code = escape(code)
+    html = f"""<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;">
+<h1 style="color:#0d1f3c;">Your BandForge login code</h1>
+<p>Use this one-time code to sign in:</p>
+<p style="font-size:32px;font-weight:700;letter-spacing:0.2em;color:#0d1f3c;">{safe_code}</p>
+<p style="color:#666;font-size:14px;">This code expires in {expires_minutes} minutes.</p>
+<p style="color:#999;font-size:12px;">If you did not request this code, you can ignore this email.</p>
+</div>"""
+    return await _send_resend(to=to, subject="Your BandForge login code", html=html)

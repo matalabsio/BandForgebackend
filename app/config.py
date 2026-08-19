@@ -343,6 +343,9 @@ class Settings(BaseSettings):
     phone_otp_enabled: bool = Field(
         default=False, validation_alias="PHONE_OTP_ENABLED"
     )
+    email_otp_enabled: bool = Field(
+        default=False, validation_alias="EMAIL_OTP_ENABLED"
+    )
     auth_skip_email_verify: bool = Field(
         default=False,
         validation_alias="AUTH_SKIP_EMAIL_VERIFY",
@@ -371,6 +374,7 @@ class Settings(BaseSettings):
         "auth_open_otp",
         "auth_demo_otp_enabled",
         "phone_otp_enabled",
+        "email_otp_enabled",
         "auth_skip_email_verify",
         "razorpay_enabled",
         "speaking_eval_stub",
