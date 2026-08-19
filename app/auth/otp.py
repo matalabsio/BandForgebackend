@@ -7,6 +7,7 @@ from app.auth.constants import (
     OTP_PURPOSE_LOGIN,
     OTP_RESEND_COOLDOWN_SECONDS,
 )
+from app.auth.demo_mode import otp_demo_mode
 from app.auth.utils import generate_otp_code, hash_otp, utcnow
 from app.config import get_settings
 from app.db.supabase_client import get_supabase
@@ -19,10 +20,6 @@ class OtpError(Exception):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
-
-
-def _demo_mode() -> bool:
-    return get_settings().app_env != "production" or get_settings().auth_demo_otp_enabled
 
 
 def _parse_ts(value: object, *, fallback_tz: object) -> datetime:
@@ -84,7 +81,7 @@ async def create_and_send_otp(*, phone: str, purpose: str = OTP_PURPOSE_LOGIN) -
     _enforce_resend_cooldown(phone=phone, purpose=purpose)
 
     code = generate_otp_code()
-    if settings.auth_demo_otp:
+    if otp_demo_mode(settings) and settings.auth_demo_otp:
         code = settings.auth_demo_otp
 
     try:
@@ -108,10 +105,10 @@ async def create_and_send_otp(*, phone: str, purpose: str = OTP_PURPOSE_LOGIN) -
     from app.auth.sms import send_otp_sms_digits
 
     sent = await send_otp_sms_digits(digits10=phone, code=code)
-    if not sent and not _demo_mode():
+    if not sent and not otp_demo_mode(settings):
         raise OtpError("Could not send OTP. Try again later.", 503)
 
-    if _demo_mode():
+    if otp_demo_mode(settings):
         return (
             "Demo mode: use the configured demo OTP or any 4-digit code if open OTP is enabled."
         )
@@ -127,10 +124,10 @@ async def verify_otp_code(*, phone: str, code: str, purpose: str = OTP_PURPOSE_L
     sb = get_supabase()
     now = utcnow()
 
-    if settings.auth_open_otp and _demo_mode():
+    if settings.auth_open_otp and otp_demo_mode(settings):
         return
 
-    if settings.auth_demo_otp and code == settings.auth_demo_otp:
+    if otp_demo_mode(settings) and settings.auth_demo_otp and code == settings.auth_demo_otp:
         row = (
             sb.table("otp_verifications")
             .select("id")

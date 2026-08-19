@@ -75,9 +75,12 @@ async def lifespan(_app: FastAPI):
                     "than 32 characters. Set a strong secret before running in production."
                 )
         if not settings.resend_api_key:
-            raise RuntimeError(
-                "Speaking release email is enabled but RESEND_API_KEY is missing."
-            )
+            detail = "RESEND_API_KEY is missing in production."
+            if settings.email_otp_enabled:
+                detail = (
+                    "EMAIL_OTP_ENABLED is true but RESEND_API_KEY is missing."
+                )
+            raise RuntimeError(detail)
         if "onboarding@resend.dev" in settings.email_from.lower():
             raise RuntimeError(
                 "EMAIL_FROM must use a verified production sender, not onboarding@resend.dev."

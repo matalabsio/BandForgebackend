@@ -10,6 +10,7 @@ from app.auth.constants import (
     OTP_PURPOSE_LOGIN,
     OTP_RESEND_COOLDOWN_SECONDS,
 )
+from app.auth.demo_mode import otp_demo_mode
 from app.auth.otp import OtpError
 from app.auth.utils import hash_otp, normalize_email, utcnow
 from app.config import get_settings
@@ -20,10 +21,6 @@ logger = logging.getLogger(__name__)
 
 def generate_email_otp_code() -> str:
     return "".join(secrets.choice("0123456789") for _ in range(EMAIL_OTP_LENGTH))
-
-
-def _demo_mode() -> bool:
-    return get_settings().app_env != "production" or get_settings().auth_demo_otp_enabled
 
 
 def _require_normalized_email(email: str) -> str:
@@ -145,7 +142,7 @@ async def create_and_send_email_otp(
     _ensure_resend_ready_for_production()
 
     code = generate_email_otp_code()
-    if _demo_mode() and settings.auth_demo_otp:
+    if otp_demo_mode(settings) and settings.auth_demo_otp:
         code = settings.auth_demo_otp
 
     verification_id = _create_email_otp_record(
@@ -164,15 +161,15 @@ async def create_and_send_email_otp(
         )
     except Exception as exc:
         logger.exception("Failed to send email OTP via Resend: %s", exc)
-        if not _demo_mode():
+        if not otp_demo_mode(settings):
             _invalidate_email_otp(verification_id=verification_id)
             raise OtpError("Could not send OTP. Try again later.", 503) from exc
     else:
-        if not sent and not _demo_mode():
+        if not sent and not otp_demo_mode(settings):
             _invalidate_email_otp(verification_id=verification_id)
             raise OtpError("Could not send OTP. Try again later.", 503)
 
-    if _demo_mode():
+    if otp_demo_mode(settings):
         return (
             "Demo mode: use the configured demo OTP or any 6-digit code if open OTP is enabled."
         )
@@ -187,10 +184,10 @@ async def verify_email_otp_code(
     now = utcnow()
     normalized = _require_normalized_email(email)
 
-    if settings.auth_open_otp and _demo_mode():
+    if settings.auth_open_otp and otp_demo_mode(settings):
         return
 
-    if _demo_mode() and settings.auth_demo_otp and code == settings.auth_demo_otp:
+    if otp_demo_mode(settings) and settings.auth_demo_otp and code == settings.auth_demo_otp:
         row = (
             sb.table("email_otp_verifications")
             .select("id")

@@ -2,7 +2,7 @@
 
 Used by:
 - POST /auth/login — per IP
-- POST /auth/send-otp — per phone
+- POST /auth/send-otp — per phone and per IP
 - POST /auth/send-email-otp — per IP and per email
 - POST /auth/verify-otp — per IP (login bucket)
 - POST /auth/register, /forgot-password, /collect-lead — per IP
@@ -252,6 +252,21 @@ def enforce_login_rate_limit(request: Request) -> None:
         limit=_limit("rate_limit_login", LOGIN_LIMIT),
         window_sec=LOGIN_WINDOW_SEC,
         detail="Too many login attempts. Please try again shortly.",
+    )
+
+
+def enforce_send_otp_ip_rate_limit(request: Request) -> None:
+    from app.auth.constants import (
+        OTP_RATE_LIMIT_PER_PHONE,
+        OTP_RATE_LIMIT_WINDOW_SECONDS,
+    )
+
+    enforce_ip_rate_limit(
+        request,
+        bucket="auth:send-otp-ip",
+        limit=OTP_RATE_LIMIT_PER_PHONE,
+        window_sec=OTP_RATE_LIMIT_WINDOW_SECONDS,
+        detail="Too many OTP requests from this address. Please try again later.",
     )
 
 

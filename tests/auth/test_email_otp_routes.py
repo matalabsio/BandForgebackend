@@ -354,6 +354,42 @@ def test_verify_email_otp_rejects_admin_user():
     issue_tokens.assert_not_awaited()
 
 
+def test_verify_email_otp_rejects_deactivated_user():
+    settings = MagicMock(email_otp_enabled=True)
+    existing_row = {
+        "id": str(GOOGLE_USER_ID),
+        "email": EMAIL,
+        "full_name": "Inactive Student",
+        "phone": None,
+        "email_verified_at": None,
+        "phone_verified_at": None,
+        "role": "student",
+        "is_active": False,
+    }
+    mock_sb, table = _mock_users_sb(select_rows=[existing_row])
+
+    with (
+        patch("app.auth.service.get_settings", return_value=settings),
+        patch("app.auth.service.get_supabase", return_value=mock_sb),
+        patch(
+            "app.auth.service.verify_email_otp_code",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "app.auth.service._issue_tokens",
+            new_callable=AsyncMock,
+        ) as issue_tokens,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(service.verify_email_otp(email=EMAIL, code="123456"))
+
+    assert exc.value.status_code == 403
+    assert "deactivated" in exc.value.detail.lower()
+    table.insert.assert_not_called()
+    issue_tokens.assert_not_awaited()
+
+
 def test_verify_email_otp_normalizes_direct_service_input():
     settings = MagicMock(email_otp_enabled=True)
     raw_email = "  Student@Example.COM "

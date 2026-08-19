@@ -44,6 +44,26 @@ logger = logging.getLogger(__name__)
 PHONE_OTP_DISABLED_MSG = "Phone OTP is not enabled yet."
 EMAIL_OTP_DISABLED_MSG = "Email OTP is not enabled yet."
 EMAIL_OTP_STUDENTS_ONLY_MSG = "Email OTP sign-in is available for student accounts only."
+PHONE_OTP_STUDENTS_ONLY_MSG = "Phone OTP sign-in is available for student accounts only."
+
+
+def _ensure_student_otp_login(row: dict, *, channel: str = "email") -> None:
+    if str(row.get("role") or "student") != "student":
+        msg = (
+            EMAIL_OTP_STUDENTS_ONLY_MSG
+            if channel == "email"
+            else PHONE_OTP_STUDENTS_ONLY_MSG
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, msg)
+
+
+def _ensure_otp_session_allowed(row: dict, *, channel: str = "email") -> None:
+    _ensure_student_otp_login(row, channel=channel)
+    _assert_user_accessible(
+        email=row.get("email"),
+        email_verified_at=row.get("email_verified_at"),
+        is_active=bool(row.get("is_active", True)),
+    )
 
 
 def _ensure_phone_otp_enabled() -> None:
@@ -386,6 +406,7 @@ async def verify_phone_otp(*, phone_digits: str, code: str) -> tuple[AuthRespons
     )
     if existing.data:
         row = existing.data[0]
+        _ensure_student_otp_login(row, channel="phone")
         sb.table("users").update(
             {"phone_verified_at": now, "updated_at": now}
         ).eq("id", row["id"]).execute()
@@ -407,6 +428,8 @@ async def verify_phone_otp(*, phone_digits: str, code: str) -> tuple[AuthRespons
                 status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not create user."
             )
         row = inserted.data[0]
+
+    _ensure_otp_session_allowed(row, channel="phone")
 
     user_id = UUID(str(row["id"]))
     access, refresh, session_id = await _issue_tokens(
@@ -448,10 +471,7 @@ async def verify_email_otp(*, email: str, code: str) -> tuple[AuthResponse, str,
     )
     if existing.data:
         row = existing.data[0]
-        if str(row.get("role") or "student") != "student":
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, EMAIL_OTP_STUDENTS_ONLY_MSG
-            )
+        _ensure_student_otp_login(row, channel="email")
         sb.table("users").update(
             {"email_verified_at": now, "updated_at": now}
         ).eq("id", row["id"]).execute()
@@ -473,6 +493,8 @@ async def verify_email_otp(*, email: str, code: str) -> tuple[AuthResponse, str,
                 status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not create user."
             )
         row = inserted.data[0]
+
+    _ensure_otp_session_allowed(row, channel="email")
 
     user_id = UUID(str(row["id"]))
     access, refresh, session_id = await _issue_tokens(
@@ -721,6 +743,12 @@ async def google_login_or_register(
             pending_redirect_to=check_email,
             message="Check your email for a verification link to continue.",
         )
+
+    _assert_user_accessible(
+        email=row.get("email"),
+        email_verified_at=row.get("email_verified_at"),
+        is_active=bool(row.get("is_active", True)),
+    )
 
     access, refresh, session_id = await _issue_tokens(
         user_id=user_id,
