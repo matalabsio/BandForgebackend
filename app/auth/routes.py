@@ -34,11 +34,13 @@ from app.auth.schemas import (
     ResetPasswordRequest,
     RestoreSessionRequest,
     SendOtpRequest,
+    SendEmailOtpRequest,
     UpdateProfileRequest,
     UpdateProfileResponse,
     SessionUser,
     UserPublic,
     VerifyEmailRequest,
+    VerifyEmailOtpRequest,
     VerifyOtpRequest,
 )
 from app.auth import service
@@ -48,6 +50,8 @@ from app.security.rate_limit import (
     enforce_forgot_password_rate_limit,
     enforce_login_rate_limit,
     enforce_register_rate_limit,
+    enforce_send_email_otp_ip_rate_limit,
+    enforce_send_email_otp_rate_limit,
     enforce_send_otp_rate_limit,
 )
 
@@ -146,6 +150,35 @@ async def verify_otp(
     enforce_login_rate_limit(request)
     auth, new_refresh, _ = await service.verify_phone_otp(
         phone_digits=body.phone,
+        code=body.code,
+    )
+    _set_auth_cookies(
+        response,
+        access_token=auth.access_token,
+        refresh_token=new_refresh,
+    )
+    return auth.model_copy(update={"refresh_token": new_refresh})
+
+
+@router.post("/send-email-otp", response_model=MessageResponse)
+async def send_email_otp(
+    body: SendEmailOtpRequest, request: Request
+) -> MessageResponse:
+    enforce_send_email_otp_ip_rate_limit(request)
+    enforce_send_email_otp_rate_limit(email=body.email)
+    hint = await service.send_email_otp(email=body.email)
+    return MessageResponse(message=hint or "OTP sent.")
+
+
+@router.post("/verify-email-otp", response_model=AuthResponse)
+async def verify_email_otp(
+    body: VerifyEmailOtpRequest,
+    request: Request,
+    response: Response,
+) -> AuthResponse:
+    enforce_login_rate_limit(request)
+    auth, new_refresh, _ = await service.verify_email_otp(
+        email=body.email,
         code=body.code,
     )
     _set_auth_cookies(
