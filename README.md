@@ -130,6 +130,8 @@ JWT access + refresh (httpOnly cookies). Implemented in `app/auth/`.
 | POST | `/auth/login` | Email login — requires `email_verified_at` |
 | POST | `/auth/send-otp` | Phone OTP (MSG91) — **503** unless `PHONE_OTP_ENABLED=true` |
 | POST | `/auth/verify-otp` | Verify phone OTP — issues JWT cookies when enabled |
+| POST | `/auth/send-email-otp` | Email OTP (Resend) — **503** unless `EMAIL_OTP_ENABLED=true` |
+| POST | `/auth/verify-email-otp` | Verify email OTP — issues JWT cookies when enabled |
 | POST | `/auth/verify-email` | Verify email — issues JWT cookies |
 | POST | `/auth/refresh` | Rotate tokens |
 | POST | `/auth/logout` | Revoke session |
@@ -144,6 +146,8 @@ JWT access + refresh (httpOnly cookies). Implemented in `app/auth/`.
 **Env:** `JWT_SECRET`, `RESEND_API_KEY`, `FRONTEND_URL`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI`, `AUTH_SKIP_EMAIL_VERIFY` for local dev without Resend.
 
 **Phone OTP (MSG91, India +91):** 4-digit codes. Set `PHONE_OTP_ENABLED=true`, `MSG91_AUTH_KEY`, `MSG91_TEMPLATE_ID` (Flow template variable must be named `otp`). Frontend: `NEXT_PUBLIC_PHONE_OTP_ENABLED=true`. Production must keep `AUTH_DEMO_OTP_ENABLED=false`, `AUTH_OPEN_OTP=false`, and empty `AUTH_DEMO_OTP`. Local/staging may use `AUTH_DEMO_OTP=1234` with `AUTH_DEMO_OTP_ENABLED=true`.
+
+**Email OTP (Resend):** 6-digit codes. Set `EMAIL_OTP_ENABLED=true`, `RESEND_API_KEY`, verified `EMAIL_FROM` (not `onboarding@resend.dev` in prod). Frontend: `NEXT_PUBLIC_EMAIL_OTP_ENABLED=true`. Local/staging may use `AUTH_DEMO_OTP=123456` with `AUTH_DEMO_OTP_ENABLED=true`. See `backend/docs/EMAIL_OTP_RESEND.md`.
 
 **Google:** In [Google Cloud Console](https://console.cloud.google.com/) create OAuth credentials (Web). Authorized redirect URI: `http://localhost:3000/api/auth/google/callback`. Run migration `20260520120000_users_google_id.sql`.
 

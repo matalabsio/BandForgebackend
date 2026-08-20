@@ -51,7 +51,7 @@ from app.listening.instructions import (
     extract_notes_layout,
 )
 from app.listening.timing import ListeningStartTiming, ListeningSubmitTiming, _PhaseTimer
-from app.mock_catalog.constants import M01_MOCK_TEST_ID, M02_MOCK_TEST_ID
+from app.mock_catalog.constants import M01_MOCK_TEST_ID, M02_MOCK_TEST_ID, M03_MOCK_TEST_ID
 from app.services.mock_progress_timing import MockProgressTiming
 from app.storage.r2 import generate_signed_url, get_object_stream, object_exists, object_head, parse_r2_object_url
 
@@ -102,6 +102,29 @@ M01_PART_META: dict[int, dict[str, str]] = {
     },
 }
 
+M03_PART_META: dict[int, dict[str, str]] = {
+    1: {
+        "title": "Part 1",
+        "context": "Job Application Enquiry — Apex Recruitment",
+        "common_question_type": "form_completion",
+    },
+    2: {
+        "title": "Part 2",
+        "context": "Riverstone Quarter Neighbourhood Tour",
+        "common_question_type": "sentence_completion",
+    },
+    3: {
+        "title": "Part 3",
+        "context": "Tutorial Discussion — Social Media Survey",
+        "common_question_type": "mcq · sentence_completion",
+    },
+    4: {
+        "title": "Part 4",
+        "context": "Academic Lecture — Wetland Conservation",
+        "common_question_type": "note_completion",
+    },
+}
+
 M02_PART_META: dict[int, dict[str, str]] = {
     1: {
         "title": "Part 1",
@@ -135,6 +158,8 @@ def _part_meta_for_mock(mock_test_id: UUID | str, part_num: int) -> dict[str, st
         table = M01_PART_META
     elif mid == M02_MOCK_TEST_ID:
         table = M02_PART_META
+    elif mid == M03_MOCK_TEST_ID:
+        table = M03_PART_META
     else:
         table = DEFAULT_PART_META
     return table.get(part_num, DEFAULT_PART_META.get(part_num, {}))

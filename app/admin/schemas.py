@@ -937,6 +937,21 @@ class QuestionBankListResponse(BaseModel):
     sets: list[QuestionBankSetItem] = Field(default_factory=list)
 
 
+class QuestionBankDraftQueueItem(BaseModel):
+    set_id: UUID
+    skill: str
+    title: str
+    set_number: int
+    bank_number: int = 0
+    status: str = "draft"
+    hub_id: UUID | None = None
+
+
+class QuestionBankDraftQueueResponse(BaseModel):
+    items: list[QuestionBankDraftQueueItem] = Field(default_factory=list)
+    total: int = 0
+
+
 class QuestionBankCreateSetRequest(BaseModel):
     skill: str
     title: str = Field(..., min_length=1, max_length=200)

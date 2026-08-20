@@ -52,6 +52,7 @@ from app.security.rate_limit import (
     enforce_register_rate_limit,
     enforce_send_email_otp_ip_rate_limit,
     enforce_send_email_otp_rate_limit,
+    enforce_send_otp_ip_rate_limit,
     enforce_send_otp_rate_limit,
 )
 
@@ -135,7 +136,8 @@ async def login(
 
 
 @router.post("/send-otp", response_model=MessageResponse)
-async def send_otp(body: SendOtpRequest) -> MessageResponse:
+async def send_otp(body: SendOtpRequest, request: Request) -> MessageResponse:
+    enforce_send_otp_ip_rate_limit(request)
     enforce_send_otp_rate_limit(phone=body.phone)
     hint = await service.send_phone_otp(phone_digits=body.phone)
     return MessageResponse(message=hint or "OTP sent.")

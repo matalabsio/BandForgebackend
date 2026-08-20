@@ -462,6 +462,14 @@ def test_m02_live_parts():
     assert MODULE_LIVE_PARTS[M02_MOCK_TEST_ID]["writing"] == (1, 2)
 
 
+def test_m03_live_parts():
+    from app.mock_catalog.constants import M03_MOCK_TEST_ID, MODULE_LIVE_PARTS, PUBLISHED_FULL_MOCK_IDS
+
+    assert MODULE_LIVE_PARTS[M03_MOCK_TEST_ID]["listening"] == (1, 2, 3, 4)
+    assert "reading" not in MODULE_LIVE_PARTS[M03_MOCK_TEST_ID]
+    assert M03_MOCK_TEST_ID not in PUBLISHED_FULL_MOCK_IDS
+
+
 def test_assert_module_unlocked_rejects_completed_listening_part():
     from unittest.mock import patch
 

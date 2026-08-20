@@ -269,6 +269,59 @@ def test_create_and_send_email_otp_demo_hint():
     assert "Demo mode" in hint
 
 
+def test_create_and_send_email_otp_no_demo_hint_when_flags_off_in_development():
+    record_id = str(uuid4())
+    mock_sb = _mock_rpc(
+        create_data={"created": True, "verification_id": record_id},
+    )
+    settings = _settings(
+        app_env="development",
+        auth_demo_otp="",
+        auth_demo_otp_enabled=False,
+        auth_open_otp=False,
+    )
+    with (
+        patch("app.auth.email_otp.get_settings", return_value=settings),
+        patch("app.auth.email_otp.get_supabase", return_value=mock_sb),
+        patch(
+            "app.auth.email.send_login_otp_email",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        hint = asyncio.run(create_and_send_email_otp(email=EMAIL))
+    assert hint is None
+
+
+def test_create_and_send_email_otp_fail_closed_in_development_when_resend_fails():
+    record_id = str(uuid4())
+    mock_sb = _mock_rpc(
+        create_data={"created": True, "verification_id": record_id},
+    )
+    invalidate_result = MagicMock()
+    invalidate_result.data = [{"id": record_id}]
+    mock_sb.table.return_value.execute.return_value = invalidate_result
+    settings = _settings(
+        app_env="development",
+        auth_demo_otp="",
+        auth_demo_otp_enabled=False,
+        auth_open_otp=False,
+    )
+    with (
+        patch("app.auth.email_otp.get_settings", return_value=settings),
+        patch("app.auth.email_otp.get_supabase", return_value=mock_sb),
+        patch(
+            "app.auth.email.send_login_otp_email",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(OtpError) as exc:
+            asyncio.run(create_and_send_email_otp(email=EMAIL))
+    assert exc.value.status_code == 503
+    mock_sb.table.return_value.update.assert_called_once()
+
+
 def test_create_and_send_email_otp_invalidates_record_when_delivery_fails():
     record_id = str(uuid4())
     mock_sb = _mock_rpc(

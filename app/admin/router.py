@@ -6,6 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.admin import (
@@ -70,6 +71,7 @@ from app.admin.schemas import (
     ListeningBuilderSaveResponse,
     ListeningPartResponse,
     QuestionBankListResponse,
+    QuestionBankDraftQueueResponse,
     QuestionBankCreateSetRequest,
     QuestionBankCreateSetResponse,
     QuestionBankSetItem,
@@ -117,9 +119,79 @@ from app.admin.audio_upload_ticket import (
 )
 from app.auth.schemas import UserPublic
 from app.listening.service import invalidate_listening_audio_caches
-from app.storage.r2 import object_exists, object_head, upload_object
+from app.storage.r2 import get_object_stream, object_exists, object_head, upload_object
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def stream_admin_listening_audio(
+    *,
+    key: str,
+    range_header: str | None,
+) -> StreamingResponse:
+    """Same-origin MP3 stream so the builder/preview <audio> can play R2 files."""
+    storage_key = (key or "").strip()
+    if not storage_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No audio key.")
+    if not object_head(storage_key):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Audio not found in R2 at key: {storage_key}",
+        )
+    try:
+        body, headers, status_code = get_object_stream(
+            storage_key, range_header=range_header
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return StreamingResponse(
+        body,
+        status_code=status_code,
+        media_type=headers.get("Content-Type", "audio/mpeg"),
+        headers=headers,
+    )
+
+
+def _writing_image_content_type(key: str) -> str:
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+    return {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+    }.get(ext, "image/png")
+
+
+def stream_admin_writing_image(*, key: str) -> StreamingResponse:
+    """Same-origin image stream so the builder <img> can show R2 Task 1 figures."""
+    storage_key = (key or "").strip()
+    if not storage_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No image key.")
+    if not object_head(storage_key):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Image not found in R2 at key: {storage_key}",
+        )
+    try:
+        body, headers, status_code = get_object_stream(storage_key)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    media_type = headers.get("Content-Type") or _writing_image_content_type(storage_key)
+    if media_type == "audio/mpeg":
+        media_type = _writing_image_content_type(storage_key)
+    return StreamingResponse(
+        body,
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 @router.get("/ai/metrics", response_model=admin_ai_ops.AiMetricsResponse)
@@ -410,6 +482,16 @@ def list_question_bank_route(
     return question_bank.list_question_bank(skill=skill)
 
 
+@router.get(
+    "/question-bank/draft-queue",
+    response_model=QuestionBankDraftQueueResponse,
+)
+def list_question_bank_draft_queue_route(
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+) -> QuestionBankDraftQueueResponse:
+    return question_bank.list_question_bank_draft_queue()
+
+
 @router.post(
     "/question-bank/sets",
     response_model=QuestionBankCreateSetResponse,
@@ -594,6 +676,25 @@ def bank_listening_audio_status_route(
         "size_bytes": size_bytes,
         "part": part,
     }
+
+
+@router.get("/question-bank/sets/{set_id}/listening/{part}/audio-play")
+def bank_listening_audio_play_route(
+    request: Request,
+    set_id: UUID,
+    part: int,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    audio_key: str | None = Query(default=None),
+):
+    if part < 1 or part > 4:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Part must be 1–4.")
+    question_bank.get_question_bank_set(set_id=set_id)
+    key = (audio_key or "").strip() or question_bank.default_bank_audio_key(
+        set_id=set_id, part=part
+    )
+    return stream_admin_listening_audio(
+        key=key, range_header=request.headers.get("range")
+    )
 
 
 @router.post("/question-bank/sets/{set_id}/watch-video/direct-upload")
@@ -1038,6 +1139,22 @@ def listening_audio_status_route(
     }
 
 
+@router.get("/mocks/{mock_id}/listening/{part}/audio-play")
+def mock_listening_audio_play_route(
+    request: Request,
+    mock_id: UUID,
+    part: int,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    audio_key: str | None = Query(default=None),
+):
+    if part < 1 or part > 4:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Part must be 1–4.")
+    key = (audio_key or "").strip() or f"listening/{mock_id}/part-{part}/full.mp3"
+    return stream_admin_listening_audio(
+        key=key, range_header=request.headers.get("range")
+    )
+
+
 @router.post("/mocks/{mock_id}/ingest/audio-upload-url")
 def mock_listening_audio_upload_url_route(
     request: Request,
@@ -1293,6 +1410,41 @@ async def upload_writing_image_route(
         "image_preview_url": preview_url,
         "image_name": key.split("/")[-1],
     }
+
+
+@router.get("/question-bank/sets/{set_id}/writing/{part}/image-play")
+def bank_writing_image_play_route(
+    set_id: UUID,
+    part: int,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    image_key: str | None = Query(default=None),
+):
+    if part != 1:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Image preview is only supported for Writing Task 1.",
+        )
+    question_bank.get_question_bank_set(set_id=set_id)
+    key = (image_key or "").strip() or question_bank.default_bank_writing_image_key(
+        set_id=set_id, part=part
+    )
+    return stream_admin_writing_image(key=key)
+
+
+@router.get("/mocks/{mock_id}/writing/{part}/image-play")
+def mock_writing_image_play_route(
+    mock_id: UUID,
+    part: int,
+    _admin: Annotated[UserPublic, Depends(require_admin)],
+    image_key: str | None = Query(default=None),
+):
+    if part != 1:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Image preview is only supported for Writing Task 1.",
+        )
+    key = (image_key or "").strip() or f"writing/{mock_id}/task-{part}/figure.png"
+    return stream_admin_writing_image(key=key)
 
 
 ADMIN_SPEAKING_VIDEO_MAX_BYTES = 40 * 1024 * 1024
