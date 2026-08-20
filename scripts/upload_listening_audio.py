@@ -3,12 +3,14 @@
 Presets:
   ielts-day3 (default) — 20 clips: listening/ielts-day3/part-<N>/q-<M>.mp3
   greenfield           — 4 clips:  listening/greenfield/part-<N>/full.mp3
+  m03                  — 4 clips:  listening/m03/part-<N>/full.mp3 from mocktest/MT3/LT
 
 Usage::
 
     cd backend
     python -m scripts.upload_listening_audio --preset ielts-day3
     python -m scripts.upload_listening_audio --preset greenfield
+    python -m scripts.upload_listening_audio --preset m03
     python -m scripts.upload_listening_audio --preset ielts-day3 --dry-run
 """
 
@@ -61,6 +63,39 @@ PRESETS: dict[str, dict[str, Path | str]] = {
         "source": REPO_ROOT / "audio_seed" / "m02",
         "key_prefix": "listening/m02",
         "mode": "full_part",
+    },
+    "m03": {
+        "source": REPO_ROOT.parent / "mocktest" / "MT3" / "LT",
+        "key_prefix": "listening/m03",
+        "mode": "named_files",
+        "files": {
+            1: "ElevenLabs_MT3_LT_T1.mp3",
+            2: "ElevenLabs_MT3_LT_S2.mp3",
+            3: "ElevenLabs_MT3_LT_S3.mp3",
+            4: "ElevenLabs_MT_3_LT_S4.mp3",
+        },
+    },
+    "m04": {
+        "source": REPO_ROOT.parent / "mocktest" / "MT4" / "LT",
+        "key_prefix": "listening/m04",
+        "mode": "named_files",
+        "files": {
+            1: "ElevenLabs_MT4_LT_S1.mp3",
+            2: "ElevenLabs_MT4_LT_S2.mp3",
+            3: "ElevenLabs_MT4_LT_S3.mp3",
+            4: "ElevenLabs_MT4_LT_S4.mp3",
+        },
+    },
+    "m05": {
+        "source": REPO_ROOT.parent / "mocktest" / "MT5" / "LT",
+        "key_prefix": "listening/m05",
+        "mode": "named_files",
+        "files": {
+            1: "ElevenLabs_MT5_LT_S1.mp3",
+            2: "ElevenLabs_MT5_LT_S2.mp3",
+            3: "ElevenLabs_MT5_LT_S3.mp3",
+            4: "ElevenLabs_MT5_LT_S4.mp3",
+        },
     },
 }
 
@@ -157,6 +192,35 @@ def upload_full_part_set(source: Path, key_prefix: str, *, dry_run: bool = False
     return uploaded
 
 
+def upload_named_files(
+    source: Path,
+    key_prefix: str,
+    files: dict[int, str],
+    *,
+    dry_run: bool = False,
+) -> int:
+    client, bucket = _build_client()
+    uploaded = 0
+    missing: list[str] = []
+    for part, filename in sorted(files.items()):
+        local = source / filename
+        key = f"{key_prefix}/part-{part}/full.mp3"
+        if _upload_file(client, bucket, local, key, dry_run=dry_run):
+            uploaded += 1
+        else:
+            missing.append(str(local))
+
+    if missing:
+        print(
+            f"\nMissing {len(missing)} named file(s):",
+            *[f"  - {m}" for m in missing],
+            sep="\n",
+            file=sys.stderr,
+        )
+
+    return uploaded
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -185,6 +249,9 @@ def main() -> None:
 
     if preset["mode"] == "full_part":
         count = upload_full_part_set(source, key_prefix, dry_run=args.dry_run)
+    elif preset["mode"] == "named_files":
+        files = {int(k): str(v) for k, v in dict(preset["files"]).items()}  # type: ignore[arg-type]
+        count = upload_named_files(source, key_prefix, files, dry_run=args.dry_run)
     else:
         count = upload_grid(source, key_prefix, dry_run=args.dry_run)
 

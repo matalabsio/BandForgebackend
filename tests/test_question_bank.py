@@ -827,3 +827,156 @@ def test_delete_custom_set_clears_assignment_ledger_first():
     assert deleted[0] == ("user_practice_assignments", "practice_set_id", str(SET_ID))
     assert deleted[1] == ("practice_sets", "id", str(SET_ID))
 
+
+def test_stream_admin_listening_audio_404_when_missing():
+    from fastapi import HTTPException
+
+    from app.admin.router import stream_admin_listening_audio
+
+    with patch("app.admin.router.object_head", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            stream_admin_listening_audio(key="bank/x/listening/part1/audio.mp3", range_header=None)
+    assert exc.value.status_code == 404
+
+
+def test_stream_admin_listening_audio_streams_when_present():
+    from app.admin.router import stream_admin_listening_audio
+
+    headers = {"Content-Type": "audio/mpeg", "Accept-Ranges": "bytes", "Content-Length": "12"}
+    with (
+        patch("app.admin.router.object_head", return_value={"size": 12, "content_type": "audio/mpeg"}),
+        patch(
+            "app.admin.router.get_object_stream",
+            return_value=(iter([b"id3fakebytes"]), headers, 200),
+        ),
+    ):
+        res = stream_admin_listening_audio(
+            key="bank/x/listening/part1/audio.mp3", range_header=None
+        )
+    assert res.status_code == 200
+    assert res.media_type == "audio/mpeg"
+
+
+def test_stream_admin_writing_image_404_when_missing():
+    from fastapi import HTTPException
+
+    from app.admin.router import stream_admin_writing_image
+
+    with patch("app.admin.router.object_head", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            stream_admin_writing_image(key="writing/m03/task1/chart.png")
+    assert exc.value.status_code == 404
+
+
+def test_stream_admin_writing_image_streams_when_present():
+    from app.admin.router import stream_admin_writing_image
+
+    headers = {"Content-Type": "audio/mpeg", "Accept-Ranges": "bytes", "Content-Length": "8"}
+    with (
+        patch("app.admin.router.object_head", return_value={"size": 8, "content_type": "image/png"}),
+        patch(
+            "app.admin.router.get_object_stream",
+            return_value=(iter([b"\x89PNG\r\n"]), headers, 200),
+        ),
+    ):
+        res = stream_admin_writing_image(key="writing/m03/task1/chart.png")
+    assert res.status_code == 200
+    assert res.media_type == "image/png"
+
+
+def test_list_question_bank_draft_queue_orders_and_filters():
+    from uuid import uuid4
+
+    from app.admin import question_bank as qb
+
+    listening_bank_id = str(uuid4())
+    reading_bank_id = str(uuid4())
+    lt_set = str(uuid4())
+    rt_set = str(uuid4())
+    published_set = str(uuid4())
+
+    banks = [
+        {
+            "id": listening_bank_id,
+            "bank_number": 5,
+            "title": "Custom",
+            "skill": "listening",
+        },
+        {
+            "id": reading_bank_id,
+            "bank_number": 5,
+            "title": "Custom",
+            "skill": "reading",
+        },
+    ]
+    sets = [
+        {
+            "id": rt_set,
+            "set_number": 4,
+            "title": "MT3_RT_S1",
+            "status": "draft",
+            "bank_id": reading_bank_id,
+        },
+        {
+            "id": published_set,
+            "set_number": 1,
+            "title": "Published set",
+            "status": "published",
+            "bank_id": listening_bank_id,
+        },
+        {
+            "id": lt_set,
+            "set_number": 8,
+            "title": "MT3_LT_S4",
+            "status": "draft",
+            "bank_id": listening_bank_id,
+        },
+    ]
+    hubs = [
+        {"id": str(uuid4()), "set_id": lt_set},
+        {"id": str(uuid4()), "set_id": rt_set},
+    ]
+
+    def table(name: str):
+        m = MagicMock()
+
+        def select(*_args, **_kwargs):
+            return m
+
+        def eq(col, val):
+            m._eq = (col, val)
+            return m
+
+        def in_(col, vals):
+            m._in = (col, vals)
+            return m
+
+        def execute():
+            if name == "practice_banks":
+                return MagicMock(data=banks)
+            if name == "practice_sets":
+                if getattr(m, "_eq", None) == ("status", "draft"):
+                    draft_sets = [s for s in sets if s["status"] == "draft"]
+                    return MagicMock(data=draft_sets)
+                return MagicMock(data=sets)
+            if name == "practice_hubs":
+                return MagicMock(data=hubs)
+            return MagicMock(data=[])
+
+        m.select = select
+        m.eq = eq
+        m.in_ = in_
+        m.execute = execute
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = table
+
+    with patch("app.admin.question_bank.get_supabase", return_value=sb):
+        res = qb.list_question_bank_draft_queue()
+
+    assert res.total == 2
+    assert [str(item.set_id) for item in res.items] == [lt_set, rt_set]
+    assert res.items[0].skill == "listening"
+    assert res.items[1].skill == "reading"
+

@@ -9,6 +9,15 @@ M01_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000001"
 # Academic Mock 2 — Test 2 (content seeded separately).
 M02_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000002"
 
+# Academic Mock 3 — listening, reading, writing seeded; unpublished until admin publishes.
+M03_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000003"
+
+# Academic Mock 4 — listening, reading, writing seeded; unpublished until admin publishes.
+M04_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000004"
+
+# Academic Mock 5 — listening, reading, writing T1 seeded; unpublished until admin publishes.
+M05_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000005"
+
 PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (
     M01_MOCK_TEST_ID,
     M02_MOCK_TEST_ID,
@@ -39,6 +48,21 @@ MODULE_LIVE_PARTS: dict[str, dict[str, tuple[int, ...]]] = {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2, 3),
         "writing": (1, 2),
+    },
+    M03_MOCK_TEST_ID: {
+        "listening": (1, 2, 3, 4),
+        "reading": (1, 2, 3),
+        "writing": (1, 2),
+    },
+    M04_MOCK_TEST_ID: {
+        "listening": (1, 2, 3, 4),
+        "reading": (1, 2, 3),
+        "writing": (1, 2),
+    },
+    M05_MOCK_TEST_ID: {
+        "listening": (1, 2, 3, 4),
+        "reading": (1, 2, 3),
+        "writing": (1,),
     },
 }
 

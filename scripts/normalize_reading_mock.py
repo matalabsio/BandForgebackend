@@ -37,6 +37,19 @@ def _sql_json(value: Any | None) -> str:
     return f"'{dumped}'::jsonb"
 
 
+def _mcq_options(q: dict[str, Any]) -> list[dict[str, str]]:
+    raw = q.get("options") or []
+    out: list[dict[str, str]] = []
+    for opt in raw:
+        if not isinstance(opt, dict):
+            continue
+        label = str(opt.get("label") or opt.get("letter") or "").strip()
+        text = str(opt.get("text") or "").strip()
+        if label:
+            out.append({"label": label, "text": text})
+    return out
+
+
 def _correct_answer(q: dict[str, Any], qtype: str) -> str:
     if qtype == "tfng":
         ans = str(q["answer"]).upper()
@@ -45,6 +58,8 @@ def _correct_answer(q: dict[str, Any], qtype: str) -> str:
         return ans
     if qtype == "matching_headings":
         return str(q["answer"]).strip().lower()
+    if qtype in {"matching_features", "mcq", "matching_information"}:
+        return str(q["answer"]).strip().upper()
     accepted = q.get("accepted_answers") or [q.get("answer")]
     parts = [str(a).strip() for a in accepted if a]
     return "/".join(parts) if parts else str(q.get("answer", ""))
@@ -55,6 +70,10 @@ def _prompt(q: dict[str, Any], qtype: str, group: dict[str, Any]) -> str:
         return str(q["statement"])
     if qtype == "matching_headings":
         return f"Paragraph {q.get('paragraph', '')}"
+    if qtype in {"matching_features", "matching_information"}:
+        return str(q.get("prompt") or q.get("statement") or "")
+    if qtype == "mcq":
+        return str(q.get("prompt") or "")
     return str(q.get("sentence") or q.get("prompt") or "")
 
 
@@ -65,9 +84,24 @@ YNG_OPTIONS = [
 ]
 
 
-def _group_options(group: dict[str, Any], qtype: str) -> list[dict[str, str]] | None:
+def _question_options(
+    group: dict[str, Any], qtype: str, q: dict[str, Any]
+) -> list[dict[str, str]] | None:
     if qtype == "matching_headings":
         return group.get("headings")
+    if qtype == "matching_features":
+        findings = group.get("findings") or []
+        return [
+            {
+                "label": str(f.get("label") or "").strip(),
+                "text": str(f.get("text") or "").strip(),
+            }
+            for f in findings
+            if isinstance(f, dict) and f.get("label")
+        ]
+    if qtype == "mcq":
+        opts = _mcq_options(q)
+        return opts or None
     if qtype == "tfng":
         variant = str(group.get("options_variant") or "tfng").lower()
         if variant in {"yes_no", "ynng", "yes"}:
@@ -82,10 +116,15 @@ def flatten_questions(data: dict[str, Any], *, part: int = 1) -> list[dict[str, 
     title = str(data["title"])
     description = data.get("description")
     rows: list[dict[str, Any]] = []
+    all_numbers = [
+        int(q["number"])
+        for group in data.get("question_groups") or []
+        for q in group.get("questions") or []
+    ]
+    passage_anchor = min(all_numbers) if all_numbers else 1
 
     for group in data.get("question_groups") or []:
         qtype = str(group["question_type"])
-        group_options = _group_options(group, qtype)
         for q in group.get("questions") or []:
             num = int(q["number"])
             rows.append(
@@ -97,8 +136,8 @@ def flatten_questions(data: dict[str, Any], *, part: int = 1) -> list[dict[str, 
                     "question_number": num,
                     "question_type": qtype,
                     "prompt": _prompt(q, qtype, group),
-                    "passage_text": passage if num == 1 else None,
-                    "options": group_options,
+                    "passage_text": passage if num == passage_anchor else None,
+                    "options": _question_options(group, qtype, q),
                     "correct_answer": _correct_answer(q, qtype),
                     "skill_tag": q.get("skill_tag") or qtype,
                 }

@@ -37,6 +37,8 @@ from app.admin.schemas import (
     PatchQuestionBankSetStatusResponse,
     QuestionBankCreateSetRequest,
     QuestionBankCreateSetResponse,
+    QuestionBankDraftQueueItem,
+    QuestionBankDraftQueueResponse,
     QuestionBankListResponse,
     QuestionBankSectionSummary,
     QuestionBankSetItem,
@@ -50,6 +52,7 @@ from app.admin.schemas import (
     WritingBuilderSaveRequest,
     WritingBuilderSaveResponse,
 )
+from app.mock_catalog.constants import MODULE_ORDER
 from app.db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -358,6 +361,71 @@ def list_question_bank(*, skill: str) -> QuestionBankListResponse:
             )
         )
     return QuestionBankListResponse(skill=skill, sets=items)
+
+
+def list_question_bank_draft_queue() -> QuestionBankDraftQueueResponse:
+    """Flat ordered list of draft practice sets across L/R/W/S for admin review."""
+    sb = get_supabase()
+    banks = (
+        sb.table("practice_banks")
+        .select("id, bank_number, title, skill")
+        .execute()
+    ).data or []
+    bank_by_id = {str(b["id"]): b for b in banks}
+    if not bank_by_id:
+        return QuestionBankDraftQueueResponse(items=[], total=0)
+
+    sets = (
+        sb.table("practice_sets")
+        .select("id, set_number, title, status, bank_id")
+        .eq("status", "draft")
+        .in_("bank_id", list(bank_by_id.keys()))
+        .execute()
+    ).data or []
+    if not sets:
+        return QuestionBankDraftQueueResponse(items=[], total=0)
+
+    set_ids = [str(s["id"]) for s in sets]
+    hubs_by_set: dict[str, dict[str, Any]] = {}
+    hubs = (
+        sb.table("practice_hubs")
+        .select("id, set_id")
+        .in_("set_id", set_ids)
+        .execute()
+    ).data or []
+    for h in hubs:
+        hubs_by_set[str(h["set_id"])] = h
+
+    skill_rank = {name: idx for idx, name in enumerate(MODULE_ORDER)}
+    draft_rows: list[tuple[tuple[int, int, int], QuestionBankDraftQueueItem]] = []
+    for s in sets:
+        bank = bank_by_id.get(str(s["bank_id"]))
+        if not bank:
+            continue
+        skill = str(bank.get("skill") or "").lower()
+        if skill not in SKILLS:
+            continue
+        set_id = str(s["id"])
+        hub = hubs_by_set.get(set_id)
+        item = QuestionBankDraftQueueItem(
+            set_id=UUID(set_id),
+            skill=skill,
+            title=str(s.get("title") or ""),
+            set_number=int(s.get("set_number") or 0),
+            bank_number=int(bank.get("bank_number") or 0),
+            status=str(s.get("status") or "draft"),
+            hub_id=UUID(str(hub["id"])) if hub else None,
+        )
+        sort_key = (
+            skill_rank.get(skill, 99),
+            item.bank_number,
+            item.set_number,
+        )
+        draft_rows.append((sort_key, item))
+
+    draft_rows.sort(key=lambda row: row[0])
+    items = [row[1] for row in draft_rows]
+    return QuestionBankDraftQueueResponse(items=items, total=len(items))
 
 
 def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
