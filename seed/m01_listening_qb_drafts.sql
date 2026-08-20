@@ -1,5 +1,5 @@
 -- Draft Question Bank sets MT1_LT_S1–S4 from Mock 1 listening parts only.
--- Excludes BandForge Free Diagnostic (d0000000-0000-4000-8000-000000000001).
+-- Listening Bank 4 (official catalogue). Excludes diagnostic mock.
 -- Status remains draft; do not publish.
 
 INSERT INTO practice_sets (
@@ -8,8 +8,8 @@ INSERT INTO practice_sets (
 VALUES
   (
     'c1000000-0000-4000-8000-000000000001',
-    '07923521-f6bc-4736-aca5-e39871bb8945',
-    17,
+    '56c3b368-b7d1-4386-9d05-b344c22157be',
+    1,
     'MT1_LT_S1',
     'medium',
     'Mock 1 listening part 1 (draft).',
@@ -17,8 +17,8 @@ VALUES
   ),
   (
     'c1000000-0000-4000-8000-000000000002',
-    '07923521-f6bc-4736-aca5-e39871bb8945',
-    18,
+    '56c3b368-b7d1-4386-9d05-b344c22157be',
+    2,
     'MT1_LT_S2',
     'medium',
     'Mock 1 listening part 2 (draft).',
@@ -26,8 +26,8 @@ VALUES
   ),
   (
     'c1000000-0000-4000-8000-000000000003',
-    '07923521-f6bc-4736-aca5-e39871bb8945',
-    19,
+    '56c3b368-b7d1-4386-9d05-b344c22157be',
+    3,
     'MT1_LT_S3',
     'medium',
     'Mock 1 listening part 3 (draft).',
@@ -35,14 +35,16 @@ VALUES
   ),
   (
     'c1000000-0000-4000-8000-000000000004',
-    '07923521-f6bc-4736-aca5-e39871bb8945',
-    20,
+    '56c3b368-b7d1-4386-9d05-b344c22157be',
+    4,
     'MT1_LT_S4',
     'medium',
     'Mock 1 listening part 4 (draft).',
     'draft'
   )
 ON CONFLICT (id) DO UPDATE SET
+  bank_id = EXCLUDED.bank_id,
+  set_number = EXCLUDED.set_number,
   title = EXCLUDED.title,
   description = EXCLUDED.description,
   status = 'draft';
