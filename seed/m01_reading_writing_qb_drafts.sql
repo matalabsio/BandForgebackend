@@ -1,5 +1,5 @@
 -- Draft Question Bank sets MT1_RT_S1–S2 + MT1_WT_T1–T2 from Mock 1 reading/writing only.
--- Excludes BandForge Free Diagnostic (d0000000-0000-4000-8000-000000000001).
+-- Reading/Writing Bank 4 (official catalogue). Excludes diagnostic mock.
 -- Status remains draft; do not publish.
 
 INSERT INTO practice_sets (
@@ -8,8 +8,8 @@ INSERT INTO practice_sets (
 VALUES
   (
     'c1000000-0000-4000-8000-000000000011',
-    '53e900cd-b0c9-4666-9f6b-66a2c6ba46bd',
-    13,
+    'a6cf9570-a99d-43ab-84b2-2e44cb7e73c7',
+    1,
     'MT1_RT_S1',
     'medium',
     'Mock 1 reading passage 1 (draft).',
@@ -17,8 +17,8 @@ VALUES
   ),
   (
     'c1000000-0000-4000-8000-000000000012',
-    '53e900cd-b0c9-4666-9f6b-66a2c6ba46bd',
-    14,
+    'a6cf9570-a99d-43ab-84b2-2e44cb7e73c7',
+    2,
     'MT1_RT_S2',
     'medium',
     'Mock 1 reading passage 2 (draft).',
@@ -26,8 +26,8 @@ VALUES
   ),
   (
     'c1000000-0000-4000-8000-000000000021',
-    'a4b34ed4-ef87-4154-a18b-c6af5fdcd94e',
-    6,
+    'b99a929b-4fde-4721-86fe-2d09ecdcf4af',
+    1,
     'MT1_WT_T1',
     'medium',
     'Mock 1 writing task 1 (draft).',
@@ -35,14 +35,16 @@ VALUES
   ),
   (
     'c1000000-0000-4000-8000-000000000022',
-    'a4b34ed4-ef87-4154-a18b-c6af5fdcd94e',
-    7,
+    'b99a929b-4fde-4721-86fe-2d09ecdcf4af',
+    2,
     'MT1_WT_T2',
     'medium',
     'Mock 1 writing task 2 (draft).',
     'draft'
   )
 ON CONFLICT (id) DO UPDATE SET
+  bank_id = EXCLUDED.bank_id,
+  set_number = EXCLUDED.set_number,
   title = EXCLUDED.title,
   description = EXCLUDED.description,
   status = 'draft';
@@ -123,7 +125,7 @@ VALUES
     1,
     'MT1_WT_T1',
     (SELECT prompt FROM questions WHERE mock_test_id = 'a0000000-0000-4000-8000-000000000001' AND module = 'writing' AND part = 1 LIMIT 1),
-    NULL
+    'writing/m01/task1/chart.png'
   ),
   (
     'c1200000-0000-4000-8000-000000000022',
@@ -181,7 +183,15 @@ SELECT
   q.question_type,
   q.prompt,
   q.prompt,
-  q.options,
+  CASE
+    WHEN q.part = 1 THEN
+      jsonb_set(
+        COALESCE(q.options, '{}'::jsonb),
+        '{image_url}',
+        '"writing/m01/task1/chart.png"'::jsonb
+      )
+    ELSE q.options
+  END,
   q.correct_answer,
   q.question_type
 FROM questions q
