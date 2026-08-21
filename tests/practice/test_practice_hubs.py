@@ -53,20 +53,26 @@ def _hub_row(skill: str, hub_id: str, bank: int, set_num: int) -> dict:
 
 
 def test_has_full_skill_program_true():
-    with patch("app.payments.repository.get_active_subscription") as mock_sub:
-        mock_sub.return_value = {"plans": {"slug": "full_skill_program"}}
+    with patch(
+        "app.payments.repository.list_active_subscriptions",
+        return_value=[{"plans": {"slug": "full_skill_program"}}],
+    ):
         assert has_full_skill_program(USER_ID) is True
 
 
 def test_has_full_skill_program_false_wrong_plan():
-    with patch("app.payments.repository.get_active_subscription") as mock_sub:
-        mock_sub.return_value = {"plans": {"slug": "premium_monthly"}}
+    with patch(
+        "app.payments.repository.list_active_subscriptions",
+        return_value=[{"plans": {"slug": "premium_monthly"}}],
+    ):
         assert has_full_skill_program(USER_ID) is False
 
 
 def test_has_full_skill_program_false_no_sub():
-    with patch("app.payments.repository.get_active_subscription") as mock_sub:
-        mock_sub.return_value = None
+    with patch(
+        "app.payments.repository.list_active_subscriptions",
+        return_value=[],
+    ):
         assert has_full_skill_program(USER_ID) is False
 
 
@@ -157,6 +163,10 @@ def test_assert_hub_accessible_allows_any_assignable_hub():
         patch("app.practice.service.repository.get_hub_by_id", return_value=detail),
         patch("app.practice.service.repository.is_hub_assignable", return_value=True),
         patch("app.practice.service.repository.get_user_progress_map", return_value={}),
+        patch(
+            "app.practice.service.resolve_practice_skill_access",
+            return_value="fsp",
+        ),
     ):
         flat = service.assert_hub_accessible(user_id=USER_ID, hub_id="h2")
     assert flat["id"] == "h2"
@@ -170,6 +180,10 @@ def test_list_hubs_marks_accessible_flag():
     with (
         patch("app.practice.service.repository.list_hubs_for_skill", return_value=hubs),
         patch("app.practice.service.repository.get_user_progress_map", return_value={}),
+        patch(
+            "app.practice.service.resolve_practice_skill_access",
+            return_value="fsp",
+        ),
     ):
         out = service.list_hubs_with_progress(user_id=USER_ID, skill="listening")
     assert out[0].accessible is True
@@ -244,6 +258,10 @@ def test_skill_progress_mock_unlock_pilot_total():
 
 def test_mock_unlock_independent_per_skill():
     with (
+        patch(
+            "app.practice.service.resolve_practice_skill_access",
+            return_value="fsp",
+        ),
         patch("app.practice.service.skill_progress") as mock_prog,
     ):
         writing = MagicMock()
@@ -279,10 +297,18 @@ def test_complete_hub_idempotent_shape():
         patch("app.practice.service.repository.list_hubs_for_skill", return_value=[row]),
         patch("app.practice.service.repository.get_user_progress_map", return_value={}),
         patch(
+            "app.practice.service.resolve_practice_skill_access",
+            return_value="fsp",
+        ),
+        patch(
+            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            return_value={"listening": [hub_id]},
+        ),
+        patch(
             "app.practice.service.repository.upsert_hub_completed",
             return_value={"status": "completed", "completed_at": "2026-07-17T10:00:00+00:00"},
         ),
-        patch("app.practice.service.skill_progress") as mock_prog,
+        patch("app.practice.service._skill_progress_for_access_mode") as mock_prog,
     ):
         mock_prog.return_value = SkillHubProgressOut(
             skill="listening",
@@ -621,6 +647,14 @@ def test_assert_hub_accessible_404_when_not_assignable():
     with (
         patch("app.practice.service.repository.get_hub_by_id", return_value=detail),
         patch("app.practice.service.repository.is_hub_assignable", return_value=False),
+        patch(
+            "app.practice.service.resolve_practice_skill_access",
+            return_value="fsp",
+        ),
+        patch(
+            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            return_value={},
+        ),
     ):
         with pytest.raises(HTTPException) as exc:
             service.assert_hub_accessible(user_id=USER_ID, hub_id="h1")

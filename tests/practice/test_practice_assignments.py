@@ -212,13 +212,21 @@ def test_complete_hub_progress_independent_of_ledger():
         patch("app.practice.service.repository.list_hubs_for_skill", return_value=[hub_row]),
         patch("app.practice.service.repository.get_user_progress_map", return_value={}),
         patch(
+            "app.practice.service.resolve_practice_skill_access",
+            return_value="fsp",
+        ),
+        patch(
+            "app.practice.catalog.get_ordered_hub_ids_by_skill",
+            return_value={"listening": [HUB_ID]},
+        ),
+        patch(
             "app.practice.service.repository.upsert_hub_completed",
             return_value={
                 "status": "completed",
                 "completed_at": "2026-08-18T10:00:00+00:00",
             },
         ) as upsert_progress,
-        patch("app.practice.service.skill_progress") as mock_prog,
+        patch("app.practice.service._skill_progress_for_access_mode") as mock_prog,
         patch("app.practice.assignment_ledger.record_practice_assignments") as rec,
     ):
         mock_prog.return_value = SkillHubProgressOut(

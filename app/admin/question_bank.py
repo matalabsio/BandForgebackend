@@ -33,6 +33,8 @@ from app.admin.schemas import (
     ListeningBuilderQuestionOut,
     ListeningBuilderSaveRequest,
     ListeningBuilderSaveResponse,
+    PatchQuestionBankSetRequest,
+    PatchQuestionBankSetResponse,
     PatchQuestionBankSetStatusRequest,
     PatchQuestionBankSetStatusResponse,
     QuestionBankCreateSetRequest,
@@ -52,8 +54,16 @@ from app.admin.schemas import (
     WritingBuilderSaveRequest,
     WritingBuilderSaveResponse,
 )
+from app.admin.writing_taxonomy import (
+    assert_valid_exam_module,
+    assert_valid_writing_question_type,
+    assert_writing_task_exam_module_compatible,
+    default_writing_question_type,
+    writing_taxonomy_publish_blockers,
+)
 from app.mock_catalog.constants import MODULE_ORDER
 from app.db.supabase_client import get_supabase
+from app.practice.writing_track import normalize_set_exam_module
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +105,7 @@ def _load_set_skill(sb: Any, set_id: str) -> tuple[dict[str, Any], str]:
     rows = (
         sb.table("practice_sets")
         .select(
-            "id, set_number, title, difficulty, status, bank_id, "
+            "id, set_number, title, difficulty, status, bank_id, exam_module, "
             "practice_banks(skill, bank_number, title)"
         )
         .eq("id", set_id)
@@ -248,7 +258,8 @@ def list_question_bank(*, skill: str) -> QuestionBankListResponse:
     sets = (
         sb.table("practice_sets")
         .select(
-            "id, set_number, title, difficulty, bank_id, description, status, created_at"
+            "id, set_number, title, difficulty, bank_id, description, status, "
+            "exam_module, created_at"
         )
         .in_("bank_id", bank_ids)
         .order("created_at", desc=True)
@@ -355,6 +366,7 @@ def list_question_bank(*, skill: str) -> QuestionBankListResponse:
                 description=(str(s["description"]) if s.get("description") else None),
                 status=str(s.get("status") or "draft"),
                 is_custom=bank_number == CUSTOM_BANK_NUMBER,
+                exam_module=normalize_set_exam_module(s.get("exam_module")),
                 created_at=created if created.year > 1 else None,
                 sections=section_summaries,
                 total_questions=total_q,
@@ -434,7 +446,7 @@ def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
         sb.table("practice_sets")
         .select(
             "id, set_number, title, difficulty, bank_id, description, status, "
-            "practice_banks(id, bank_number, title, skill)"
+            "exam_module, practice_banks(id, bank_number, title, skill)"
         )
         .eq("id", str(set_id))
         .limit(1)
@@ -496,6 +508,7 @@ def get_question_bank_set(*, set_id: UUID) -> QuestionBankSetItem:
         description=(str(s["description"]) if s.get("description") else None),
         status=str(s.get("status") or "draft"),
         is_custom=bank_number == CUSTOM_BANK_NUMBER,
+        exam_module=normalize_set_exam_module(s.get("exam_module")),
         sections=section_summaries,
         total_questions=sum(q_counts.values()),
     )
@@ -638,11 +651,43 @@ def bank_publish_blockers(*, set_id: UUID | str, skill: str) -> list[str]:
                     )
 
     elif skill == "writing":
-        has_prompt = any(str(s.get("passage_text") or "").strip() for s in sections) or any(
-            str(q.get("prompt") or "").strip() for q in questions
-        )
+        set_rows = (
+            sb.table("practice_sets")
+            .select("exam_module")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+        ).data or []
+        exam_module = set_rows[0].get("exam_module") if set_rows else None
+
+        # Need question_type for taxonomy checks
+        q_types: list[Any] = []
+        if section_ids:
+            typed = (
+                sb.table("bank_questions")
+                .select("question_type, prompt")
+                .in_("section_id", section_ids)
+                .execute()
+            ).data or []
+            q_types = [q.get("question_type") for q in typed]
+            # Prefer typed query prompts when available
+            has_prompt = any(str(s.get("passage_text") or "").strip() for s in sections) or any(
+                str(q.get("prompt") or "").strip() for q in typed
+            )
+        else:
+            has_prompt = any(str(s.get("passage_text") or "").strip() for s in sections) or any(
+                str(q.get("prompt") or "").strip() for q in questions
+            )
+
         if not has_prompt:
             blockers.append("Writing: task prompt is required.")
+        blockers.extend(
+            writing_taxonomy_publish_blockers(
+                exam_module=exam_module,
+                question_types=q_types,
+                has_prompt=has_prompt,
+            )
+        )
 
     elif skill == "speaking":
         ready = [
@@ -750,6 +795,19 @@ def create_question_bank_set(
     status_val = body.status
     difficulty = body.difficulty
 
+    # Writing requires an explicit exam_module (no silent academic default).
+    exam_module: str | None = None
+    if skill == "writing":
+        exam_module = assert_valid_exam_module(body.exam_module, required=True)
+    elif body.exam_module is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "exam_module is only allowed on Writing practice sets.",
+                "code": "exam_module_skill_mismatch",
+            },
+        )
+
     # New sets have no content yet — force draft; publish via PATCH after fill.
     if status_val == "published":
         raise HTTPException(
@@ -798,19 +856,21 @@ def create_question_bank_set(
     ).data or []
     next_set = int(existing[0]["set_number"]) + 1 if existing else 1
 
+    insert_row: dict[str, Any] = {
+        "bank_id": bank_id,
+        "set_number": next_set,
+        "title": title,
+        "difficulty": difficulty,
+        "description": description,
+        "status": status_val,
+        "created_by": str(admin_id),
+    }
+    if exam_module is not None:
+        insert_row["exam_module"] = exam_module
+
     set_rows = (
         sb.table("practice_sets")
-        .insert(
-            {
-                "bank_id": bank_id,
-                "set_number": next_set,
-                "title": title,
-                "difficulty": difficulty,
-                "description": description,
-                "status": status_val,
-                "created_by": str(admin_id),
-            }
-        )
+        .insert(insert_row)
         .execute()
     ).data
     if not set_rows:
@@ -867,6 +927,7 @@ def create_question_bank_set(
             "bank_number": CUSTOM_BANK_NUMBER,
             "set_number": next_set,
             "hub_id": hub_id,
+            "exam_module": exam_module,
         },
     )
     return QuestionBankCreateSetResponse(
@@ -878,6 +939,83 @@ def create_question_bank_set(
         bank_number=CUSTOM_BANK_NUMBER,
         set_number=next_set,
         status=status_val,
+        exam_module=exam_module,  # type: ignore[arg-type]
+    )
+
+
+def patch_question_bank_set(
+    *,
+    set_id: UUID,
+    body: PatchQuestionBankSetRequest,
+    admin_id: UUID,
+) -> PatchQuestionBankSetResponse:
+    """Update Writing set metadata (exam_module)."""
+    sb = get_supabase()
+    set_row, skill = _load_set_skill(sb, str(set_id))
+
+    if body.exam_module is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "exam_module is required on this update.",
+                "code": "exam_module_required",
+            },
+        )
+
+    if skill != "writing":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "exam_module is only allowed on Writing practice sets.",
+                "code": "exam_module_skill_mismatch",
+            },
+        )
+
+    exam_module = assert_valid_exam_module(body.exam_module, required=True)
+
+    # Reject taxonomy mismatches against existing questions.
+    sections = (
+        sb.table("bank_sections")
+        .select("id")
+        .eq("practice_set_id", str(set_id))
+        .execute()
+    ).data or []
+    section_ids = [str(s["id"]) for s in sections if s.get("id")]
+    if section_ids:
+        qs = (
+            sb.table("bank_questions")
+            .select("question_type")
+            .in_("section_id", section_ids)
+            .execute()
+        ).data or []
+        for q in qs:
+            q_type = q.get("question_type")
+            if not q_type:
+                continue
+            assert_writing_task_exam_module_compatible(
+                question_type=q_type,
+                exam_module=exam_module,
+            )
+
+    sb.table("practice_sets").update({"exam_module": exam_module}).eq(
+        "id", str(set_id)
+    ).execute()
+
+    _after_question_bank_mutation(
+        student_visible=_is_published_status(set_row.get("status"))
+    )
+    log_admin_action(
+        admin_id=admin_id,
+        action="question_bank.set_patch",
+        resource_type="practice_set",
+        resource_id=set_id,
+        metadata={"skill": skill, "exam_module": exam_module},
+    )
+    return PatchQuestionBankSetResponse(
+        set_id=set_id,
+        skill=skill,
+        exam_module=exam_module,  # type: ignore[arg-type]
+        ok=True,
     )
 
 
@@ -1251,13 +1389,42 @@ def save_bank_writing(
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "prompt is required.")
-    q_type = (body.question_type or "").strip() or (
-        "task1_academic" if part == 1 else "task2"
+    q_type = assert_valid_writing_question_type(body.question_type, part=part)
+
+    exam_module = normalize_set_exam_module(set_row.get("exam_module"))
+    if body.exam_module is not None:
+        exam_module = assert_valid_exam_module(body.exam_module, required=True)
+        sb.table("practice_sets").update({"exam_module": exam_module}).eq(
+            "id", str(set_id)
+        ).execute()
+
+    if exam_module is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": (
+                    "Set exam_module must be set before saving Writing content "
+                    "(academic, general_training, or both)."
+                ),
+                "code": "exam_module_required",
+            },
+        )
+    assert_writing_task_exam_module_compatible(
+        question_type=q_type,
+        exam_module=exam_module,
     )
+
+    # task1_general is a letter — chart/image is optional (same as academic).
     image_url = (body.image_url or "").strip() or None
+    if q_type == "task1_general":
+        # Do not require a chart payload; clear empty keys only.
+        image_url = image_url or None
     options = dict(body.options or {})
     if image_url is not None:
         options["image_url"] = image_url
+    elif q_type == "task1_general":
+        options.pop("image_url", None)
+        options.pop("chart", None)
     if "min_words" not in options:
         options["min_words"] = 150 if part == 1 else 250
 
@@ -1292,7 +1459,7 @@ def save_bank_writing(
         action="question_bank.writing_save",
         resource_type="practice_set",
         resource_id=set_id,
-        metadata={"part": part},
+        metadata={"part": part, "question_type": q_type, "exam_module": exam_module},
     )
     return WritingBuilderSaveResponse(
         ok=True, part=part, question_type=q_type, image_url=image_url
@@ -1317,7 +1484,7 @@ def load_bank_writing(*, set_id: UUID, part: int) -> BankWritingPartResponse:
         return BankWritingPartResponse(
             practice_set_id=set_id,
             part=part,
-            question_type="task1_academic" if part == 1 else "task2",
+            question_type=default_writing_question_type(part),
         )
     sec = section[0]
     rows = (
@@ -1330,7 +1497,7 @@ def load_bank_writing(*, set_id: UUID, part: int) -> BankWritingPartResponse:
     ).data or []
     opts: dict[str, Any] = {}
     prompt = str(sec.get("passage_text") or "")
-    q_type = "task1_academic" if part == 1 else "task2"
+    q_type = default_writing_question_type(part)
     qid = None
     if rows:
         row = rows[0]

@@ -13,6 +13,7 @@ from app.admin.schemas import (
     WritingBuilderSaveResponse,
     WritingPartResponse,
 )
+from app.admin.writing_taxonomy import assert_valid_writing_question_type
 from app.db.supabase_client import get_supabase
 
 
@@ -99,6 +100,9 @@ def save_writing_part(
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Prompt is required.")
+    question_type = assert_valid_writing_question_type(
+        body.question_type, part=part
+    )
 
     sb = get_supabase()
     _assert_mock_exists(sb, str(mock_id))
@@ -126,7 +130,6 @@ def save_writing_part(
         "module", "writing"
     ).eq("part", part).execute()
 
-    question_type = (body.question_type or "").strip() or _default_question_type(part)
     options = _merge_options(
         part=part,
         existing=existing_options,
@@ -135,6 +138,12 @@ def save_writing_part(
     )
     if part != 1:
         options["image_url"] = None
+    if question_type == "task1_general":
+        # Letter Task 1 — chart/image not required
+        img = options.get("image_url")
+        if not (str(img).strip() if img else ""):
+            options["image_url"] = None
+            options.pop("chart", None)
 
     insert = {
         "mock_test_id": str(mock_id),

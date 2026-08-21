@@ -313,6 +313,28 @@ def _repair_ledger_if_on_plan(
         )
 
 
+def _set_exam_module(practice_set_id: str) -> str | None:
+    """Read practice_sets.exam_module for fan-out gating (Writing only)."""
+    try:
+        rows = _exec(
+            get_supabase()
+            .table("practice_sets")
+            .select("exam_module")
+            .eq("id", str(practice_set_id))
+            .limit(1)
+        ).data or []
+        if not rows:
+            return None
+        raw = rows[0].get("exam_module")
+        if raw is None:
+            return None
+        text = str(raw).strip().lower()
+        return text or None
+    except Exception:
+        logger.exception("set exam_module lookup failed set=%s", practice_set_id)
+        return None
+
+
 def offer_published_set(
     *,
     user_id: UUID | str,
@@ -323,6 +345,8 @@ def offer_published_set(
     profile_row: dict[str, Any] | None = None,
     submit_config: dict[str, Any] | None = None,
     persist_attempts: int = 3,
+    set_exam_module: str | None = None,
+    user_exam_module: str | None = None,
 ) -> str:
     """Offer this exact published set to one user. Never picks a different set."""
     today_d = today or date.today()
@@ -330,6 +354,32 @@ def offer_published_set(
     set_id = str(practice_set_id)
     hid = str(hub_id)
     try:
+        # Writing-only: require users.exam_module match before assigning.
+        if skill_n == "writing":
+            from app.practice.writing_track import (
+                fsp_writing_track_ready,
+                writing_set_compatible_with_user,
+            )
+
+            track = user_exam_module
+            if track is None:
+                try:
+                    from app.payments.repository import get_user_exam_module
+
+                    track = get_user_exam_module(user_id)
+                except Exception:
+                    track = None
+            if not fsp_writing_track_ready(track):
+                return "needs_writing_track"
+            set_mod = set_exam_module
+            if set_mod is None:
+                set_mod = _set_exam_module(set_id)
+            if not writing_set_compatible_with_user(
+                set_exam_module=set_mod,
+                user_exam_module=track,
+            ):
+                return "ineligible"
+
         row = (
             profile_row
             if profile_row is not None
@@ -516,6 +566,7 @@ def process_catalog_changed(
         "users_already_had_set": 0,
         "users_no_capacity": 0,
         "users_ineligible": 0,
+        "users_needs_writing_track": 0,
         "claim_conflicts": 0,
         "persistence_failures": 0,
     }
@@ -547,6 +598,9 @@ def process_catalog_changed(
 
     offer_fn = offer or offer_published_set
     list_fn = list_users or list_eligible_plan_user_ids
+    writing_set_module: str | None = None
+    if skill == "writing" and offer is None:
+        writing_set_module = _set_exam_module(set_id)
     after: str | None = None
     pages = 0
     while True:
@@ -561,13 +615,23 @@ def process_catalog_changed(
         for uid in batch:
             stats["users_scanned"] += 1
             try:
-                outcome = offer_fn(
-                    user_id=uid,
-                    practice_set_id=set_id,
-                    hub_id=hub_id,
-                    skill=skill,
-                    today=today,
-                )
+                if skill == "writing" and offer is None:
+                    outcome = offer_fn(
+                        user_id=uid,
+                        practice_set_id=set_id,
+                        hub_id=hub_id,
+                        skill=skill,
+                        today=today,
+                        set_exam_module=writing_set_module,
+                    )
+                else:
+                    outcome = offer_fn(
+                        user_id=uid,
+                        practice_set_id=set_id,
+                        hub_id=hub_id,
+                        skill=skill,
+                        today=today,
+                    )
             except Exception:
                 logger.exception("catalog_changed user failed user=%s", uid)
                 outcome = "failed"
@@ -579,6 +643,8 @@ def process_catalog_changed(
                 stats["users_no_capacity"] += 1
             elif outcome == "ineligible":
                 stats["users_ineligible"] += 1
+            elif outcome == "needs_writing_track":
+                stats["users_needs_writing_track"] += 1
             elif outcome == "claim_conflict":
                 stats["claim_conflicts"] += 1
             else:
@@ -593,7 +659,8 @@ def process_catalog_changed(
     )
     logger.info(
         "practice.catalog_changed set=%s skill=%s scanned=%s filled=%s "
-        "already=%s no_capacity=%s ineligible=%s conflicts=%s failed=%s ms=%s",
+        "already=%s no_capacity=%s ineligible=%s needs_track=%s conflicts=%s "
+        "failed=%s ms=%s",
         set_id,
         skill,
         stats["users_scanned"],
@@ -601,6 +668,7 @@ def process_catalog_changed(
         stats["users_already_had_set"],
         stats["users_no_capacity"],
         stats["users_ineligible"],
+        stats["users_needs_writing_track"],
         stats["claim_conflicts"],
         stats["persistence_failures"],
         stats["duration_ms"],

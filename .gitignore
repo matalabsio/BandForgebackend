@@ -13,6 +13,7 @@
 !.env.example
 !.env*.example
 !env.local.example
+!railway.production.env.example
 
 # Cloud / payment / TLS credential dumps
 *credentials*.json
@@ -28,6 +29,11 @@ id_rsa
 id_rsa.*
 id_ed25519
 id_ed25519.*
+.envrc
+.direnv/
+*.keystore
+google-services.json
+GoogleService-Info.plist
 
 # -----------------------------------------------------------------------------
 # Virtual environments & Python version pin (local)

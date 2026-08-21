@@ -78,6 +78,8 @@ from app.admin.schemas import (
     DeleteQuestionBankSetResponse,
     PatchQuestionBankSetStatusRequest,
     PatchQuestionBankSetStatusResponse,
+    PatchQuestionBankSetRequest,
+    PatchQuestionBankSetResponse,
     BankListeningPartResponse,
     BankReadingPartResponse,
     BankWritingPartResponse,
@@ -512,6 +514,20 @@ def get_question_bank_set_route(
     _admin: Annotated[UserPublic, Depends(require_admin)],
 ) -> QuestionBankSetItem:
     return question_bank.get_question_bank_set(set_id=set_id)
+
+
+@router.patch(
+    "/question-bank/sets/{set_id}",
+    response_model=PatchQuestionBankSetResponse,
+)
+def patch_question_bank_set_route(
+    set_id: UUID,
+    body: PatchQuestionBankSetRequest,
+    admin: Annotated[UserPublic, Depends(require_admin)],
+) -> PatchQuestionBankSetResponse:
+    return question_bank.patch_question_bank_set(
+        set_id=set_id, body=body, admin_id=admin.id
+    )
 
 
 @router.patch(

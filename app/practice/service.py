@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 
 from app.practice import repository
+from app.practice.access import resolve_practice_skill_access
 from app.practice.schemas import (
     HubCompleteOut,
     MockUnlockOut,
@@ -18,6 +19,13 @@ from app.practice.schemas import (
     PracticeProgressOut,
     PracticeVideo,
     SkillHubProgressOut,
+)
+from app.practice.writing_skill_course import (
+    LOCKED_HUB_MESSAGE as WRITING_SKILL_LOCKED_MESSAGE,
+    accessible_writing_skill_hub_ids,
+    assert_writing_skill_hub_accessible,
+    list_writing_skill_hub_rows,
+    writing_skill_ordered_hub_ids,
 )
 
 SKILLS = repository.SKILLS
@@ -69,6 +77,8 @@ def _assert_hub_accessible_with_progress(
 
     Sequential unlock remains for catalogue list `accessible` flags only.
     Prefer assignable-catalogue membership over re-running content gates.
+
+    Writing Skill pack users are routed to hard-sequence enforcement instead.
     """
     row = repository.get_hub_by_id(hub_id)
     if not row:
@@ -77,6 +87,10 @@ def _assert_hub_accessible_with_progress(
     skill = flat.get("skill")
     if skill not in SKILLS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
+
+    mode = resolve_practice_skill_access(user_id=user_id, skill=str(skill))
+    if mode == "writing_skill":
+        return assert_writing_skill_hub_accessible(user_id=user_id, hub_id=hub_id)
 
     # Fast path: hub already in difficulty-ordered assignable catalogue
     try:
@@ -94,7 +108,7 @@ def _assert_hub_accessible_with_progress(
 
 
 def assert_hub_accessible(*, user_id: UUID, hub_id: str) -> dict[str, Any]:
-    """Raise 403 if this hub is locked behind an incomplete earlier set. Returns flat hub row."""
+    """Raise 403/404 if this hub is not accessible for the user's access mode."""
     flat, _progress = _assert_hub_accessible_with_progress(
         user_id=user_id, hub_id=hub_id
     )
@@ -166,10 +180,83 @@ def skill_progress(
     )
 
 
+def _skill_progress_for_access_mode(
+    *, user_id: UUID, skill: str
+) -> SkillHubProgressOut:
+    """Skill progress using FSP catalogue or Writing Skill program pool."""
+    mode = resolve_practice_skill_access(user_id=user_id, skill=skill)
+    if mode == "writing_skill":
+        rows = list_writing_skill_hub_rows(user_id=user_id)
+        progress = repository.get_user_progress_map(user_id)
+        flat = [repository._flatten_hub_row(h) for h in rows]
+        completed = sum(
+            1
+            for h in flat
+            if progress.get(str(h["id"]), {}).get("status") == "completed"
+        )
+        return SkillHubProgressOut(
+            skill="writing",
+            completed_count=completed,
+            total_count=len(flat),
+            required_for_mock=0,
+            mock_unlocked=False,
+            mock_test_id=None,
+        )
+    return skill_progress(user_id=user_id, skill=skill)
+
+
 def all_skill_progress(user_id: UUID) -> PracticeProgressOut:
-    return PracticeProgressOut(
-        skills=list(hub_progress_map(user_id).values())
-    )
+    from app.security.entitlements import has_full_skill_program, resolve_entitlements
+
+    if has_full_skill_program(user_id):
+        return PracticeProgressOut(skills=list(hub_progress_map(user_id).values()))
+
+    ent = resolve_entitlements(user_id)
+    progress = repository.get_user_progress_map(user_id)
+    skills_out: list[SkillHubProgressOut] = []
+    for skill in SKILLS:
+        if not ent["skills"].get(skill):  # type: ignore[arg-type]
+            skills_out.append(
+                SkillHubProgressOut(
+                    skill=skill,  # type: ignore[arg-type]
+                    completed_count=0,
+                    total_count=0,
+                    required_for_mock=0,
+                    mock_unlocked=False,
+                    mock_test_id=None,
+                )
+            )
+            continue
+        if skill == "writing" and ent["writing_skill"]:
+            rows = list_writing_skill_hub_rows(user_id=user_id)
+            flat = [repository._flatten_hub_row(h) for h in rows]
+            completed = sum(
+                1
+                for h in flat
+                if progress.get(str(h["id"]), {}).get("status") == "completed"
+            )
+            skills_out.append(
+                SkillHubProgressOut(
+                    skill="writing",
+                    completed_count=completed,
+                    total_count=len(flat),
+                    required_for_mock=0,
+                    mock_unlocked=False,
+                    mock_test_id=None,
+                )
+            )
+            continue
+        skills_out.append(
+            SkillHubProgressOut(
+                skill=skill,  # type: ignore[arg-type]
+                completed_count=0,
+                total_count=0,
+                required_for_mock=0,
+                mock_unlocked=False,
+                mock_test_id=None,
+            )
+        )
+    return PracticeProgressOut(skills=skills_out)
 
 
 def hub_progress_map(user_id: UUID) -> dict[str, SkillHubProgressOut]:
@@ -210,6 +297,23 @@ def practice_profile_bundle(
 def mock_unlock_status(*, user_id: UUID, skill: str) -> MockUnlockOut:
     if skill not in SKILLS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid skill")
+
+    mode = resolve_practice_skill_access(user_id=user_id, skill=skill)
+    if mode == "writing_skill":
+        from app.practice.writing_skill_mock import writing_skill_mock_unlock_status
+
+        raw = writing_skill_mock_unlock_status(user_id=user_id)
+        return MockUnlockOut(
+            skill="writing",
+            unlocked=bool(raw["unlocked"]),
+            completed=int(raw["completed"]),
+            required=int(raw["required"]),
+            mock_test_id=raw.get("mock_test_id"),
+            mocks_granted=raw.get("mocks_granted"),
+            mocks_used=raw.get("mocks_used"),
+            exam_module=raw.get("exam_module"),  # type: ignore[arg-type]
+        )
+
     prog = skill_progress(user_id=user_id, skill=skill)
     return MockUnlockOut(
         skill=skill,  # type: ignore[arg-type]
@@ -223,11 +327,27 @@ def mock_unlock_status(*, user_id: UUID, skill: str) -> MockUnlockOut:
 def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut]:
     if skill not in SKILLS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid skill")
+
+    mode = resolve_practice_skill_access(user_id=user_id, skill=skill)
     progress = repository.get_user_progress_map(user_id)
-    rows = repository.list_hubs_for_skill(skill)
-    allowed = accessible_hub_ids_for_skill(
-        user_id=user_id, skill=skill, progress_map=progress
-    )
+
+    if mode == "writing_skill":
+        rows = list_writing_skill_hub_rows(user_id=user_id)
+        ordered_ids = writing_skill_ordered_hub_ids(rows)
+        allowed = accessible_writing_skill_hub_ids(
+            ordered_hub_ids=ordered_ids, progress_map=progress
+        )
+        lock_message = WRITING_SKILL_LOCKED_MESSAGE
+    else:
+        rows = repository.list_hubs_for_skill(skill)
+        allowed = accessible_hub_ids_for_skill(
+            user_id=user_id,
+            skill=skill,
+            progress_map=progress,
+            hub_rows=rows,
+        )
+        lock_message = LOCKED_HUB_MESSAGE
+
     out: list[PracticeHubOut] = []
     for row in rows:
         flat = repository._flatten_hub_row(row)
@@ -235,6 +355,11 @@ def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut
         prog = progress.get(hub_id, {})
         completed_at = prog.get("completed_at")
         is_accessible = hub_id in allowed
+        sort_order = (
+            int(row.get("_program_sort_order") or flat["sort_order"])
+            if mode == "writing_skill"
+            else flat["sort_order"]
+        )
         out.append(
             PracticeHubOut(
                 id=hub_id,
@@ -244,13 +369,13 @@ def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut
                 set_number=flat["set_number"],
                 title=flat["title"],
                 estimated_min=flat["estimated_min"],
-                sort_order=flat["sort_order"],
+                sort_order=sort_order,
                 status=prog.get("status") or "pending",  # type: ignore[arg-type]
                 completed_at=datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
                 if isinstance(completed_at, str)
                 else completed_at,
                 accessible=is_accessible,
-                locked_reason=None if is_accessible else LOCKED_HUB_MESSAGE,
+                locked_reason=None if is_accessible else lock_message,
             )
         )
     return out
@@ -390,7 +515,7 @@ def complete_hub(*, user_id: UUID, hub_id: str) -> HubCompleteOut:
     except Exception:
         pass
     skill = flat["skill"]
-    prog = skill_progress(user_id=user_id, skill=skill)
+    prog = _skill_progress_for_access_mode(user_id=user_id, skill=skill)
     completed_at = saved.get("completed_at")
     return HubCompleteOut(
         hub_id=str(hub_id),

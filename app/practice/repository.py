@@ -14,7 +14,7 @@ SKILLS = ("listening", "reading", "writing", "speaking")
 VALID_DIFFICULTIES = frozenset({"easy", "medium", "hard"})
 DIFFICULTY_RANK = {"easy": 0, "medium": 1, "hard": 2}
 
-_SET_CORE = "id, set_number, title, status, difficulty"
+_SET_CORE = "id, set_number, title, status, difficulty, exam_module"
 _SET_INTRO = "intro_video_key, intro_stream_uid"
 _BANKS = "practice_banks!inner(skill, bank_number, title, weakness_tags)"
 
@@ -497,6 +497,12 @@ def _flatten_hub_row(row: dict[str, Any]) -> dict[str, Any]:
         "title": sets.get("title") or row.get("slug") or "",
         "status": str(sets.get("status") or "draft"),
         "difficulty": str(sets.get("difficulty") or "medium"),
+        "exam_module": (
+            str(sets["exam_module"]).strip().lower()
+            if sets.get("exam_module") is not None
+            and str(sets.get("exam_module") or "").strip()
+            else None
+        ),
         "estimated_min": int(row.get("estimated_min") or 25),
         "sort_order": int(row.get("sort_order") or 0),
         "videos": row.get("videos") or [],

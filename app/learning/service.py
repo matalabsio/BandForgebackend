@@ -139,16 +139,31 @@ def _target_from_row_or_aggregate(
     return 7.0
 
 
+def _load_fsp_user_exam_module(user_id: UUID | str | None) -> str | None:
+    """FSP Writing track from users.exam_module (never Writing Skill usage)."""
+    if user_id is None:
+        return None
+    try:
+        from app.payments.repository import get_user_exam_module
+        from app.practice.writing_track import normalize_user_exam_module
+
+        return normalize_user_exam_module(get_user_exam_module(user_id))
+    except Exception:
+        return None
+
+
 def _rebuild_bloated_personalized_plan(
     *,
     prior: dict[str, Any],
     prior_plan: dict[str, Any],
     aggregate: dict[str, Any],
+    user_id: UUID | str | None = None,
 ) -> dict[str, Any] | None:
     exam = _parse_date(prior.get("exam_date")) or _parse_date(prior_plan.get("exam_date"))
     prep = _parse_date(prior.get("prep_start")) or _parse_date(prior_plan.get("prep_start"))
     if exam is None or prep is None:
         return None
+    uid = user_id or prior.get("user_id")
     rebuilt = build_personalized_study_plan(
         bands=_bands_from_aggregate(aggregate),
         target=_target_from_row_or_aggregate(prior, aggregate),
@@ -162,6 +177,8 @@ def _rebuild_bloated_personalized_plan(
         ),
         prior_plan=prior_plan,
         weak_tags_by_skill=_weak_tags_from_aggregate(aggregate),
+        user_id=uid,
+        user_exam_module=_load_fsp_user_exam_module(uid),
     )
     return rebuilt.model_dump(mode="json")
 
@@ -426,6 +443,7 @@ def _progress_fingerprint(
     *,
     weak_tags_by_skill: dict[str, list[str]] | None = None,
     catalog_version: int | None = None,
+    user_exam_module: str | None = None,
 ) -> str:
     """Stable hash of completed hub ids (+ weak tags + catalog version) for rewritten-plan cache keys."""
     import hashlib
@@ -446,7 +464,8 @@ def _progress_fingerprint(
             tags = ",".join(weak_tags_by_skill[skill] or [])
             bits.append(f"{skill}:{tags}")
         weak_part = "|".join(bits)
-    raw = f"{completed_part}#{weak_part}#{int(catalog_version or 0)}"
+    track_part = str(user_exam_module or "null")
+    raw = f"{completed_part}#{weak_part}#{int(catalog_version or 0)}#{track_part}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -464,6 +483,7 @@ def _serve_rewritten_study_plan(
     from app.practice.weakness import weak_tags_from_profile
 
     weak_tags = weak_tags_from_profile(skill_weaknesses)
+    user_exam_module = _load_fsp_user_exam_module(user_id)
     try:
         from app.practice.repository import get_practice_catalog_version
 
@@ -474,6 +494,7 @@ def _serve_rewritten_study_plan(
         progress_map,
         weak_tags_by_skill=weak_tags,
         catalog_version=catalog_version,
+        user_exam_module=user_exam_module,
     )
     cache_key = f"learning:plan_rewritten:{user_id}:{fp}"
     cached = get_json(cache_key)
@@ -485,6 +506,7 @@ def _serve_rewritten_study_plan(
     try:
         from app.practice.assignment import rewrite_plan_hubs
         from app.practice.catalog import (
+            get_hub_exam_modules,
             get_hub_skill_tags_by_id,
             get_hub_set_ids,
             get_hub_submit_configs_by_id,
@@ -498,6 +520,10 @@ def _serve_rewritten_study_plan(
             hub_to_set = get_hub_set_ids()
         except Exception:
             hub_to_set = {}
+        try:
+            hub_exam_modules = get_hub_exam_modules()
+        except Exception:
+            hub_exam_modules = {}
 
         def href_builder(
             *,
@@ -510,13 +536,25 @@ def _serve_rewritten_study_plan(
                 try:
                     from app.reliability.metrics import record_event
 
+                    detail = f"skill={skill}"
+                    if skill == "writing" and not user_exam_module:
+                        detail = "skill=writing;writing_track_required"
                     record_event(
                         "empty_hub_assignment",
-                        detail=f"skill={skill}",
-                        meta={"user_id": str(user_id), "skill": skill},
+                        detail=detail,
+                        meta={
+                            "user_id": str(user_id),
+                            "skill": skill,
+                            "user_exam_module": user_exam_module,
+                        },
                     )
                 except Exception:
                     pass
+                if skill == "writing" and not user_exam_module:
+                    return (
+                        "/study-plan/today?skill=writing&unavailable=1"
+                        "&reason=writing_track_required"
+                    )
                 return f"/study-plan/today?skill={skill}&unavailable=1"
             tt = task_type if task_type in ("watch", "practice", "submit") else "practice"
             cfg = submit_by_hub.get(str(hub_id)) or {}
@@ -540,6 +578,8 @@ def _serve_rewritten_study_plan(
             hub_to_set=hub_to_set,
             source="serve_fill",
             claim=True,
+            user_exam_module=user_exam_module,
+            hub_exam_module_by_id=hub_exam_modules,
         )
         new_fills = rewritten.pop("_new_assignment_hub_ids", None)
         if new_fills:
@@ -740,6 +780,7 @@ def refresh_profile(user_id: UUID) -> dict[str, Any]:
                 prior=prior or {},
                 prior_plan=prior_plan,
                 aggregate=aggregate,
+                user_id=(prior or {}).get("user_id"),
             )
             if rebuilt is not None:
                 study_plan_out = rebuilt
@@ -1131,6 +1172,11 @@ def generate_personalized_plan(
         hub_to_set=hub_to_set,
         assignment_source="plan_generate",
         claim_assignments=True,
+        user_exam_module=(
+            str(user_row["exam_module"]).strip().lower()
+            if user_row.get("exam_module")
+            else None
+        ),
     )
     if prior_plan:
         prior_exam = _parse_date(prior.get("exam_date")) or _parse_date(prior_plan.get("exam_date"))
@@ -1277,6 +1323,7 @@ def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
         hub_to_set=hub_to_set,
         assignment_source="replan",
         claim_assignments=True,
+        user_exam_module=_load_fsp_user_exam_module(user_id),
     )
     rebuilt_dump = rebuilt.model_dump(mode="json")
     today = date.today()

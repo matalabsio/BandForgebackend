@@ -22,6 +22,7 @@ def clear_hub_catalog_cache() -> None:
     get_ordered_hub_ids_by_skill.cache_clear()
     get_ordered_question_bank_ids_by_skill.cache_clear()
     get_hub_set_ids.cache_clear()
+    get_hub_exam_modules.cache_clear()
     get_hub_submit_configs_by_id.cache_clear()
     get_hub_skill_tags_by_id.cache_clear()
     from app.practice.repository import clear_hub_list_cache
@@ -95,6 +96,27 @@ def get_hub_set_ids() -> dict[str, str]:
             sid = str(flat.get("set_id") or "")
             if hid and sid:
                 out[hid] = sid
+    return out
+
+
+@lru_cache(maxsize=1)
+def get_hub_exam_modules() -> dict[str, str | None]:
+    """Assignable hub_id → practice_sets.exam_module (academic|general_training|both|None)."""
+    _catalog_cache_key()
+    out: dict[str, str | None] = {}
+    grouped = repository.list_assignable_hubs_grouped()
+    for skill in SKILLS:
+        for row in grouped.get(skill, []):
+            flat = repository._flatten_hub_row(row)
+            hid = str(flat.get("id") or "")
+            if not hid:
+                continue
+            raw = flat.get("exam_module")
+            if raw is None:
+                out[hid] = None
+            else:
+                text = str(raw).strip().lower()
+                out[hid] = text or None
     return out
 
 
@@ -204,6 +226,8 @@ def pick_hub_for_slot(
     assigned_on=None,
     claim: bool = False,
     hub_tags_by_id: dict[str, list[str]] | None = None,
+    user_exam_module: str | None = None,
+    hub_exam_module_by_id: dict[str, str | None] | None = None,
 ) -> str | None:
     """Unique unused Question Bank pick. Never wraps."""
     from app.practice.assignment import pick_hub_for_slot as pick_unique
@@ -220,6 +244,12 @@ def pick_hub_for_slot(
     tags = hub_tags_by_id
     if weak_tags and tags is None:
         tags = get_hub_skill_tags_by_id()
+    exam_map = hub_exam_module_by_id
+    if skill == "writing" and exam_map is None:
+        try:
+            exam_map = get_hub_exam_modules()
+        except Exception:
+            exam_map = {}
     return pick_unique(
         skill=skill,
         day_index=day_index,
@@ -236,4 +266,6 @@ def pick_hub_for_slot(
         source=source,
         assigned_on=assigned_on,
         claim=claim,
+        user_exam_module=user_exam_module,
+        hub_exam_module_by_id=exam_map,
     )

@@ -205,6 +205,9 @@ class AdminMockListItem(BaseModel):
     is_published: bool
     is_free: bool = False
     catalog_number: int | None = None
+    # Writing-track taxonomy on full mocks. NULL = unclassified.
+    # ``both`` = valid for Academic and General Training Writing.
+    exam_module: Literal["academic", "general_training", "both"] | None = None
     created_at: datetime
     total_questions: int = 0
     attempt_count: int = 0
@@ -237,6 +240,8 @@ class CreateMockRequest(BaseModel):
     listening_parts: int = Field(default=4, ge=1, le=4)
     reading_passages: int = Field(default=2, ge=1, le=4)
     writing_tasks: int = Field(default=2, ge=1, le=2)
+    # Optional Writing-track tag; no silent Academic default.
+    exam_module: Literal["academic", "general_training", "both"] | None = None
 
 
 class PatchMockRequest(BaseModel):
@@ -247,6 +252,7 @@ class PatchMockRequest(BaseModel):
     reading_passages: int | None = Field(default=None, ge=1, le=4)
     writing_tasks: int | None = Field(default=None, ge=1, le=2)
     is_free: bool | None = None
+    exam_module: Literal["academic", "general_training", "both"] | None = None
 
 
 class PatchMockStatusRequest(BaseModel):
@@ -797,6 +803,9 @@ class WritingBuilderSaveRequest(BaseModel):
     question_type: str | None = None
     options: dict[str, Any] | None = None
     image_url: str | None = None
+    # Optional bank-set update: apply before taxonomy checks so Task 1 type
+    # and exam_module can change together in one save.
+    exam_module: Literal["academic", "general_training", "both"] | None = None
 
 
 class WritingBuilderSaveResponse(BaseModel):
@@ -927,6 +936,9 @@ class QuestionBankSetItem(BaseModel):
     description: str | None = None
     status: str = "draft"
     is_custom: bool = False
+    # Writing only: academic | general_training | both. NULL = untagged.
+    # ``both`` = valid for Academic AND General Training (not duplicated content).
+    exam_module: Literal["academic", "general_training", "both"] | None = None
     created_at: datetime | None = None
     sections: list[QuestionBankSectionSummary] = Field(default_factory=list)
     total_questions: int = 0
@@ -958,6 +970,8 @@ class QuestionBankCreateSetRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     status: Literal["draft", "published", "archived"] = "draft"
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+    # Required for Writing: explicit admin classification (no silent academic default).
+    exam_module: Literal["academic", "general_training", "both"] | None = None
 
 
 class QuestionBankCreateSetResponse(BaseModel):
@@ -969,6 +983,7 @@ class QuestionBankCreateSetResponse(BaseModel):
     bank_number: int
     set_number: int
     status: str
+    exam_module: Literal["academic", "general_training", "both"] | None = None
 
 
 class PatchQuestionBankSetStatusRequest(BaseModel):
@@ -979,6 +994,19 @@ class PatchQuestionBankSetStatusResponse(BaseModel):
     set_id: UUID
     skill: str
     status: str
+    ok: bool = True
+
+
+class PatchQuestionBankSetRequest(BaseModel):
+    """Partial update for practice set metadata (Writing exam_module)."""
+
+    exam_module: Literal["academic", "general_training", "both"] | None = None
+
+
+class PatchQuestionBankSetResponse(BaseModel):
+    set_id: UUID
+    skill: str
+    exam_module: Literal["academic", "general_training", "both"] | None = None
     ok: bool = True
 
 

@@ -21,9 +21,15 @@ from app.admin.schemas import (
     PatchMockStatusRequest,
     SectionStatus,
 )
+from app.admin.writing_taxonomy import (
+    assert_valid_exam_module,
+    normalize_writing_question_type,
+    writing_task_exam_module_compatible,
+)
 from app.cache.hybrid_cache import delete_many
 from app.db.supabase_client import execute_with_retry, get_supabase
 from app.mock_catalog.catalog import live_parts_tuple, next_catalog_number
+from app.practice.writing_track import normalize_set_exam_module
 
 
 def _invalidate_picker_catalog() -> None:
@@ -140,6 +146,8 @@ def _publish_blockers(
     *,
     section_status: list[ModuleSectionStatus],
     enabled_modules: set[str],
+    exam_module: object = None,
+    writing_question_types: list[Any] | None = None,
 ) -> list[str]:
     blockers: list[str] = []
 
@@ -187,7 +195,37 @@ def _publish_blockers(
         blockers.append(
             "At least one module must have ingested content before publishing."
         )
+
+    # Writing-track taxonomy: only enforce when exam_module is explicitly set.
+    # NULL remains valid (unclassified) — Phase 4A does not require tagging to publish.
+    set_mod = normalize_set_exam_module(exam_module)
+    if set_mod is not None and "writing" in enabled_modules:
+        for raw in writing_question_types or []:
+            q_type = normalize_writing_question_type(raw)
+            if q_type is None:
+                continue
+            if not writing_task_exam_module_compatible(
+                question_type=q_type,
+                exam_module=set_mod,
+            ):
+                blockers.append(
+                    f"Writing: question_type {q_type} is incompatible with "
+                    f"exam_module {set_mod}."
+                )
     return blockers
+
+
+def _fetch_writing_question_types(sb: Any, mock_id: str) -> list[Any]:
+    rows = (
+        _exec(
+            sb.table("questions")
+            .select("question_type")
+            .eq("mock_test_id", mock_id)
+            .eq("module", "writing")
+        ).data
+        or []
+    )
+    return [r.get("question_type") for r in rows]
 
 
 def _fetch_attempt_counts_by_mock(
@@ -297,6 +335,7 @@ def _build_mock_list_item(
             if row.get("catalog_number") is not None
             else None
         ),
+        exam_module=normalize_set_exam_module(row.get("exam_module")),
         created_at=_parse_dt(row["created_at"]),
         total_questions=total,
         attempt_count=attempt_count,
@@ -310,7 +349,7 @@ def _build_mock_list_item(
 
 _MOCK_SELECT = (
     "id, title, description, status, is_published, is_free, created_at, catalog_number, "
-    "listening_parts, reading_passages, writing_tasks"
+    "listening_parts, reading_passages, writing_tasks, exam_module"
 )
 
 
@@ -389,6 +428,12 @@ def get_mock_detail(mock_id: UUID) -> AdminMockDetail:
     blockers = _publish_blockers(
         section_status=section_status,
         enabled_modules=enabled_modules,
+        exam_module=row.get("exam_module"),
+        writing_question_types=(
+            _fetch_writing_question_types(sb, mock_key)
+            if "writing" in enabled_modules
+            else []
+        ),
     )
     base = _build_mock_list_item(
         row,
@@ -453,22 +498,22 @@ def create_mock(*, body: CreateMockRequest, admin_id: UUID) -> AdminMockDetail:
         reading_passages=body.reading_passages,
         writing_tasks=body.writing_tasks,
     )
+    exam_module = assert_valid_exam_module(body.exam_module, required=False)
 
-    inserted = _exec(
-        sb.table("mock_tests")
-        .insert(
-            {
-                "title": body.title,
-                "description": description,
-                "status": "draft",
-                "is_published": False,
-                "catalog_number": catalog_number,
-                "listening_parts": body.listening_parts,
-                "reading_passages": body.reading_passages,
-                "writing_tasks": body.writing_tasks,
-            }
-        )
-    )
+    insert_row: dict[str, Any] = {
+        "title": body.title,
+        "description": description,
+        "status": "draft",
+        "is_published": False,
+        "catalog_number": catalog_number,
+        "listening_parts": body.listening_parts,
+        "reading_passages": body.reading_passages,
+        "writing_tasks": body.writing_tasks,
+    }
+    if exam_module is not None:
+        insert_row["exam_module"] = exam_module
+
+    inserted = _exec(sb.table("mock_tests").insert(insert_row))
     if not inserted.data:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not create mock.")
 
@@ -480,7 +525,11 @@ def create_mock(*, body: CreateMockRequest, admin_id: UUID) -> AdminMockDetail:
         action="mock.create",
         resource_type="mock_test",
         resource_id=UUID(mock_id),
-        metadata={"title": body.title, "catalog_number": catalog_number},
+        metadata={
+            "title": body.title,
+            "catalog_number": catalog_number,
+            "exam_module": exam_module,
+        },
     )
 
     _invalidate_picker_catalog()
@@ -509,6 +558,11 @@ def patch_mock(
         updates["writing_tasks"] = body.writing_tasks
     if body.is_free is not None:
         updates["is_free"] = body.is_free
+    if "exam_module" in body.model_fields_set:
+        # Explicit field in PATCH body — validate and persist (may be None to clear).
+        updates["exam_module"] = assert_valid_exam_module(
+            body.exam_module, required=False
+        )
 
     if not updates:
         return get_mock_detail(mock_id)

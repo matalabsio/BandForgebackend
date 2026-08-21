@@ -58,6 +58,8 @@ class PlanOut(BaseModel):
     currency: str
     duration_days: int
     sort_order: int = 0
+    # Catalog metadata only — skill authorization uses resolve_entitlements.
+    entitlement: dict | None = None
 
 
 class PlansResponse(BaseModel):
@@ -86,6 +88,26 @@ class VerifyPaymentRequest(BaseModel):
     razorpay_signature: str = Field(min_length=1)
 
 
+class EntitlementsOut(BaseModel):
+    """Multi-SKU entitlement snapshot (matches resolve_entitlements).
+
+    Display fields on SubscriptionOut may reflect a single primary row;
+    authorization must use these flags, not plan_slug alone.
+    """
+
+    plans: list[str] = Field(default_factory=list)
+    skills: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "listening": False,
+            "reading": False,
+            "writing": False,
+            "speaking": False,
+        }
+    )
+    writing_skill: bool = False
+    full_skill_program: bool = False
+
+
 class SubscriptionOut(BaseModel):
     is_active: bool = False
     plan_slug: str | None = None
@@ -93,6 +115,7 @@ class SubscriptionOut(BaseModel):
     status: str | None = None
     starts_at: datetime | None = None
     expires_at: datetime | None = None
+    entitlements: EntitlementsOut = Field(default_factory=EntitlementsOut)
 
 
 class VerifyPaymentResponse(BaseModel):

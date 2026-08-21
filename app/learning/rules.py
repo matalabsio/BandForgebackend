@@ -843,6 +843,7 @@ def build_personalized_study_plan(
     hub_to_set: dict[str, str] | None = None,
     assignment_source: str = "plan_generate",
     claim_assignments: bool = False,
+    user_exam_module: str | None = None,
 ) -> StudyPlan:
     """Build an exam-date-bound calendar plan with watch/practice/submit task stubs."""
     start = prep_start or date.today()
@@ -917,6 +918,7 @@ def build_personalized_study_plan(
                         source=assignment_source,
                         assigned_on=day_date,
                         claim=bool(claim_assignments and user_id),
+                        user_exam_module=user_exam_module,
                     )
                 except Exception:
                     hub_id = None

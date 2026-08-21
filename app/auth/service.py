@@ -142,6 +142,7 @@ def _row_to_user(row: dict[str, Any]) -> UserPublic:
         target_band=float(target) if target is not None else None,
         ielts_purpose=row.get("ielts_purpose"),
         ielts_goal=row.get("ielts_goal"),
+        exam_module=row.get("exam_module"),
         role=str(row.get("role") or "student"),
         is_active=bool(row.get("is_active", True)),
     )
@@ -780,6 +781,10 @@ async def update_user_profile(
         payload["ielts_purpose"] = body.ielts_purpose
     if body.ielts_goal is not None:
         payload["ielts_goal"] = body.ielts_goal
+    # FSP Writing track — only write when explicitly provided (do not clear/overwrite
+    # via purpose-only patches). Track-change locking vs Writing progress is Phase 2+.
+    if body.exam_module is not None:
+        payload["exam_module"] = body.exam_module
 
     raw_phone = (body.phone or "").strip()
     if not raw_phone:
