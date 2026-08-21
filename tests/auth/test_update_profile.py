@@ -195,3 +195,4 @@ def test_update_user_profile_omits_ielts_fields_when_unset():
     update_payload = mock_sb.table.return_value.update.call_args[0][0]
     assert "ielts_purpose" not in update_payload
     assert "ielts_goal" not in update_payload
+    assert "exam_module" not in update_payload

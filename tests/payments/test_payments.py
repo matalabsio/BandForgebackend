@@ -445,6 +445,13 @@ def test_confirm_payment_paid_idempotent_for_already_paid():
             "app.payments.service.repository.list_subscriptions_for_payment",
             return_value=[{"id": "sub_1"}],
         ),
+        patch(
+            "app.payments.service.repository.get_plan_by_id",
+            return_value=_plan(),
+        ),
+        patch(
+            "app.payments.service.repository.ensure_user_program_usage"
+        ) as ensure_usage,
         patch("app.payments.service.get_subscription", return_value=active_sub),
         patch("app.payments.service.repository.confirm_payment_paid_bundle") as bundle,
         patch(
@@ -457,6 +464,7 @@ def test_confirm_payment_paid_idempotent_for_already_paid():
         )
         assert result.is_active
         bundle.assert_not_called()
+        ensure_usage.assert_not_called()
         inv_sub.assert_called_once_with(USER_ID)
 
 
@@ -588,7 +596,6 @@ def test_get_active_subscription_use_cache_false_skips_cache_write():
     table.eq.return_value = table
     table.gt.return_value = table
     table.order.return_value = table
-    table.limit.return_value = table
     table.execute.return_value = empty
     sb = MagicMock()
     sb.table.return_value = table
@@ -600,6 +607,31 @@ def test_get_active_subscription_use_cache_false_skips_cache_write():
         assert repository.get_active_subscription(USER_ID, use_cache=False) is None
         get_json.assert_not_called()
         set_json.assert_not_called()
+        table.limit.assert_not_called()
+
+
+def test_list_active_subscriptions_returns_all_rows_without_limit():
+    rows = [
+        {"id": "s1", "plans": {"slug": "writing_skill"}},
+        {"id": "s2", "plans": {"slug": "full_skill_program"}},
+    ]
+    table = MagicMock()
+    table.select.return_value = table
+    table.eq.return_value = table
+    table.gt.return_value = table
+    table.order.return_value = table
+    table.execute.return_value = SimpleNamespace(data=rows)
+    sb = MagicMock()
+    sb.table.return_value = table
+    with (
+        patch("app.payments.repository.get_supabase", return_value=sb),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.cache.hybrid_cache.set_json"),
+    ):
+        out = repository.list_active_subscriptions(USER_ID, use_cache=False)
+        assert out == rows
+        table.limit.assert_not_called()
+        assert repository.get_active_subscription(USER_ID, use_cache=False) == rows[0]
 
 
 def test_confirm_payment_paid_enforces_ownership():
@@ -1298,6 +1330,20 @@ def test_premium_mock_access_allows_diagnostic_without_subscription():
         assert_premium_mock_access(user=user, mock_test_id=DIAGNOSTIC_MOCK_TEST_ID)
 
 
+def _no_writing_skill_entitlements():
+    return {
+        "plans": [],
+        "skills": {
+            "listening": False,
+            "reading": False,
+            "writing": False,
+            "speaking": False,
+        },
+        "writing_skill": False,
+        "full_skill_program": False,
+    }
+
+
 def test_premium_mock_access_blocks_m01_without_subscription():
     from uuid import UUID
 
@@ -1306,6 +1352,10 @@ def test_premium_mock_access_blocks_m01_without_subscription():
 
     user = _premium_access_user()
     with (
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_no_writing_skill_entitlements(),
+        ),
         patch(
             "app.security.entitlements.has_active_subscription", return_value=False
         ),
@@ -1330,6 +1380,10 @@ def test_premium_mock_access_blocks_m02_without_subscription():
     user = _premium_access_user()
     with (
         patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_no_writing_skill_entitlements(),
+        ),
+        patch(
             "app.security.entitlements.has_active_subscription", return_value=False
         ),
         patch(
@@ -1351,6 +1405,10 @@ def test_premium_mock_access_blocks_unknown_mock_without_subscription():
 
     user = _premium_access_user()
     with (
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_no_writing_skill_entitlements(),
+        ),
         patch(
             "app.security.entitlements.has_active_subscription", return_value=False
         ),
@@ -1396,9 +1454,13 @@ def test_enforce_premium_flags_skips_subscription_when_prefetched():
     from app.security.entitlements import enforce_premium_mock_flags
 
     user = _premium_access_user()
-    with patch(
-        "app.security.entitlements.has_active_subscription"
-    ) as has_sub:
+    with (
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_no_writing_skill_entitlements(),
+        ),
+        patch("app.security.entitlements.has_active_subscription") as has_sub,
+    ):
         enforce_premium_mock_flags(
             user=user,
             mock_test_id=UUID("a0000000-0000-4000-8000-000000000001"),
@@ -1408,6 +1470,10 @@ def test_enforce_premium_flags_skips_subscription_when_prefetched():
         has_sub.assert_not_called()
 
     with (
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_no_writing_skill_entitlements(),
+        ),
         patch("app.security.entitlements.has_active_subscription") as has_sub,
         pytest.raises(HTTPException) as exc,
     ):
@@ -1447,6 +1513,10 @@ def test_premium_mock_access_allows_paid_mock_with_subscription():
 
     user = _premium_access_user()
     with (
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_no_writing_skill_entitlements(),
+        ),
         patch(
             "app.security.entitlements.has_active_subscription", return_value=True
         ),

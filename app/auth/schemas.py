@@ -14,6 +14,7 @@ IeltsGoal = Literal[
     "professional_registration",
     "other",
 ]
+ExamModule = Literal["academic", "general_training"]
 
 
 class RegisterRequest(BaseModel):
@@ -128,6 +129,7 @@ class UserPublic(BaseModel):
     target_band: float | None = None
     ielts_purpose: IeltsPurpose | None = None
     ielts_goal: IeltsGoal | None = None
+    exam_module: ExamModule | None = None
     role: str = "student"
     is_active: bool = True
 
@@ -152,6 +154,8 @@ class UpdateProfileRequest(BaseModel):
     exam_date: str | None = Field(default=None, max_length=10)
     ielts_purpose: IeltsPurpose | None = None
     ielts_goal: IeltsGoal | None = None
+    # FSP Writing track (users.exam_module). Omitted → leave existing value.
+    exam_module: ExamModule | None = None
 
     @field_validator("phone")
     @classmethod
@@ -179,6 +183,21 @@ class UpdateProfileRequest(BaseModel):
             trimmed = v.strip().lower()
             return trimmed or None
         return v
+
+    @field_validator("exam_module", mode="before")
+    @classmethod
+    def normalize_exam_module_field(cls, v: object) -> object:
+        """Accept only exact academic | general_training; empty → None (omit write)."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            trimmed = v.strip()
+            if not trimmed:
+                return None
+            if trimmed not in ("academic", "general_training"):
+                raise ValueError("exam_module must be academic or general_training")
+            return trimmed
+        raise ValueError("exam_module must be academic or general_training")
 
 
 class UpdateProfileResponse(BaseModel):

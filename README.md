@@ -32,6 +32,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Running tests
+
+Always use the project venv (Python **3.10+**). Bare `pytest` under pyenv/system Python 3.8 will fail collection (`ModuleNotFoundError: fastapi` / `app`, and `SyntaxError` on parenthesized `with (` blocks).
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/security/ tests/practice/ tests/payments/
+```
+
+Or without activating:
+
+```bash
+cd backend
+.venv/bin/python -m pytest tests/security/ tests/practice/ tests/payments/
+```
+
 Copy env **only if you do not already have** `backend/.env`:
 
 ```bash

@@ -17,6 +17,9 @@ from app.payments.constants import (
     PAYMENT_PAID,
     PAYMENT_REFUNDED,
     SUBSCRIPTION_ACTIVE,
+    FULL_SKILL_PROGRAM_SLUG,
+    WRITING_SKILL_DEFAULT_MOCK_QUOTA,
+    WRITING_SKILL_SLUG,
 )
 from app.payments.exceptions import (
     GuestCheckoutNotAllowedError,
@@ -35,6 +38,7 @@ from app.payments.logging import payment_log
 from app.payments.schemas import (
     CheckoutContact,
     CreateOrderResponse,
+    EntitlementsOut,
     OpsStatusResponse,
     PaymentHistoryItem,
     PaymentHistoryResponse,
@@ -285,6 +289,64 @@ def _compute_subscription_dates(
     return starts_at, expires_at
 
 
+def _subscription_id_for_payment(
+    *,
+    payment_id: str | UUID,
+    bundle_result: dict[str, Any] | None = None,
+) -> str | None:
+    if bundle_result:
+        sid = bundle_result.get("subscription_id")
+        if sid:
+            return str(sid)
+    subs = repository.list_subscriptions_for_payment(payment_id)
+    if not subs:
+        return None
+    sid = subs[0].get("id")
+    return str(sid) if sid else None
+
+
+def _ensure_writing_skill_usage_after_fulfillment(
+    *,
+    user_id: UUID,
+    payment: dict[str, Any],
+    plan: dict[str, Any] | None,
+    subscription_id: str | None,
+) -> None:
+    """Create user_program_usage for writing_skill only (idempotent).
+
+    FSP and other plans are no-ops. Does not schedule personalized plans.
+    """
+    if not plan or plan.get("slug") != WRITING_SKILL_SLUG:
+        return
+    if not subscription_id:
+        payment_log(
+            "WRITING_SKILL_USAGE_SKIPPED",
+            user_id=str(user_id),
+            payment_id=str(payment.get("id") or ""),
+            reason="missing_subscription_id",
+        )
+        return
+
+    exam_module = repository.get_user_exam_module(user_id)
+    usage = repository.ensure_user_program_usage(
+        user_id=user_id,
+        subscription_id=subscription_id,
+        plan_id=plan["id"],
+        exam_module=exam_module,
+        mocks_granted=WRITING_SKILL_DEFAULT_MOCK_QUOTA,
+    )
+    payment_log(
+        "WRITING_SKILL_USAGE_ENSURED",
+        user_id=str(user_id),
+        payment_id=str(payment.get("id") or ""),
+        subscription_id=str(subscription_id),
+        usage_id=str(usage.get("id") or ""),
+        mocks_granted=int(usage.get("mocks_granted") or 0),
+        mocks_used=int(usage.get("mocks_used") or 0),
+        exam_module=exam_module,
+    )
+
+
 def confirm_payment_paid(
     *,
     razorpay_order_id: str,
@@ -345,6 +407,18 @@ def confirm_payment_paid(
                 order=razorpay_order_id,
             )
             repository.invalidate_active_subscription_cache(payment_user_id)
+            # Heal pack usage if a prior attempt created the sub but missed usage.
+            plan_early = (
+                repository.get_plan_by_id(payment["plan_id"])
+                if payment.get("plan_id")
+                else None
+            )
+            _ensure_writing_skill_usage_after_fulfillment(
+                user_id=payment_user_id,
+                payment=payment,
+                plan=plan_early,
+                subscription_id=str(existing_subs[0].get("id") or "") or None,
+            )
             return get_subscription(user_id=payment_user_id)
         # Paid but missing subscription — continue into bundle/fallback to repair.
 
@@ -371,7 +445,7 @@ def confirm_payment_paid(
         raise PaymentAmountMismatchError()
 
     starts_at, expires_at = _compute_subscription_dates(payment_user_id, plan)
-    repository.confirm_payment_paid_bundle(
+    bundle_result = repository.confirm_payment_paid_bundle(
         razorpay_order_id=razorpay_order_id,
         razorpay_payment_id=razorpay_payment_id,
         razorpay_signature=razorpay_signature,
@@ -380,7 +454,18 @@ def confirm_payment_paid(
     )
     repository.invalidate_active_subscription_cache(payment_user_id)
 
-    if plan.get("slug") == "full_skill_program":
+    if plan.get("slug") == WRITING_SKILL_SLUG:
+        subscription_id = _subscription_id_for_payment(
+            payment_id=payment["id"],
+            bundle_result=bundle_result if isinstance(bundle_result, dict) else None,
+        )
+        _ensure_writing_skill_usage_after_fulfillment(
+            user_id=payment_user_id,
+            payment=payment,
+            plan=plan,
+            subscription_id=subscription_id,
+        )
+    elif plan.get("slug") == FULL_SKILL_PROGRAM_SLUG:
         from app.learning.ingest import load_user_exam_and_target
         from app.learning.service import (
             invalidate_learning_profile_cache,
@@ -483,9 +568,24 @@ def verify_payment(
 
 
 def get_subscription(*, user_id: UUID) -> SubscriptionOut:
+    """Primary subscription row for display + multi-SKU entitlement flags.
+
+    ``plan_slug`` / expiry reflect one active row (billing display).
+    ``entitlements`` unions **all** active subscriptions (authorization SoT).
+    """
+    from app.security.entitlements import resolve_entitlements
+
+    resolved = resolve_entitlements(user_id)
+    entitlements = EntitlementsOut(
+        plans=list(resolved["plans"]),
+        skills=dict(resolved["skills"]),
+        writing_skill=bool(resolved["writing_skill"]),
+        full_skill_program=bool(resolved["full_skill_program"]),
+    )
+
     row = repository.get_active_subscription(user_id)
     if not row:
-        return SubscriptionOut(is_active=False)
+        return SubscriptionOut(is_active=False, entitlements=entitlements)
     plan = row.get("plans") or {}
     return SubscriptionOut(
         is_active=True,
@@ -494,6 +594,7 @@ def get_subscription(*, user_id: UUID) -> SubscriptionOut:
         status=str(row.get("status") or SUBSCRIPTION_ACTIVE),
         starts_at=_parse_dt(row.get("starts_at")),
         expires_at=_parse_dt(row.get("expires_at")),
+        entitlements=entitlements,
     )
 
 

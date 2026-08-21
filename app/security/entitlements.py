@@ -2,11 +2,15 @@
 
 Access is derived only from the Supabase ``subscriptions`` table
 (``status = 'active' AND expires_at > now()``), never from Razorpay state.
+
+Multi-SKU: ``resolve_entitlements`` inspects **all** active subscriptions.
+``get_active_subscription`` (latest expiry only) must not be used for skill
+gates when a user may hold more than one plan.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -18,6 +22,84 @@ from app.diagnostic.constants import DIAGNOSTIC_MOCK_TEST_ID
 if TYPE_CHECKING:
     from app.payments.schemas import SubscriptionOut
 
+SKILLS = ("listening", "reading", "writing", "speaking")
+
+FULL_SKILL_PROGRAM_SLUG = "full_skill_program"
+WRITING_SKILL_SLUG = "writing_skill"
+
+# Canonical plan slug → skills granted. Pack SKUs are recognized here so the
+# resolver is ready before plans rows are activated; unknown slugs grant nothing.
+PLAN_SKILL_GRANTS: dict[str, frozenset[str]] = {
+    FULL_SKILL_PROGRAM_SLUG: frozenset(SKILLS),
+    WRITING_SKILL_SLUG: frozenset({"writing"}),
+    "speaking_skill": frozenset({"speaking"}),
+    "dual_bundle": frozenset({"writing", "speaking"}),
+    "all_skills_bundle": frozenset(SKILLS),
+}
+
+
+class SkillEntitlements(TypedDict):
+    listening: bool
+    reading: bool
+    writing: bool
+    speaking: bool
+
+
+class Entitlements(TypedDict):
+    plans: list[str]
+    skills: SkillEntitlements
+    writing_skill: bool
+    full_skill_program: bool
+
+
+def _empty_skills() -> SkillEntitlements:
+    return {
+        "listening": False,
+        "reading": False,
+        "writing": False,
+        "speaking": False,
+    }
+
+
+def _plan_slug_from_subscription(row: dict[str, Any]) -> str | None:
+    plans = row.get("plans")
+    if isinstance(plans, dict):
+        slug = plans.get("slug")
+        if slug:
+            return str(slug)
+    return None
+
+
+def resolve_entitlements(user_id: UUID) -> Entitlements:
+    """Union entitlements across all active, non-expired subscriptions.
+
+    Expiry is enforced by the active-subscription query (``expires_at > now()``).
+    """
+    from app.payments import repository
+
+    rows = repository.list_active_subscriptions(user_id)
+    plan_slugs: list[str] = []
+    seen: set[str] = set()
+    skills = _empty_skills()
+
+    for row in rows:
+        slug = _plan_slug_from_subscription(row)
+        if not slug:
+            continue
+        if slug not in seen:
+            seen.add(slug)
+            plan_slugs.append(slug)
+        for skill in PLAN_SKILL_GRANTS.get(slug, ()):
+            if skill in skills:
+                skills[skill] = True  # type: ignore[literal-required]
+
+    return {
+        "plans": plan_slugs,
+        "skills": skills,
+        "writing_skill": WRITING_SKILL_SLUG in seen,
+        "full_skill_program": FULL_SKILL_PROGRAM_SLUG in seen,
+    }
+
 
 def has_active_subscription(user_id: UUID) -> bool:
     from app.payments import repository
@@ -26,15 +108,17 @@ def has_active_subscription(user_id: UUID) -> bool:
 
 
 def has_full_skill_program(user_id: UUID) -> bool:
-    from app.payments import repository
+    """True when an active subscription includes the Full Skill Program SKU."""
+    return resolve_entitlements(user_id)["full_skill_program"]
 
-    sub = repository.get_active_subscription(user_id)
-    if not sub:
-        return False
-    plans = sub.get("plans")
-    if isinstance(plans, dict):
-        return plans.get("slug") == "full_skill_program"
-    return False
+
+def has_writing_skill(user_id: UUID) -> bool:
+    """True when any active entitlement grants the writing skill.
+
+    FSP and ``writing_skill`` (and future dual/all-skills packs) qualify.
+    Unrelated plans (e.g. legacy premium_monthly) do not.
+    """
+    return resolve_entitlements(user_id)["skills"]["writing"]
 
 
 async def require_full_skill_program(
@@ -100,6 +184,9 @@ def enforce_premium_mock_flags(
 
     Pass ``subscription_active`` when already known (e.g. gate-context RPC) to
     skip a separate subscriptions lookup.
+
+    Writing Skill pack (without FSP) cannot use generic premium subscription access;
+    only the allotted Writing Skill mock may pass this gate.
     """
     if mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
         return
@@ -110,6 +197,18 @@ def enforce_premium_mock_flags(
         )
     if flags.get("is_free") or flags.get("is_diagnostic"):
         return
+
+    ent = resolve_entitlements(user.id)
+    if ent["writing_skill"] and not ent["full_skill_program"]:
+        # Pack-only: same rules as writing/mock-attempts (course + allotment + quota).
+        # Do not allow L/R/S/module starts to bypass via allotment-only checks.
+        from app.practice.writing_skill_mock import assert_writing_skill_mock_for_test
+
+        assert_writing_skill_mock_for_test(
+            user_id=user.id, mock_test_id=mock_test_id
+        )
+        return
+
     subscribed = (
         subscription_active
         if subscription_active is not None

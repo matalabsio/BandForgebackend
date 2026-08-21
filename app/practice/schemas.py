@@ -59,6 +59,20 @@ class MockUnlockOut(BaseModel):
     completed: int
     required: int
     mock_test_id: str | None = None
+    mocks_granted: int | None = None
+    mocks_used: int | None = None
+    # Writing Skill pack only — Academic / GT from user_program_usage.
+    exam_module: Literal["academic", "general_training"] | None = None
+
+
+class WritingSkillExamModuleRequest(BaseModel):
+    exam_module: Literal["academic", "general_training"]
+
+
+class WritingSkillExamModuleOut(BaseModel):
+    exam_module: Literal["academic", "general_training"]
+    usage_id: str
+    changed: bool = False
 
 
 class HubCompleteOut(BaseModel):

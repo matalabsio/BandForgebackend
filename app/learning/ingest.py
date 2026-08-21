@@ -38,7 +38,7 @@ def load_user_exam_and_target(user_id: UUID) -> dict[str, Any] | None:
     rows = execute_with_retry(
         lambda: (
             client.table("users")
-            .select("target_band, exam_date, full_name")
+            .select("target_band, exam_date, full_name, exam_module")
             .eq("id", str(user_id))
             .limit(1)
             .execute()

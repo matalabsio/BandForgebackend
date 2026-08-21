@@ -49,10 +49,18 @@ def test_start_reading_binds_passage_query_param():
     app.dependency_overrides[get_current_user] = _user
     client = TestClient(app)
     try:
-        with patch(
-            "app.reading.router.service.start_attempt",
-            return_value=_start_response(),
-        ) as start_mock:
+        with (
+            patch("app.reading.router.assert_mock_access"),
+            patch("app.reading.router.assert_premium_mock_access"),
+            patch("app.reading.router.assert_skill_program_module_start"),
+            patch(
+                "app.practice.writing_skill_mock.maybe_consume_after_new_mock_start"
+            ),
+            patch(
+                "app.reading.router.service.start_attempt",
+                return_value=_start_response(),
+            ) as start_mock,
+        ):
             res = client.post(
                 f"/api/reading/{M01}/start"
                 f"?include_questions=true&passage=2&mock_attempt_id={MOCK_A}",
@@ -68,10 +76,18 @@ def test_start_reading_ignores_legacy_part_query_name():
     app.dependency_overrides[get_current_user] = _user
     client = TestClient(app)
     try:
-        with patch(
-            "app.reading.router.service.start_attempt",
-            return_value=_start_response(),
-        ) as start_mock:
+        with (
+            patch("app.reading.router.assert_mock_access"),
+            patch("app.reading.router.assert_premium_mock_access"),
+            patch("app.reading.router.assert_skill_program_module_start"),
+            patch(
+                "app.practice.writing_skill_mock.maybe_consume_after_new_mock_start"
+            ),
+            patch(
+                "app.reading.router.service.start_attempt",
+                return_value=_start_response(),
+            ) as start_mock,
+        ):
             res = client.post(
                 f"/api/reading/{M01}/start"
                 f"?include_questions=true&part=2&mock_attempt_id={MOCK_A}",

@@ -181,12 +181,20 @@ def start_test_attempt(
             user_id=current_user.id,
             skill_context=body.skill_context,
         )
-    return test_engine.start_attempt(
+    response = test_engine.start_attempt(
         mock_test_id,
         body.module,
         user_id=current_user.id,
         force_new=body.force_new,
     )
+    from app.practice.writing_skill_mock import maybe_consume_after_new_mock_start
+
+    maybe_consume_after_new_mock_start(
+        user_id=current_user.id,
+        mock_test_id=mock_test_id,
+        created_new=not bool(getattr(response, "resumed", False)),
+    )
+    return response
 
 
 @router.get("/r2-check")

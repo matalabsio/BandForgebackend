@@ -70,13 +70,30 @@ def start_writing(
         Query(description="Personalized study-plan practice (skip 12/12 mock unlock)."),
     ] = False,
 ) -> StartWritingResponse:
+    from app.practice.writing_skill_mock import (
+        assert_writing_skill_mock_for_test,
+        consume_writing_skill_mock_quota,
+    )
+    from app.security.entitlements import resolve_entitlements
+
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
-    assert_skill_program_module_start(
-        user_id=current_user.id,
-        skill_context=skill_context,
-        from_plan=from_plan,
-    )
+
+    ws_access = None
+    ent = resolve_entitlements(current_user.id)
+    if ent["writing_skill"] and not ent["full_skill_program"]:
+        # Pack-only: always enforce Writing Skill mock rules (not generic premium).
+        ws_access = assert_writing_skill_mock_for_test(
+            user_id=current_user.id, mock_test_id=mock_test_id
+        )
+    else:
+        assert_skill_program_module_start(
+            user_id=current_user.id,
+            skill_context=skill_context,
+            from_plan=from_plan,
+            mock_test_id=mock_test_id,
+        )
+
     started = perf_counter()
     timing = WritingStartTiming()
     try:
@@ -88,6 +105,22 @@ def start_writing(
             mock_attempt_id=mock_attempt_id,
             timing=timing,
         )
+        if ws_access and not response.resumed and ws_access.get("should_consume"):
+            try:
+                consume_writing_skill_mock_quota(usage_id=str(ws_access["usage_id"]))
+            except Exception:
+                # Quota lost the race — abandon the newly created attempt.
+                try:
+                    from uuid import UUID as _UUID
+
+                    from app.writing import repository as writing_repo
+
+                    writing_repo.abandon_writing_attempt(
+                        attempt_id=_UUID(str(response.attempt_id))
+                    )
+                except Exception:
+                    pass
+                raise
         _timing_log(
             "/api/writing/{mock_test_id}/start",
             started,

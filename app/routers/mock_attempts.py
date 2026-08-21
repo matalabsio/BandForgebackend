@@ -83,6 +83,7 @@ async def start_mock_attempt(
 
         allow_unpublished = get_settings().app_env.strip().lower() == "development"
         t0 = perf_counter()
+        ws_access = None
         if body.mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
             # Preserve prior behavior: no subscription reads for diagnostic UUID.
             start_ctx = await asyncio.to_thread(
@@ -94,6 +95,19 @@ async def start_mock_attempt(
             timing.fetch_start_context_ms = elapsed_ms(t0)
             timing.access_premium_ms = 0
         else:
+            from app.practice.writing_skill_mock import (
+                assert_writing_skill_mock_for_test,
+                consume_writing_skill_mock_quota,
+            )
+            from app.security.entitlements import resolve_entitlements
+
+            ent = resolve_entitlements(current_user.id)
+            if ent["writing_skill"] and not ent["full_skill_program"]:
+                ws_access = assert_writing_skill_mock_for_test(
+                    user_id=current_user.id,
+                    mock_test_id=body.mock_test_id,
+                )
+
             # One RPC: mock flags + modules + in-progress + subscription bit.
             start_ctx = await asyncio.to_thread(
                 mock_repo.fetch_mock_start_gate_context,
@@ -131,6 +145,24 @@ async def start_mock_attempt(
             timing=timing,
             start_ctx=start_ctx,
         )
+        if (
+            ws_access
+            and not response.resumed
+            and ws_access.get("should_consume")
+        ):
+            try:
+                consume_writing_skill_mock_quota(
+                    usage_id=str(ws_access["usage_id"])
+                )
+            except Exception:
+                try:
+                    await asyncio.to_thread(
+                        mock_repo.abandon_mock_attempt_session,
+                        mock_attempt_id=response.mock_attempt_id,
+                    )
+                except Exception:
+                    pass
+                raise
         timing.duration_ms = elapsed_ms(started)
         _timing_log(
             "POST /api/mock-attempts",

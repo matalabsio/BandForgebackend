@@ -200,12 +200,18 @@ def pick_hub_for_slot(
     source: str = "plan_generate",
     assigned_on: date | str | None = None,
     claim: bool = False,
+    user_exam_module: str | None = None,
+    hub_exam_module_by_id: dict[str, str | None] | None = None,
 ) -> str | None:
     """Pick the next unused Question Bank hub. Never wraps.
 
     ``day_index`` / ``completed_count`` / ``previous_hub_id`` are accepted for
     call-site compatibility and ignored. Pass mutating ``used_*`` sets so
     successive calls consume the pool uniquely.
+
+    Writing (FSP): when ``skill == writing``, the candidate pool is filtered by
+    ``users.exam_module`` vs ``practice_sets.exam_module``. NULL user track yields
+    no new Writing assignment. Listening / Reading / Speaking are unchanged.
     """
     del day_index, slot_index, completed_count, previous_hub_id
     skill = str(skill or "").strip().lower()
@@ -216,6 +222,32 @@ def pick_hub_for_slot(
 
     ids = list(hub_ids) if hub_ids is not None else list(_ordered_ids().get(skill) or [])
     mapping = dict(hub_to_set or {})
+
+    if skill == "writing":
+        from app.practice.writing_track import filter_writing_hub_ids
+
+        exam_map = hub_exam_module_by_id
+        if exam_map is None:
+            try:
+                from app.practice.catalog import get_hub_exam_modules
+
+                exam_map = get_hub_exam_modules()
+            except Exception:
+                exam_map = {}
+        track = user_exam_module
+        if track is None and user_id is not None:
+            try:
+                from app.payments.repository import get_user_exam_module
+
+                track = get_user_exam_module(user_id)
+            except Exception:
+                track = None
+        ids = filter_writing_hub_ids(
+            ids,
+            hub_exam_module_by_id=exam_map,
+            user_exam_module=track,
+        )
+
     if weak_tags:
         tags_map = hub_tags_by_id
         if tags_map is None:
@@ -364,6 +396,8 @@ def rewrite_plan_hubs(
     today: date | None = None,
     source: str = "serve_fill",
     claim: bool = True,
+    user_exam_module: str | None = None,
+    hub_exam_module_by_id: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Preserve established assignments; fill only empty eligible slots uniquely."""
     del cursors, prep_start
@@ -387,6 +421,24 @@ def rewrite_plan_hubs(
         from app.practice.catalog import get_hub_skill_tags_by_id
 
         tags_map = get_hub_skill_tags_by_id()
+
+    exam_map = hub_exam_module_by_id
+    if exam_map is None:
+        try:
+            from app.practice.catalog import get_hub_exam_modules
+
+            exam_map = get_hub_exam_modules()
+        except Exception:
+            exam_map = {}
+
+    track = user_exam_module
+    if track is None and user_id is not None:
+        try:
+            from app.payments.repository import get_user_exam_module
+
+            track = get_user_exam_module(user_id)
+        except Exception:
+            track = None
 
     ordered_pools: dict[str, list[str]] = {}
     for skill in SKILLS:
@@ -477,6 +529,8 @@ def rewrite_plan_hubs(
                 source=source,
                 assigned_on=day_date,
                 claim=do_claim,
+                user_exam_module=track,
+                hub_exam_module_by_id=exam_map,
             )
             hub_for_skill[skill] = hub
             if hub:

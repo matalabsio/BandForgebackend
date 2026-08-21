@@ -105,6 +105,13 @@ def start_listening(
             include_questions=include_questions,
             timing=timing,
         )
+        from app.practice.writing_skill_mock import maybe_consume_after_new_mock_start
+
+        maybe_consume_after_new_mock_start(
+            user_id=current_user.id,
+            mock_test_id=mock_test_id,
+            created_new=not response.resumed,
+        )
         if mock_attempt_id is not None:
             background_tasks.add_task(
                 service.schedule_stale_listening_cleanup,
