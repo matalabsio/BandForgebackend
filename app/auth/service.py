@@ -130,6 +130,13 @@ def _avatar_display_url(key: str | None) -> str | None:
 
 def _row_to_user(row: dict[str, Any]) -> UserPublic:
     target = row.get("target_band")
+    exam_raw = row.get("exam_date")
+    if hasattr(exam_raw, "isoformat"):
+        exam_date = exam_raw.isoformat()[:10]
+    elif isinstance(exam_raw, str) and exam_raw.strip():
+        exam_date = exam_raw.strip()[:10]
+    else:
+        exam_date = None
     return UserPublic(
         id=UUID(str(row["id"])),
         email=row.get("email"),
@@ -140,6 +147,7 @@ def _row_to_user(row: dict[str, Any]) -> UserPublic:
         avatar_url=row.get("avatar_url"),
         avatar_display_url=_avatar_display_url(row.get("avatar_url")),
         target_band=float(target) if target is not None else None,
+        exam_date=exam_date,
         ielts_purpose=row.get("ielts_purpose"),
         ielts_goal=row.get("ielts_goal"),
         exam_module=row.get("exam_module"),

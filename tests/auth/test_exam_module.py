@@ -28,14 +28,14 @@ def test_immigration_recommends_general_training():
     assert recommend_exam_module("immigration") == "general_training"
 
 
-def test_professional_requires_explicit_no_recommendation():
-    assert recommend_exam_module("professional") is None
-    assert requires_explicit_exam_module_choice("professional") is True
+def test_professional_recommends_general_training():
+    assert recommend_exam_module("professional") == "general_training"
+    assert requires_explicit_exam_module_choice("professional") is False
 
 
-def test_general_requires_explicit_no_recommendation():
-    assert recommend_exam_module("general") is None
-    assert requires_explicit_exam_module_choice("general") is True
+def test_general_recommends_general_training():
+    assert recommend_exam_module("general") == "general_training"
+    assert requires_explicit_exam_module_choice("general") is False
 
 
 def test_recommendation_is_soft_university_may_choose_gt():
