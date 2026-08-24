@@ -127,6 +127,7 @@ class UserPublic(BaseModel):
     avatar_url: str | None = None
     avatar_display_url: str | None = None
     target_band: float | None = None
+    exam_date: str | None = None
     ielts_purpose: IeltsPurpose | None = None
     ielts_goal: IeltsGoal | None = None
     exam_module: ExamModule | None = None

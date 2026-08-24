@@ -37,7 +37,7 @@ def _fsp_plan() -> dict:
         "id": "plan_fsp",
         "slug": "full_skill_program",
         "name": "Full Skill Program",
-        "amount": 299900,
+        "amount": 249900,
         "currency": "INR",
         "duration_days": 365,
         "is_active": True,
@@ -207,7 +207,7 @@ def test_fsp_confirm_still_schedules_plan_and_skips_usage():
         "user_id": str(USER_ID),
         "plan_id": "plan_fsp",
         "status": "created",
-        "amount": 299900,
+        "amount": 249900,
         "currency": "INR",
         "razorpay_order_id": "order_fsp",
     }
@@ -256,7 +256,7 @@ def test_fsp_confirm_still_schedules_plan_and_skips_usage():
         result = service.confirm_payment_paid(
             razorpay_order_id="order_fsp",
             razorpay_payment_id="pay_fsp",
-            captured_amount=299900,
+            captured_amount=249900,
         )
     assert result.plan_slug == "full_skill_program"
     sched.assert_called_once_with(USER_ID)
