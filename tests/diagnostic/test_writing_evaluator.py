@@ -655,6 +655,11 @@ def test_rate_limit_blocks_fourth_request():
 
 
 def test_evaluate_writing_api_response_schema():
+    from uuid import UUID
+
+    from app.auth.dependencies import get_current_user
+    from app.auth.schemas import UserPublic
+
     client = TestClient(app)
     mock_response = DiagnosticEvaluateWritingResponse(
         status="complete",
@@ -678,28 +683,44 @@ def test_evaluate_writing_api_response_schema():
         },
     )
 
-    with patch(
-        "app.routers.diagnostic.start_diagnostic_writing_evaluation",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ):
-        res = client.post(
-            "/api/diagnostic/evaluate-writing",
-            json={
-                "client_attempt_id": "attempt-api",
-                "task_part": 1,
-                "question": "The chart shows commuter transport.",
-                "essay": "This essay describes the chart in detail with enough words.",
-            },
+    def _student() -> UserPublic:
+        return UserPublic(
+            id=UUID("00000000-0000-4000-8000-0000000000a1"),
+            email="student@example.com",
+            full_name="Test Student",
+            role="student",
         )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["status"] == "complete"
-    assert body["writing_band"] == 6.5
-    assert "evaluation_source" not in body
+
+    app.dependency_overrides[get_current_user] = _student
+    try:
+        with patch(
+            "app.routers.diagnostic.start_diagnostic_writing_evaluation",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            res = client.post(
+                "/api/diagnostic/evaluate-writing",
+                json={
+                    "client_attempt_id": "attempt-api",
+                    "task_part": 1,
+                    "question": "The chart shows commuter transport.",
+                    "essay": "This essay describes the chart in detail with enough words.",
+                },
+            )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["status"] == "complete"
+        assert body["writing_band"] == 6.5
+        assert "evaluation_source" not in body
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_evaluate_writing_api_returns_202_when_pending():
+    from uuid import UUID
+
+    from app.auth.dependencies import get_current_user
+    from app.auth.schemas import UserPublic
     from app.diagnostic.evaluation_schemas import DiagnosticEvaluateWritingPendingResponse
 
     client = TestClient(app)
@@ -708,24 +729,128 @@ def test_evaluate_writing_api_returns_202_when_pending():
         client_attempt_id="attempt-pending",
     )
 
-    with patch(
-        "app.routers.diagnostic.start_diagnostic_writing_evaluation",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ):
-        res = client.post(
-            "/api/diagnostic/evaluate-writing",
-            json={
-                "client_attempt_id": "attempt-pending",
-                "task_part": 1,
-                "question": "The chart shows commuter transport.",
-                "essay": "This essay describes the chart in detail with enough words.",
-            },
+    def _student() -> UserPublic:
+        return UserPublic(
+            id=UUID("00000000-0000-4000-8000-0000000000a1"),
+            email="student@example.com",
+            full_name="Test Student",
+            role="student",
         )
-    assert res.status_code == 202
-    body = res.json()
-    assert body["status"] == "pending"
-    assert body["essay_hash"] == "abc123hash"
+
+    app.dependency_overrides[get_current_user] = _student
+    try:
+        with patch(
+            "app.routers.diagnostic.start_diagnostic_writing_evaluation",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            res = client.post(
+                "/api/diagnostic/evaluate-writing",
+                json={
+                    "client_attempt_id": "attempt-pending",
+                    "task_part": 1,
+                    "question": "The chart shows commuter transport.",
+                    "essay": "This essay describes the chart in detail with enough words.",
+                },
+            )
+        assert res.status_code == 202
+        body = res.json()
+        assert body["status"] == "pending"
+        assert body["essay_hash"] == "abc123hash"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_evaluate_writing_api_rejects_guest_with_403():
+    from uuid import UUID
+
+    from app.auth.dependencies import get_current_user
+    from app.auth.schemas import UserPublic
+
+    client = TestClient(app)
+
+    def _guest() -> UserPublic:
+        return UserPublic(
+            id=UUID("00000000-0000-4000-8000-0000000000d1"),
+            email=None,
+            full_name="Diagnostic Guest",
+            role="guest",
+        )
+
+    app.dependency_overrides[get_current_user] = _guest
+    try:
+        with patch(
+            "app.routers.diagnostic.start_diagnostic_writing_evaluation",
+            new_callable=AsyncMock,
+        ) as start_eval:
+            res = client.post(
+                "/api/diagnostic/evaluate-writing",
+                json={
+                    "client_attempt_id": "attempt-guest",
+                    "task_part": 1,
+                    "question": "The chart shows commuter transport.",
+                    "essay": "This essay describes the chart in detail with enough words.",
+                },
+            )
+        assert res.status_code == 403
+        assert "full account" in res.json()["detail"].lower()
+        start_eval.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_evaluate_writing_status_rejects_guest_with_403():
+    from uuid import UUID
+
+    from app.auth.dependencies import get_current_user
+    from app.auth.schemas import UserPublic
+
+    client = TestClient(app)
+
+    def _guest() -> UserPublic:
+        return UserPublic(
+            id=UUID("00000000-0000-4000-8000-0000000000d1"),
+            email=None,
+            full_name="Diagnostic Guest",
+            role="guest",
+        )
+
+    app.dependency_overrides[get_current_user] = _guest
+    try:
+        with patch(
+            "app.routers.diagnostic.get_diagnostic_writing_status",
+        ) as get_status:
+            res = client.get(
+                "/api/diagnostic/evaluate-writing/status",
+                params={"client_attempt_id": "attempt-guest"},
+            )
+        assert res.status_code == 403
+        assert "full account" in res.json()["detail"].lower()
+        get_status.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_assert_full_account_for_productive_diagnostic():
+    from uuid import UUID
+
+    from app.auth.schemas import UserPublic
+    from app.diagnostic.access import assert_full_account_for_productive_diagnostic
+
+    student = UserPublic(
+        id=UUID("00000000-0000-4000-8000-0000000000a1"),
+        email="student@example.com",
+        role="student",
+    )
+    assert_full_account_for_productive_diagnostic(user=student)
+
+    guest = UserPublic(
+        id=UUID("00000000-0000-4000-8000-0000000000d1"),
+        role="guest",
+    )
+    with pytest.raises(HTTPException) as exc:
+        assert_full_account_for_productive_diagnostic(user=guest)
+    assert exc.value.status_code == 403
 
 
 def test_submit_review_sets_writing_evaluation_fk():

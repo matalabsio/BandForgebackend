@@ -16,6 +16,7 @@ from app.auth.dependencies import get_current_user, get_optional_user
 from app.auth.schemas import AuthResponse, UserPublic
 from app.config import get_settings
 from app.diagnostic import service
+from app.diagnostic.access import assert_full_account_for_productive_diagnostic
 from app.diagnostic.complete import complete_diagnostic
 from app.diagnostic.schemas import (
     DiagnosticCompleteRequest,
@@ -123,12 +124,15 @@ async def diagnostic_evaluate_writing(
     request: Request,
     response: Response,
     background_tasks: BackgroundTasks,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> DiagnosticWritingEvalStartResponse:
     """Enqueue diagnostic Writing AI evaluation (or return cache hit).
 
     Returns 200 with a completed evaluation on cache hit, otherwise 202 pending.
     Poll GET /evaluate-writing/status for the finished band.
+    Full account required (mid-auth gate); guests receive 403.
     """
+    assert_full_account_for_productive_diagnostic(user=current_user)
     result = await start_diagnostic_writing_evaluation(
         body, request, background_tasks
     )
@@ -142,10 +146,12 @@ async def diagnostic_evaluate_writing(
 @router.get("/evaluate-writing/status", response_model=None)
 async def diagnostic_evaluate_writing_status(
     response: Response,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
     client_attempt_id: Annotated[str, Query(min_length=1, max_length=128)],
     essay_hash: Annotated[str | None, Query(max_length=128)] = None,
 ) -> DiagnosticWritingEvalStatusResponse:
     """Poll diagnostic Writing evaluation status for an attempt."""
+    assert_full_account_for_productive_diagnostic(user=current_user)
     result = get_diagnostic_writing_status(
         client_attempt_id=client_attempt_id,
         essay_hash=essay_hash,
