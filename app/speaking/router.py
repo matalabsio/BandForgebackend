@@ -89,15 +89,32 @@ def start_speaking(
         Query(description="Plan-origin start bypasses 12/12 unlock but requires entitlement."),
     ] = False,
 ) -> StartSpeakingResponse:
+    from app.practice.speaking_skill_mock import (
+        assert_speaking_skill_mock_for_test,
+        consume_speaking_skill_mock_quota,
+    )
+    from app.practice.writing_skill_mock import maybe_consume_after_new_mock_start
+    from app.security.entitlements import resolve_entitlements
+
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
     if mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
         assert_full_account_for_productive_diagnostic(user=current_user)
     assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
-    assert_skill_program_module_start(
-        user_id=current_user.id,
-        skill_context=skill_context,
-        from_plan=from_plan,
-    )
+
+    ss_access = None
+    ent = resolve_entitlements(current_user.id)
+    if ent["speaking_skill"] and not ent["full_skill_program"]:
+        # Pack-only: always enforce Speaking Skill mock rules (not generic premium).
+        ss_access = assert_speaking_skill_mock_for_test(
+            user_id=current_user.id, mock_test_id=mock_test_id
+        )
+    else:
+        assert_skill_program_module_start(
+            user_id=current_user.id,
+            skill_context=skill_context,
+            from_plan=from_plan,
+        )
+
     response = service.start_attempt(
         mock_test_id=mock_test_id,
         user_id=current_user.id,
@@ -106,13 +123,19 @@ def start_speaking(
         mock_attempt_id=mock_attempt_id,
         student_name=current_user.full_name,
     )
-    from app.practice.writing_skill_mock import maybe_consume_after_new_mock_start
-
-    maybe_consume_after_new_mock_start(
-        user_id=current_user.id,
-        mock_test_id=mock_test_id,
-        created_new=not response.resumed,
-    )
+    if ss_access and not response.resumed and ss_access.get("should_consume"):
+        try:
+            consume_speaking_skill_mock_quota(usage_id=str(ss_access["usage_id"]))
+        except Exception:
+            # Quota lost the race — leave attempt; client will see exhausted on retry.
+            raise
+    elif not ss_access:
+        # Writing Skill pack buyers starting a speaking module (unlikely) — Writing-only helper.
+        maybe_consume_after_new_mock_start(
+            user_id=current_user.id,
+            mock_test_id=mock_test_id,
+            created_new=not response.resumed,
+        )
     return response
 
 

@@ -26,13 +26,14 @@ SKILLS = ("listening", "reading", "writing", "speaking")
 
 FULL_SKILL_PROGRAM_SLUG = "full_skill_program"
 WRITING_SKILL_SLUG = "writing_skill"
+SPEAKING_SKILL_SLUG = "speaking_skill"
 
 # Canonical plan slug → skills granted. Pack SKUs are recognized here so the
 # resolver is ready before plans rows are activated; unknown slugs grant nothing.
 PLAN_SKILL_GRANTS: dict[str, frozenset[str]] = {
     FULL_SKILL_PROGRAM_SLUG: frozenset(SKILLS),
     WRITING_SKILL_SLUG: frozenset({"writing"}),
-    "speaking_skill": frozenset({"speaking"}),
+    SPEAKING_SKILL_SLUG: frozenset({"speaking"}),
     "dual_bundle": frozenset({"writing", "speaking"}),
     "all_skills_bundle": frozenset(SKILLS),
 }
@@ -49,6 +50,7 @@ class Entitlements(TypedDict):
     plans: list[str]
     skills: SkillEntitlements
     writing_skill: bool
+    speaking_skill: bool
     full_skill_program: bool
 
 
@@ -97,6 +99,7 @@ def resolve_entitlements(user_id: UUID) -> Entitlements:
         "plans": plan_slugs,
         "skills": skills,
         "writing_skill": WRITING_SKILL_SLUG in seen,
+        "speaking_skill": SPEAKING_SKILL_SLUG in seen,
         "full_skill_program": FULL_SKILL_PROGRAM_SLUG in seen,
     }
 
@@ -185,8 +188,8 @@ def enforce_premium_mock_flags(
     Pass ``subscription_active`` when already known (e.g. gate-context RPC) to
     skip a separate subscriptions lookup.
 
-    Writing Skill pack (without FSP) cannot use generic premium subscription access;
-    only the allotted Writing Skill mock may pass this gate.
+    Writing / Speaking Skill packs (without FSP) cannot use generic premium
+    subscription access; only the allotted pack mock may pass this gate.
     """
     if mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
         return
@@ -199,12 +202,33 @@ def enforce_premium_mock_flags(
         return
 
     ent = resolve_entitlements(user.id)
-    if ent["writing_skill"] and not ent["full_skill_program"]:
+    if ent["full_skill_program"]:
+        subscribed = (
+            subscription_active
+            if subscription_active is not None
+            else has_active_subscription(user.id)
+        )
+        if not subscribed:
+            raise HTTPException(
+                status.HTTP_402_PAYMENT_REQUIRED,
+                detail="An active subscription is required to access this mock test.",
+            )
+        return
+
+    if ent["writing_skill"]:
         # Pack-only: same rules as writing/mock-attempts (course + allotment + quota).
         # Do not allow L/R/S/module starts to bypass via allotment-only checks.
         from app.practice.writing_skill_mock import assert_writing_skill_mock_for_test
 
         assert_writing_skill_mock_for_test(
+            user_id=user.id, mock_test_id=mock_test_id
+        )
+        return
+
+    if ent["speaking_skill"]:
+        from app.practice.speaking_skill_mock import assert_speaking_skill_mock_for_test
+
+        assert_speaking_skill_mock_for_test(
             user_id=user.id, mock_test_id=mock_test_id
         )
         return

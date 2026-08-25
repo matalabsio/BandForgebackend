@@ -31,6 +31,7 @@ def test_resolve_entitlements_no_subscriptions():
             "speaking": False,
         }
         assert ent["writing_skill"] is False
+        assert ent["speaking_skill"] is False
         assert ent["full_skill_program"] is False
         assert has_full_skill_program(USER_ID) is False
         assert has_writing_skill(USER_ID) is False
@@ -45,6 +46,7 @@ def test_resolve_entitlements_fsp_only():
         assert ent["plans"] == ["full_skill_program"]
         assert ent["full_skill_program"] is True
         assert ent["writing_skill"] is False
+        assert ent["speaking_skill"] is False
         assert ent["skills"]["writing"] is True
         assert ent["skills"]["listening"] is True
         assert ent["skills"]["reading"] is True
@@ -61,6 +63,7 @@ def test_resolve_entitlements_writing_skill_only():
         ent = resolve_entitlements(USER_ID)
         assert ent["plans"] == ["writing_skill"]
         assert ent["writing_skill"] is True
+        assert ent["speaking_skill"] is False
         assert ent["full_skill_program"] is False
         assert ent["skills"]["writing"] is True
         assert ent["skills"]["listening"] is False
@@ -68,6 +71,24 @@ def test_resolve_entitlements_writing_skill_only():
         assert ent["skills"]["speaking"] is False
         assert has_full_skill_program(USER_ID) is False
         assert has_writing_skill(USER_ID) is True
+
+
+def test_resolve_entitlements_speaking_skill_only():
+    with patch(
+        "app.payments.repository.list_active_subscriptions",
+        return_value=[_sub("speaking_skill")],
+    ):
+        ent = resolve_entitlements(USER_ID)
+        assert ent["plans"] == ["speaking_skill"]
+        assert ent["speaking_skill"] is True
+        assert ent["writing_skill"] is False
+        assert ent["full_skill_program"] is False
+        assert ent["skills"]["speaking"] is True
+        assert ent["skills"]["writing"] is False
+        assert ent["skills"]["listening"] is False
+        assert ent["skills"]["reading"] is False
+        assert has_full_skill_program(USER_ID) is False
+        assert has_writing_skill(USER_ID) is False
 
 
 def test_resolve_entitlements_fsp_and_writing_skill_simultaneously():
@@ -188,6 +209,7 @@ def test_get_subscription_attaches_multi_sku_entitlements_independent_of_primary
                     "speaking": True,
                 },
                 "writing_skill": True,
+                "speaking_skill": False,
                 "full_skill_program": True,
             },
         ),
@@ -200,4 +222,5 @@ def test_get_subscription_attaches_multi_sku_entitlements_independent_of_primary
     assert out.plan_slug == "writing_skill"
     assert out.entitlements.full_skill_program is True
     assert out.entitlements.writing_skill is True
+    assert out.entitlements.speaking_skill is False
     assert out.entitlements.skills["writing"] is True

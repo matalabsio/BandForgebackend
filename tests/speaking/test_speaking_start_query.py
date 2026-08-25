@@ -62,8 +62,20 @@ def test_start_speaking_forwards_from_plan_to_skill_gate():
         with (
             patch("app.speaking.router.assert_mock_access", return_value=None),
             patch("app.speaking.router.assert_premium_mock_access", return_value=None),
+            patch(
+                "app.security.entitlements.resolve_entitlements",
+                return_value={
+                    "writing_skill": False,
+                    "speaking_skill": False,
+                    "full_skill_program": True,
+                },
+            ),
             patch("app.speaking.router.service.start_attempt", return_value=_start_response()),
             patch("app.speaking.router.assert_skill_program_module_start", return_value=None) as gate_mock,
+            patch(
+                "app.practice.writing_skill_mock.maybe_consume_after_new_mock_start",
+                return_value=None,
+            ),
         ):
             res = client.post(
                 f"/api/speaking/{M01}/start"

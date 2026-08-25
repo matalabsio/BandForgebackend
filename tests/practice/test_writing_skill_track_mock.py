@@ -45,6 +45,7 @@ def _ent(*, writing_skill: bool = True, fsp: bool = False) -> Entitlements:
             "speaking": fsp,
         },
         "writing_skill": writing_skill,
+        "speaking_skill": False,
         "full_skill_program": fsp,
     }
 

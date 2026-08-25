@@ -1,7 +1,7 @@
-"""Practice access policy: FSP vs Writing Skill pack modes.
+"""Practice access policy: FSP vs Writing / Speaking Skill pack modes.
 
 FSP keeps the existing soft-repeat catalogue path.
-Writing Skill uses program_content_items + hard sequential unlock.
+Pack SKUs use program_content_items + hard sequential unlock.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
 from app.security.entitlements import resolve_entitlements
 
-PracticeAccessMode = Literal["fsp", "writing_skill"]
+PracticeAccessMode = Literal["fsp", "writing_skill", "speaking_skill"]
 
 SKILLS = frozenset({"listening", "reading", "writing", "speaking"})
 
@@ -43,7 +43,7 @@ def resolve_practice_skill_access(*, user_id: UUID, skill: str) -> PracticeAcces
     """Return access mode for a skill, or raise 403.
 
     FSP wins when present (existing soft-repeat catalogue).
-    Writing Skill pack grants writing only via the hard-sequence course path.
+    Writing / Speaking Skill packs grant their skill via the hard-sequence course path.
     """
     skill = str(skill or "").strip().lower()
     if skill not in SKILLS:
@@ -61,6 +61,9 @@ def resolve_practice_skill_access(*, user_id: UUID, skill: str) -> PracticeAcces
 
     if skill == "writing" and ent["writing_skill"]:
         return "writing_skill"
+
+    if skill == "speaking" and ent["speaking_skill"]:
+        return "speaking_skill"
 
     # Entitled via some other future pack mapping — treat as denied until wired.
     raise HTTPException(
