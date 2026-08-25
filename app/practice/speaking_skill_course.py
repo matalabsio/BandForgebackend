@@ -1,0 +1,155 @@
+"""Speaking Skill pack course pool and hard sequential unlock."""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import UUID
+
+from fastapi import HTTPException, status
+
+from app.payments.constants import SPEAKING_SKILL_SLUG
+from app.practice import repository
+
+NOT_IN_PROGRAM_DETAIL = "This practice set is not part of your Speaking Skill program."
+LOCKED_HUB_MESSAGE = "Complete the previous practice set to unlock this one."
+
+
+def get_speaking_skill_course_context(user_id: UUID) -> dict[str, Any]:
+    """Active speaking_skill subscription + usage row (exam_module always unused)."""
+    from app.payments import repository as payments_repo
+
+    for sub in payments_repo.list_active_subscriptions(user_id):
+        plans = sub.get("plans") or {}
+        if not isinstance(plans, dict):
+            continue
+        if plans.get("slug") != SPEAKING_SKILL_SLUG:
+            continue
+        sub_id = sub.get("id")
+        plan_id = sub.get("plan_id")
+        if not sub_id or not plan_id:
+            continue
+        usage = payments_repo.get_user_program_usage_by_subscription(sub_id)
+        return {
+            "subscription_id": str(sub_id),
+            "plan_id": str(plan_id),
+            "usage": usage,
+        }
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        detail="Speaking Skill entitlement required.",
+    )
+
+
+def list_speaking_skill_program_items(*, plan_id: str) -> list[dict[str, Any]]:
+    """Active practice_hub attachments for Speaking Skill (no track filter).
+
+    Prefer ``exam_module='both'`` when present; also accept academic/GT tags so
+    inventory attached before track conventions settle still resolves.
+    """
+    from app.db.supabase_client import get_supabase
+
+    sb = get_supabase()
+    result = (
+        sb.table("program_content_items")
+        .select("id, item_id, exam_module, sort_order, is_active, item_type")
+        .eq("plan_id", str(plan_id))
+        .eq("item_type", "practice_hub")
+        .eq("is_active", True)
+        .in_("exam_module", ["both", "academic", "general_training"])
+        .order("sort_order")
+        .execute()
+    )
+    return list(result.data or [])
+
+
+def list_speaking_skill_hub_rows(*, user_id: UUID) -> list[dict[str, Any]]:
+    """Ordered, validated Speaking Skill hubs for the purchase program.
+
+    Returns [] when inventory is empty. Does not require exam_module.
+    """
+    ctx = get_speaking_skill_course_context(user_id)
+    items = list_speaking_skill_program_items(plan_id=str(ctx["plan_id"]))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        hub_id = str(item.get("item_id") or "")
+        if not hub_id or hub_id in seen:
+            continue
+        row = repository.get_hub_by_id(hub_id)
+        if not row or not repository.is_hub_assignable(row):
+            continue
+        flat_skill = repository._flatten_hub_row(row).get("skill")
+        if flat_skill != "speaking":
+            continue
+        stamped = dict(row)
+        stamped["_program_sort_order"] = int(item.get("sort_order") or 0)
+        stamped["_program_exam_module"] = str(item.get("exam_module") or "both")
+        out.append(stamped)
+        seen.add(hub_id)
+    out.sort(key=lambda r: int(r.get("_program_sort_order") or 0))
+    return out
+
+
+def speaking_skill_ordered_hub_ids(hub_rows: list[dict[str, Any]]) -> list[str]:
+    return [str(repository._flatten_hub_row(r)["id"]) for r in hub_rows]
+
+
+def accessible_speaking_skill_hub_ids(
+    *,
+    ordered_hub_ids: list[str],
+    progress_map: dict[str, dict[str, Any]],
+) -> set[str]:
+    """Hard sequential: completed stay open; only next incomplete is unlocked."""
+    accessible: set[str] = set()
+    unlocked_next = True
+    for hub_id in ordered_hub_ids:
+        status = str(progress_map.get(hub_id, {}).get("status") or "pending")
+        if status == "completed":
+            accessible.add(hub_id)
+            continue
+        if unlocked_next:
+            accessible.add(hub_id)
+            unlocked_next = False
+    return accessible
+
+
+def assert_speaking_skill_hub_accessible(
+    *, user_id: UUID, hub_id: str
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Server-side hard sequence for Speaking Skill (deep-link safe)."""
+    hub_id = str(hub_id)
+    row = repository.get_hub_by_id(hub_id)
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hub not found")
+
+    flat = repository._flatten_hub_row(row)
+    if flat.get("skill") != "speaking":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Your plan does not include this practice skill.",
+        )
+
+    hub_rows = list_speaking_skill_hub_rows(user_id=user_id)
+    ordered_ids = speaking_skill_ordered_hub_ids(hub_rows)
+    if hub_id not in ordered_ids:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=NOT_IN_PROGRAM_DETAIL,
+        )
+
+    progress_map = repository.get_user_progress_map(user_id)
+    allowed = accessible_speaking_skill_hub_ids(
+        ordered_hub_ids=ordered_ids, progress_map=progress_map
+    )
+    if hub_id not in allowed:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=LOCKED_HUB_MESSAGE,
+        )
+
+    for stamped in hub_rows:
+        if str(stamped.get("id")) == hub_id:
+            flat_out = repository._flatten_hub_row(stamped)
+            flat_out["sort_order"] = int(stamped.get("_program_sort_order") or 0)
+            return flat_out, progress_map
+    return flat, progress_map

@@ -27,6 +27,13 @@ from app.practice.writing_skill_course import (
     list_writing_skill_hub_rows,
     writing_skill_ordered_hub_ids,
 )
+from app.practice.speaking_skill_course import (
+    LOCKED_HUB_MESSAGE as SPEAKING_SKILL_LOCKED_MESSAGE,
+    accessible_speaking_skill_hub_ids,
+    assert_speaking_skill_hub_accessible,
+    list_speaking_skill_hub_rows,
+    speaking_skill_ordered_hub_ids,
+)
 
 SKILLS = repository.SKILLS
 
@@ -78,7 +85,7 @@ def _assert_hub_accessible_with_progress(
     Sequential unlock remains for catalogue list `accessible` flags only.
     Prefer assignable-catalogue membership over re-running content gates.
 
-    Writing Skill pack users are routed to hard-sequence enforcement instead.
+    Writing / Speaking Skill pack users are routed to hard-sequence enforcement instead.
     """
     row = repository.get_hub_by_id(hub_id)
     if not row:
@@ -91,6 +98,8 @@ def _assert_hub_accessible_with_progress(
     mode = resolve_practice_skill_access(user_id=user_id, skill=str(skill))
     if mode == "writing_skill":
         return assert_writing_skill_hub_accessible(user_id=user_id, hub_id=hub_id)
+    if mode == "speaking_skill":
+        return assert_speaking_skill_hub_accessible(user_id=user_id, hub_id=hub_id)
 
     # Fast path: hub already in difficulty-ordered assignable catalogue
     try:
@@ -183,7 +192,7 @@ def skill_progress(
 def _skill_progress_for_access_mode(
     *, user_id: UUID, skill: str
 ) -> SkillHubProgressOut:
-    """Skill progress using FSP catalogue or Writing Skill program pool."""
+    """Skill progress using FSP catalogue or pack program pool."""
     mode = resolve_practice_skill_access(user_id=user_id, skill=skill)
     if mode == "writing_skill":
         rows = list_writing_skill_hub_rows(user_id=user_id)
@@ -196,6 +205,23 @@ def _skill_progress_for_access_mode(
         )
         return SkillHubProgressOut(
             skill="writing",
+            completed_count=completed,
+            total_count=len(flat),
+            required_for_mock=0,
+            mock_unlocked=False,
+            mock_test_id=None,
+        )
+    if mode == "speaking_skill":
+        rows = list_speaking_skill_hub_rows(user_id=user_id)
+        progress = repository.get_user_progress_map(user_id)
+        flat = [repository._flatten_hub_row(h) for h in rows]
+        completed = sum(
+            1
+            for h in flat
+            if progress.get(str(h["id"]), {}).get("status") == "completed"
+        )
+        return SkillHubProgressOut(
+            skill="speaking",
             completed_count=completed,
             total_count=len(flat),
             required_for_mock=0,
@@ -238,6 +264,25 @@ def all_skill_progress(user_id: UUID) -> PracticeProgressOut:
             skills_out.append(
                 SkillHubProgressOut(
                     skill="writing",
+                    completed_count=completed,
+                    total_count=len(flat),
+                    required_for_mock=0,
+                    mock_unlocked=False,
+                    mock_test_id=None,
+                )
+            )
+            continue
+        if skill == "speaking" and ent["speaking_skill"]:
+            rows = list_speaking_skill_hub_rows(user_id=user_id)
+            flat = [repository._flatten_hub_row(h) for h in rows]
+            completed = sum(
+                1
+                for h in flat
+                if progress.get(str(h["id"]), {}).get("status") == "completed"
+            )
+            skills_out.append(
+                SkillHubProgressOut(
+                    skill="speaking",
                     completed_count=completed,
                     total_count=len(flat),
                     required_for_mock=0,
@@ -313,6 +358,20 @@ def mock_unlock_status(*, user_id: UUID, skill: str) -> MockUnlockOut:
             mocks_used=raw.get("mocks_used"),
             exam_module=raw.get("exam_module"),  # type: ignore[arg-type]
         )
+    if mode == "speaking_skill":
+        from app.practice.speaking_skill_mock import speaking_skill_mock_unlock_status
+
+        raw = speaking_skill_mock_unlock_status(user_id=user_id)
+        return MockUnlockOut(
+            skill="speaking",
+            unlocked=bool(raw["unlocked"]),
+            completed=int(raw["completed"]),
+            required=int(raw["required"]),
+            mock_test_id=raw.get("mock_test_id"),
+            mocks_granted=raw.get("mocks_granted"),
+            mocks_used=raw.get("mocks_used"),
+            exam_module=raw.get("exam_module"),  # type: ignore[arg-type]
+        )
 
     prog = skill_progress(user_id=user_id, skill=skill)
     return MockUnlockOut(
@@ -338,6 +397,13 @@ def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut
             ordered_hub_ids=ordered_ids, progress_map=progress
         )
         lock_message = WRITING_SKILL_LOCKED_MESSAGE
+    elif mode == "speaking_skill":
+        rows = list_speaking_skill_hub_rows(user_id=user_id)
+        ordered_ids = speaking_skill_ordered_hub_ids(rows)
+        allowed = accessible_speaking_skill_hub_ids(
+            ordered_hub_ids=ordered_ids, progress_map=progress
+        )
+        lock_message = SPEAKING_SKILL_LOCKED_MESSAGE
     else:
         rows = repository.list_hubs_for_skill(skill)
         allowed = accessible_hub_ids_for_skill(
@@ -357,7 +423,7 @@ def list_hubs_with_progress(*, user_id: UUID, skill: str) -> list[PracticeHubOut
         is_accessible = hub_id in allowed
         sort_order = (
             int(row.get("_program_sort_order") or flat["sort_order"])
-            if mode == "writing_skill"
+            if mode in ("writing_skill", "speaking_skill")
             else flat["sort_order"]
         )
         out.append(

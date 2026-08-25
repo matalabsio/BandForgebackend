@@ -1,0 +1,299 @@
+"""Speaking Skill mock unlock, allotment, and atomic quota consumption."""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import UUID
+
+from fastapi import HTTPException, status
+
+from app.practice.speaking_skill_course import (
+    get_speaking_skill_course_context,
+    list_speaking_skill_hub_rows,
+)
+from app.security.entitlements import resolve_entitlements
+
+MOCK_QUOTA_EXHAUSTED_DETAIL = "Speaking Skill mock quota has already been used."
+MOCK_NOT_CONFIGURED_DETAIL = "No Speaking Skill mock is configured for your program."
+MOCK_NOT_ALLOTTED_DETAIL = "This mock is not part of your Speaking Skill program."
+COURSE_INCOMPLETE_DETAIL = (
+    "Complete all Speaking Skill practice sets to unlock your mock."
+)
+
+
+def speaking_skill_course_completion(
+    *, user_id: UUID
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """Return (completed, total, hub_rows) from the Speaking Skill program pool."""
+    rows = list_speaking_skill_hub_rows(user_id=user_id)
+    from app.practice import repository
+
+    progress = repository.get_user_progress_map(user_id)
+    completed = 0
+    for row in rows:
+        hid = str(repository._flatten_hub_row(row)["id"])
+        if progress.get(hid, {}).get("status") == "completed":
+            completed += 1
+    return completed, len(rows), rows
+
+
+def list_speaking_skill_mock_items(*, plan_id: str) -> list[dict[str, Any]]:
+    from app.db.supabase_client import get_supabase
+
+    sb = get_supabase()
+    result = (
+        sb.table("program_content_items")
+        .select("id, item_id, exam_module, sort_order, is_active, item_type")
+        .eq("plan_id", str(plan_id))
+        .eq("item_type", "mock_test")
+        .eq("is_active", True)
+        .in_("exam_module", ["both", "academic", "general_training"])
+        .order("sort_order")
+        .execute()
+    )
+    return list(result.data or [])
+
+
+def resolve_speaking_skill_mock_test_id(*, user_id: UUID) -> str:
+    """Resolve the allotted mock_test id for the user's Speaking Skill program."""
+    ctx = get_speaking_skill_course_context(user_id)
+    items = list_speaking_skill_mock_items(plan_id=str(ctx["plan_id"]))
+    for item in items:
+        mock_id = str(item.get("item_id") or "").strip()
+        if not mock_id:
+            continue
+        from app.db.supabase_client import get_supabase
+
+        row = (
+            get_supabase()
+            .table("mock_tests")
+            .select("id")
+            .eq("id", mock_id)
+            .limit(1)
+            .execute()
+        )
+        if row.data:
+            return mock_id
+    raise HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=MOCK_NOT_CONFIGURED_DETAIL,
+    )
+
+
+def is_speaking_skill_allotted_mock(*, user_id: UUID, mock_test_id: UUID | str) -> bool:
+    try:
+        allotted = resolve_speaking_skill_mock_test_id(user_id=user_id)
+    except HTTPException:
+        return False
+    return str(allotted) == str(mock_test_id)
+
+
+def user_has_attempt_for_mock(*, user_id: UUID, mock_test_id: UUID | str) -> bool:
+    """True when the user already started this mock (any module / mock_attempt)."""
+    from app.db.supabase_client import get_supabase
+
+    sb = get_supabase()
+    ma = (
+        sb.table("mock_attempts")
+        .select("id")
+        .eq("user_id", str(user_id))
+        .eq("mock_test_id", str(mock_test_id))
+        .limit(1)
+        .execute()
+    )
+    if ma.data:
+        return True
+    ta = (
+        sb.table("test_attempts")
+        .select("id")
+        .eq("user_id", str(user_id))
+        .eq("mock_test_id", str(mock_test_id))
+        .limit(1)
+        .execute()
+    )
+    return bool(ta.data)
+
+
+def assert_speaking_skill_mock_access(*, user_id: UUID) -> dict[str, Any]:
+    """Deny unless entitlement, usage, course complete, and quota remain."""
+    ent = resolve_entitlements(user_id)
+    if not ent["speaking_skill"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill entitlement required.",
+        )
+    if ent["full_skill_program"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill mock quota does not apply to Full Skill Program.",
+        )
+
+    ctx = get_speaking_skill_course_context(user_id)
+    usage = ctx.get("usage")
+    if not usage:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill program usage not found.",
+        )
+
+    completed, total, _rows = speaking_skill_course_completion(user_id=user_id)
+    if total <= 0 or completed < total:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": COURSE_INCOMPLETE_DETAIL,
+                "completed": completed,
+                "required": total,
+            },
+        )
+
+    granted = int(usage.get("mocks_granted") or 0)
+    used = int(usage.get("mocks_used") or 0)
+    if granted <= 0 or used >= granted:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=MOCK_QUOTA_EXHAUSTED_DETAIL,
+        )
+
+    mock_test_id = resolve_speaking_skill_mock_test_id(user_id=user_id)
+    return {
+        "usage": usage,
+        "usage_id": str(usage["id"]),
+        "mock_test_id": mock_test_id,
+        "completed": completed,
+        "required": total,
+        "mocks_granted": granted,
+        "mocks_used": used,
+    }
+
+
+def assert_speaking_skill_mock_for_test(
+    *, user_id: UUID, mock_test_id: UUID | str
+) -> dict[str, Any]:
+    """Authorize start/resume of the allotted Speaking Skill mock."""
+    ent = resolve_entitlements(user_id)
+    if not ent["speaking_skill"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill entitlement required.",
+        )
+    if ent["full_skill_program"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill mock quota does not apply to Full Skill Program.",
+        )
+
+    ctx = get_speaking_skill_course_context(user_id)
+    usage = ctx.get("usage")
+    if not usage:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill program usage not found.",
+        )
+
+    completed, total, _rows = speaking_skill_course_completion(user_id=user_id)
+    if total <= 0 or completed < total:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": COURSE_INCOMPLETE_DETAIL,
+                "completed": completed,
+                "required": total,
+            },
+        )
+
+    allotted = resolve_speaking_skill_mock_test_id(user_id=user_id)
+    if str(allotted) != str(mock_test_id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=MOCK_NOT_ALLOTTED_DETAIL,
+        )
+
+    granted = int(usage.get("mocks_granted") or 0)
+    used = int(usage.get("mocks_used") or 0)
+    prior = user_has_attempt_for_mock(user_id=user_id, mock_test_id=mock_test_id)
+    if granted <= 0:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=MOCK_QUOTA_EXHAUSTED_DETAIL,
+        )
+    if used >= granted and not prior:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=MOCK_QUOTA_EXHAUSTED_DETAIL,
+        )
+
+    return {
+        "usage": usage,
+        "usage_id": str(usage["id"]),
+        "mock_test_id": allotted,
+        "completed": completed,
+        "required": total,
+        "mocks_granted": granted,
+        "mocks_used": used,
+        "should_consume": used < granted and not prior,
+    }
+
+
+def consume_speaking_skill_mock_quota(*, usage_id: str) -> dict[str, Any]:
+    """Atomic consume; raises 403 if quota exhausted (concurrent loser)."""
+    from app.payments import repository as payments_repo
+
+    row = payments_repo.consume_user_program_mock_quota_atomic(usage_id=usage_id)
+    if not row:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=MOCK_QUOTA_EXHAUSTED_DETAIL,
+        )
+    return row
+
+
+def speaking_skill_mock_unlock_status(*, user_id: UUID) -> dict[str, Any]:
+    """Status payload for practice mock-unlock (no consumption)."""
+    ent = resolve_entitlements(user_id)
+    if not ent["speaking_skill"] or ent["full_skill_program"]:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Speaking Skill mock status requires Speaking Skill entitlement.",
+        )
+    ctx = get_speaking_skill_course_context(user_id)
+    completed, total, _ = speaking_skill_course_completion(user_id=user_id)
+    usage = ctx.get("usage") or {}
+    granted = int(usage.get("mocks_granted") or 0)
+    used = int(usage.get("mocks_used") or 0)
+    quota_ok = granted > 0 and used < granted
+    course_ok = total > 0 and completed >= total
+    mock_test_id: str | None = None
+    if course_ok and quota_ok:
+        try:
+            mock_test_id = resolve_speaking_skill_mock_test_id(user_id=user_id)
+        except HTTPException:
+            mock_test_id = None
+    unlocked = bool(course_ok and quota_ok and mock_test_id)
+    return {
+        "skill": "speaking",
+        "unlocked": unlocked,
+        "completed": completed,
+        "required": total,
+        "mock_test_id": mock_test_id if unlocked else None,
+        "mocks_granted": granted,
+        "mocks_used": used,
+        "exam_module": None,
+    }
+
+
+def maybe_consume_speaking_after_new_mock_start(
+    *, user_id: UUID, mock_test_id: UUID | str, created_new: bool
+) -> None:
+    """Consume Speaking Skill quota only when a new attempt was created."""
+    if not created_new:
+        return
+    ent = resolve_entitlements(user_id)
+    if ent["full_skill_program"] or not ent["speaking_skill"]:
+        return
+    access = assert_speaking_skill_mock_for_test(
+        user_id=user_id, mock_test_id=mock_test_id
+    )
+    if not access.get("should_consume"):
+        return
+    consume_speaking_skill_mock_quota(usage_id=str(access["usage_id"]))

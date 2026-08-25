@@ -1112,7 +1112,29 @@ def generate_personalized_plan(
 
     exam_date = _parse_date(user_row.get("exam_date"))
     if exam_date is None:
-        raise HTTPException(status_code=400, detail="Exam date is required before generating a study plan")
+        # Safety net when diagnostic lead sync raced ahead of payment fulfillment.
+        exam_date = date.today() + timedelta(days=90)
+        exam_iso = exam_date.isoformat()
+        logger.warning(
+            "personalized plan: missing users.exam_date for %s; defaulting to %s",
+            user_id,
+            exam_iso,
+        )
+        try:
+            client = get_supabase()
+            execute_with_retry(
+                lambda: (
+                    client.table("users")
+                    .update({"exam_date": exam_iso})
+                    .eq("id", str(user_id))
+                    .execute()
+                )
+            )
+        except Exception:
+            logger.exception(
+                "personalized plan: failed to persist default exam_date for %s",
+                user_id,
+            )
 
     target = user_row.get("target_band")
     try:

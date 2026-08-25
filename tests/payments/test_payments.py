@@ -1340,6 +1340,7 @@ def _no_writing_skill_entitlements():
             "speaking": False,
         },
         "writing_skill": False,
+        "speaking_skill": False,
         "full_skill_program": False,
     }
 

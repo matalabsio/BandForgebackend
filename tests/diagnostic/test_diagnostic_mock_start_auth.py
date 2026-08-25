@@ -147,7 +147,11 @@ def test_full_account_writing_diagnostic_start_succeeds():
         with (
             patch(
                 "app.security.entitlements.resolve_entitlements",
-                return_value={"writing_skill": False, "full_skill_program": False},
+                return_value={
+                    "writing_skill": False,
+                    "speaking_skill": False,
+                    "full_skill_program": False,
+                },
             ),
             patch(
                 "app.writing.router.assert_skill_program_module_start",
@@ -262,7 +266,11 @@ def test_full_account_non_diagnostic_writing_start_unchanged():
             patch("app.writing.router.assert_premium_mock_access", return_value=None),
             patch(
                 "app.security.entitlements.resolve_entitlements",
-                return_value={"writing_skill": False, "full_skill_program": False},
+                return_value={
+                    "writing_skill": False,
+                    "speaking_skill": False,
+                    "full_skill_program": False,
+                },
             ),
             patch(
                 "app.writing.router.assert_skill_program_module_start",

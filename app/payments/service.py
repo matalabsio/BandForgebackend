@@ -18,6 +18,8 @@ from app.payments.constants import (
     PAYMENT_REFUNDED,
     SUBSCRIPTION_ACTIVE,
     FULL_SKILL_PROGRAM_SLUG,
+    SPEAKING_SKILL_DEFAULT_MOCK_QUOTA,
+    SPEAKING_SKILL_SLUG,
     WRITING_SKILL_DEFAULT_MOCK_QUOTA,
     WRITING_SKILL_SLUG,
 )
@@ -347,6 +349,70 @@ def _ensure_writing_skill_usage_after_fulfillment(
     )
 
 
+def _ensure_speaking_skill_usage_after_fulfillment(
+    *,
+    user_id: UUID,
+    payment: dict[str, Any],
+    plan: dict[str, Any] | None,
+    subscription_id: str | None,
+) -> None:
+    """Create user_program_usage for speaking_skill only (idempotent).
+
+    Speaking has no Academic/GT fork — exam_module stays NULL.
+    FSP and other plans are no-ops. Does not schedule personalized plans.
+    """
+    if not plan or plan.get("slug") != SPEAKING_SKILL_SLUG:
+        return
+    if not subscription_id:
+        payment_log(
+            "SPEAKING_SKILL_USAGE_SKIPPED",
+            user_id=str(user_id),
+            payment_id=str(payment.get("id") or ""),
+            reason="missing_subscription_id",
+        )
+        return
+
+    usage = repository.ensure_user_program_usage(
+        user_id=user_id,
+        subscription_id=subscription_id,
+        plan_id=plan["id"],
+        exam_module=None,
+        mocks_granted=SPEAKING_SKILL_DEFAULT_MOCK_QUOTA,
+    )
+    payment_log(
+        "SPEAKING_SKILL_USAGE_ENSURED",
+        user_id=str(user_id),
+        payment_id=str(payment.get("id") or ""),
+        subscription_id=str(subscription_id),
+        usage_id=str(usage.get("id") or ""),
+        mocks_granted=int(usage.get("mocks_granted") or 0),
+        mocks_used=int(usage.get("mocks_used") or 0),
+        exam_module=None,
+    )
+
+
+def _ensure_pack_usage_after_fulfillment(
+    *,
+    user_id: UUID,
+    payment: dict[str, Any],
+    plan: dict[str, Any] | None,
+    subscription_id: str | None,
+) -> None:
+    """Dispatch pack SKU usage heal/create (Writing + Speaking)."""
+    _ensure_writing_skill_usage_after_fulfillment(
+        user_id=user_id,
+        payment=payment,
+        plan=plan,
+        subscription_id=subscription_id,
+    )
+    _ensure_speaking_skill_usage_after_fulfillment(
+        user_id=user_id,
+        payment=payment,
+        plan=plan,
+        subscription_id=subscription_id,
+    )
+
+
 def confirm_payment_paid(
     *,
     razorpay_order_id: str,
@@ -413,7 +479,7 @@ def confirm_payment_paid(
                 if payment.get("plan_id")
                 else None
             )
-            _ensure_writing_skill_usage_after_fulfillment(
+            _ensure_pack_usage_after_fulfillment(
                 user_id=payment_user_id,
                 payment=payment,
                 plan=plan_early,
@@ -454,12 +520,12 @@ def confirm_payment_paid(
     )
     repository.invalidate_active_subscription_cache(payment_user_id)
 
-    if plan.get("slug") == WRITING_SKILL_SLUG:
+    if plan.get("slug") in (WRITING_SKILL_SLUG, SPEAKING_SKILL_SLUG):
         subscription_id = _subscription_id_for_payment(
             payment_id=payment["id"],
             bundle_result=bundle_result if isinstance(bundle_result, dict) else None,
         )
-        _ensure_writing_skill_usage_after_fulfillment(
+        _ensure_pack_usage_after_fulfillment(
             user_id=payment_user_id,
             payment=payment,
             plan=plan,
@@ -580,6 +646,7 @@ def get_subscription(*, user_id: UUID) -> SubscriptionOut:
         plans=list(resolved["plans"]),
         skills=dict(resolved["skills"]),
         writing_skill=bool(resolved["writing_skill"]),
+        speaking_skill=bool(resolved["speaking_skill"]),
         full_skill_program=bool(resolved["full_skill_program"]),
     )
 

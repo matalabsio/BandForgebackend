@@ -105,6 +105,7 @@ class EntitlementsOut(BaseModel):
         }
     )
     writing_skill: bool = False
+    speaking_skill: bool = False
     full_skill_program: bool = False
 
 
