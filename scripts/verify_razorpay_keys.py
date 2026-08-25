@@ -4,6 +4,12 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# Allow `python scripts/verify_razorpay_keys.py` from backend/ without PYTHONPATH.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from app.config import reload_settings
 from app.payments.razorpay_client import clear_client_cache, probe_credentials

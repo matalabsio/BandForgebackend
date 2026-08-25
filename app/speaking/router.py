@@ -9,7 +9,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import UserPublic
-from app.diagnostic.access import assert_mock_access
+from app.diagnostic.access import (
+    assert_full_account_for_productive_diagnostic,
+    assert_mock_access,
+)
+from app.diagnostic.constants import DIAGNOSTIC_MOCK_TEST_ID
 from app.notifications import preferences
 from app.security.entitlements import assert_premium_mock_access
 from app.security.rate_limit import enforce_speaking_submit_rate_limit
@@ -86,6 +90,8 @@ def start_speaking(
     ] = False,
 ) -> StartSpeakingResponse:
     assert_mock_access(user=current_user, mock_test_id=mock_test_id)
+    if mock_test_id == DIAGNOSTIC_MOCK_TEST_ID:
+        assert_full_account_for_productive_diagnostic(user=current_user)
     assert_premium_mock_access(user=current_user, mock_test_id=mock_test_id)
     assert_skill_program_module_start(
         user_id=current_user.id,

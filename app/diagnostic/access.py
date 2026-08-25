@@ -12,6 +12,15 @@ def is_guest_user(user: UserPublic) -> bool:
     return user.role == "guest"
 
 
+def assert_full_account_for_productive_diagnostic(*, user: UserPublic) -> None:
+    """Reject guests for Writing / Speaking / evaluate-writing (mid-auth gate)."""
+    if is_guest_user(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Sign in with a full account to continue the diagnostic.",
+        )
+
+
 def assert_mock_access(*, user: UserPublic, mock_test_id: UUID) -> None:
     """Guest users may only access the diagnostic mock test."""
     if not is_guest_user(user):

@@ -112,19 +112,86 @@ cmd_cloud() {
   echo "Restart uvicorn (and Next.js if needed)."
 }
 
+# Restore a prod/staging dump into local Docker Postgres, then anonymize Tier 1 PII.
+# Plain `reset` stays migration-only (no PII). Use import-dump when loading real data.
+cmd_import_dump() {
+  need_cli
+  need_docker
+  local dump="${1:-}"
+  if [[ -z "$dump" ]]; then
+    red "Usage: ./scripts/local_supabase.sh import-dump <dump.dump|dump.sql>"
+    exit 1
+  fi
+  if [[ ! -f "$dump" ]]; then
+    red "Dump not found: $dump"
+    exit 1
+  fi
+  if ! supabase status >/dev/null 2>&1; then
+    yellow "Local Supabase not running — starting …"
+    cmd_start
+  else
+    cmd_sync_env
+  fi
+
+  local db_url
+  db_url="$(supabase status -o env 2>/dev/null | sed -n 's/^DB_URL=//p' | tr -d '"' | head -1)"
+  if [[ -z "$db_url" ]]; then
+    # Fallback matches default local stack from config.toml
+    db_url="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+  fi
+
+  yellow "Importing $dump into local DB …"
+  case "$dump" in
+    *.sql)
+      psql "$db_url" -v ON_ERROR_STOP=1 -f "$dump"
+      ;;
+    *.sql.gz)
+      gzip -dc "$dump" | psql "$db_url" -v ON_ERROR_STOP=1
+      ;;
+    *)
+      pg_restore --no-owner --no-acl --clean --if-exists -d "$db_url" "$dump" \
+        || yellow "pg_restore exited non-zero (often role/ACL noise); continuing to anonymize"
+      ;;
+  esac
+
+  green "Import finished. Enabling Tier 1 PII masking …"
+  # Ensure .env.local is loaded by anonymize script (SUPABASE_LOCAL=true)
+  export SUPABASE_LOCAL=true
+  # shellcheck disable=SC1090
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_LOCAL"
+  set +a
+
+  local python_bin="python3"
+  if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    python_bin="$ROOT/.venv/bin/python"
+  fi
+
+  "$python_bin" -m scripts.anonymize_tier1_pii \
+    --enable \
+    --backfill \
+    --verify \
+    --i-understand-nonprod
+
+  green "Local import + Tier 1 masking complete. Triggers stay on for new writes."
+}
+
 cmd_help() {
   cat <<EOF
 Usage: ./scripts/local_supabase.sh <command>
 
-  start     Start Docker Supabase + write .env.local
-  stop      Stop local stack
-  reset     Drop DB, re-run all migrations (clean M01 seed)
-  status    Show URLs and keys
-  sync      Refresh .env.local from running stack
-  cloud     Remove .env.local (switch back to remote .env)
-  help      This message
+  start         Start Docker Supabase + write .env.local
+  stop          Stop local stack
+  reset         Drop DB, re-run all migrations (clean seed — no PII)
+  import-dump   Restore a dump into local DB, then enable + backfill Tier 1 PII masking
+  status        Show URLs and keys
+  sync          Refresh .env.local from running stack
+  cloud         Remove .env.local (switch back to remote .env)
+  help          This message
 
 First-time setup: see backend/docs/LOCAL_SUPABASE.md
+PII masking:      see backend/docs/PII_MASKING.md
 EOF
 }
 
@@ -132,6 +199,7 @@ case "${1:-start}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   reset) cmd_reset ;;
+  import-dump) cmd_import_dump "${2:-}" ;;
   status) cmd_status ;;
   sync) cmd_sync_env ;;
   cloud) cmd_cloud ;;
