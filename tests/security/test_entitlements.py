@@ -91,6 +91,23 @@ def test_resolve_entitlements_speaking_skill_only():
         assert has_writing_skill(USER_ID) is False
 
 
+def test_resolve_entitlements_dual_bundle_grants_both_pack_flags():
+    with patch(
+        "app.payments.repository.list_active_subscriptions",
+        return_value=[_sub("dual_bundle")],
+    ):
+        ent = resolve_entitlements(USER_ID)
+        assert ent["plans"] == ["dual_bundle"]
+        assert ent["writing_skill"] is True
+        assert ent["speaking_skill"] is True
+        assert ent["full_skill_program"] is False
+        assert ent["skills"]["writing"] is True
+        assert ent["skills"]["speaking"] is True
+        assert ent["skills"]["listening"] is False
+        assert ent["skills"]["reading"] is False
+        assert has_writing_skill(USER_ID) is True
+
+
 def test_resolve_entitlements_fsp_and_writing_skill_simultaneously():
     """Regression: single-row get_active_subscription must not drop a second SKU."""
     with patch(

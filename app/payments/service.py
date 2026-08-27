@@ -17,7 +17,10 @@ from app.payments.constants import (
     PAYMENT_PAID,
     PAYMENT_REFUNDED,
     SUBSCRIPTION_ACTIVE,
+    DUAL_BUNDLE_SLUG,
     FULL_SKILL_PROGRAM_SLUG,
+    PROGRAM_SKILL_SPEAKING,
+    PROGRAM_SKILL_WRITING,
     SPEAKING_SKILL_DEFAULT_MOCK_QUOTA,
     SPEAKING_SKILL_SLUG,
     WRITING_SKILL_DEFAULT_MOCK_QUOTA,
@@ -334,6 +337,7 @@ def _ensure_writing_skill_usage_after_fulfillment(
         user_id=user_id,
         subscription_id=subscription_id,
         plan_id=plan["id"],
+        skill=PROGRAM_SKILL_WRITING,
         exam_module=exam_module,
         mocks_granted=WRITING_SKILL_DEFAULT_MOCK_QUOTA,
     )
@@ -376,6 +380,7 @@ def _ensure_speaking_skill_usage_after_fulfillment(
         user_id=user_id,
         subscription_id=subscription_id,
         plan_id=plan["id"],
+        skill=PROGRAM_SKILL_SPEAKING,
         exam_module=None,
         mocks_granted=SPEAKING_SKILL_DEFAULT_MOCK_QUOTA,
     )
@@ -391,6 +396,71 @@ def _ensure_speaking_skill_usage_after_fulfillment(
     )
 
 
+def _ensure_dual_bundle_usage_after_fulfillment(
+    *,
+    user_id: UUID,
+    payment: dict[str, Any],
+    plan: dict[str, Any] | None,
+    subscription_id: str | None,
+) -> None:
+    """Create writing + speaking skill-scoped usage for dual_bundle (idempotent).
+
+    One dual subscription; PCI/mocks resolve via sibling writing_skill /
+    speaking_skill plan rows. Does not schedule personalized plans.
+    """
+    if not plan or plan.get("slug") != DUAL_BUNDLE_SLUG:
+        return
+    if not subscription_id:
+        payment_log(
+            "DUAL_BUNDLE_USAGE_SKIPPED",
+            user_id=str(user_id),
+            payment_id=str(payment.get("id") or ""),
+            reason="missing_subscription_id",
+        )
+        return
+
+    writing_plan = repository.get_plan_row_by_slug(WRITING_SKILL_SLUG)
+    speaking_plan = repository.get_plan_row_by_slug(SPEAKING_SKILL_SLUG)
+    if not writing_plan or not speaking_plan:
+        payment_log(
+            "DUAL_BUNDLE_USAGE_SKIPPED",
+            user_id=str(user_id),
+            payment_id=str(payment.get("id") or ""),
+            reason="missing_sibling_plans",
+            writing_plan=bool(writing_plan),
+            speaking_plan=bool(speaking_plan),
+        )
+        return
+
+    exam_module = repository.get_user_exam_module(user_id)
+    writing_usage = repository.ensure_user_program_usage(
+        user_id=user_id,
+        subscription_id=subscription_id,
+        plan_id=writing_plan["id"],
+        skill=PROGRAM_SKILL_WRITING,
+        exam_module=exam_module,
+        mocks_granted=WRITING_SKILL_DEFAULT_MOCK_QUOTA,
+    )
+    speaking_usage = repository.ensure_user_program_usage(
+        user_id=user_id,
+        subscription_id=subscription_id,
+        plan_id=speaking_plan["id"],
+        skill=PROGRAM_SKILL_SPEAKING,
+        exam_module=None,
+        mocks_granted=SPEAKING_SKILL_DEFAULT_MOCK_QUOTA,
+    )
+    payment_log(
+        "DUAL_BUNDLE_USAGE_ENSURED",
+        user_id=str(user_id),
+        payment_id=str(payment.get("id") or ""),
+        subscription_id=str(subscription_id),
+        writing_usage_id=str(writing_usage.get("id") or ""),
+        speaking_usage_id=str(speaking_usage.get("id") or ""),
+        writing_mocks_granted=int(writing_usage.get("mocks_granted") or 0),
+        speaking_mocks_granted=int(speaking_usage.get("mocks_granted") or 0),
+    )
+
+
 def _ensure_pack_usage_after_fulfillment(
     *,
     user_id: UUID,
@@ -398,7 +468,7 @@ def _ensure_pack_usage_after_fulfillment(
     plan: dict[str, Any] | None,
     subscription_id: str | None,
 ) -> None:
-    """Dispatch pack SKU usage heal/create (Writing + Speaking)."""
+    """Dispatch pack SKU usage heal/create (Writing, Speaking, Dual)."""
     _ensure_writing_skill_usage_after_fulfillment(
         user_id=user_id,
         payment=payment,
@@ -406,6 +476,12 @@ def _ensure_pack_usage_after_fulfillment(
         subscription_id=subscription_id,
     )
     _ensure_speaking_skill_usage_after_fulfillment(
+        user_id=user_id,
+        payment=payment,
+        plan=plan,
+        subscription_id=subscription_id,
+    )
+    _ensure_dual_bundle_usage_after_fulfillment(
         user_id=user_id,
         payment=payment,
         plan=plan,
@@ -520,7 +596,11 @@ def confirm_payment_paid(
     )
     repository.invalidate_active_subscription_cache(payment_user_id)
 
-    if plan.get("slug") in (WRITING_SKILL_SLUG, SPEAKING_SKILL_SLUG):
+    if plan.get("slug") in (
+        WRITING_SKILL_SLUG,
+        SPEAKING_SKILL_SLUG,
+        DUAL_BUNDLE_SLUG,
+    ):
         subscription_id = _subscription_id_for_payment(
             payment_id=payment["id"],
             bundle_result=bundle_result if isinstance(bundle_result, dict) else None,

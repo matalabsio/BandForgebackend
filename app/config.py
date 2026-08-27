@@ -47,7 +47,11 @@ class Settings(BaseSettings):
         env_file_override=True,
     )
 
-    app_env: str = Field(default="development", validation_alias="APP_ENV")
+    app_env: str = Field(
+        default="development",
+        validation_alias="APP_ENV",
+        description="development | staging | production. staging enables isolation guards.",
+    )
     enable_api_docs: bool = Field(
         default=False,
         validation_alias="ENABLE_API_DOCS",

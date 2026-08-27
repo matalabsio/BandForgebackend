@@ -535,6 +535,7 @@ def test_ensure_user_program_usage_is_idempotent_on_unique_violation():
             user_id=USER_ID,
             subscription_id=SUB_ID,
             plan_id=PLAN_ID,
+            skill="writing",
             mocks_granted=1,
         )
     assert out == existing

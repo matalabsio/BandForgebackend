@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from app.config import get_settings, razorpay_env_diagnostics, reload_settings, settings_diagnostics
+from app.env_safety import assert_environment_safety
 from app.cache.hybrid_cache import redis_status
 from app.middleware.timing import ApiTimingMiddleware
 from app.admin import router as admin_router
@@ -24,6 +25,7 @@ from app.routers import attempts, dashboard, diagnostic, marketing, mock_attempt
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = reload_settings()
+    assert_environment_safety(settings)
     diag = settings_diagnostics()
     google_ok = bool(
         settings.google_client_id
@@ -32,7 +34,8 @@ async def lifespan(_app: FastAPI):
     )
     cors = settings.cors_allow_origins()
     print(
-        f"[bandforge-api] Supabase project_ref={diag['project_ref']} "
+        f"[bandforge-api] APP_ENV={settings.app_env} "
+        f"Supabase project_ref={diag['project_ref']} "
         f"url={diag['supabase_url']} "
         f"env_local_active={diag['env_local_active']} "
         f"google_oauth={'on' if google_ok else 'off'} "

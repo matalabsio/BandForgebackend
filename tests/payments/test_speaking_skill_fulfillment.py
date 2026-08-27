@@ -73,6 +73,7 @@ def test_speaking_skill_confirm_creates_usage_without_plan_gen():
     def _ensure(**kwargs):
         assert kwargs["exam_module"] is None
         assert kwargs["mocks_granted"] == 1
+        assert kwargs["skill"] == "speaking"
         if usage_store:
             return usage_store[0]
         row = _usage_row(

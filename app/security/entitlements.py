@@ -27,6 +27,7 @@ SKILLS = ("listening", "reading", "writing", "speaking")
 FULL_SKILL_PROGRAM_SLUG = "full_skill_program"
 WRITING_SKILL_SLUG = "writing_skill"
 SPEAKING_SKILL_SLUG = "speaking_skill"
+DUAL_BUNDLE_SLUG = "dual_bundle"
 
 # Canonical plan slug → skills granted. Pack SKUs are recognized here so the
 # resolver is ready before plans rows are activated; unknown slugs grant nothing.
@@ -34,7 +35,7 @@ PLAN_SKILL_GRANTS: dict[str, frozenset[str]] = {
     FULL_SKILL_PROGRAM_SLUG: frozenset(SKILLS),
     WRITING_SKILL_SLUG: frozenset({"writing"}),
     SPEAKING_SKILL_SLUG: frozenset({"speaking"}),
-    "dual_bundle": frozenset({"writing", "speaking"}),
+    DUAL_BUNDLE_SLUG: frozenset({"writing", "speaking"}),
     "all_skills_bundle": frozenset(SKILLS),
 }
 
@@ -95,11 +96,13 @@ def resolve_entitlements(user_id: UUID) -> Entitlements:
             if skill in skills:
                 skills[skill] = True  # type: ignore[literal-required]
 
+    # Dual Bundle composes Writing + Speaking pack access (not a third course mode).
+    has_dual = DUAL_BUNDLE_SLUG in seen
     return {
         "plans": plan_slugs,
         "skills": skills,
-        "writing_skill": WRITING_SKILL_SLUG in seen,
-        "speaking_skill": SPEAKING_SKILL_SLUG in seen,
+        "writing_skill": WRITING_SKILL_SLUG in seen or has_dual,
+        "speaking_skill": SPEAKING_SKILL_SLUG in seen or has_dual,
         "full_skill_program": FULL_SKILL_PROGRAM_SLUG in seen,
     }
 

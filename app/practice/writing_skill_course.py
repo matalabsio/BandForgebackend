@@ -7,7 +7,11 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
-from app.payments.constants import WRITING_SKILL_SLUG
+from app.payments.constants import (
+    DUAL_BUNDLE_SLUG,
+    PROGRAM_SKILL_WRITING,
+    WRITING_SKILL_SLUG,
+)
 from app.practice import repository
 
 EXAM_MODULE_REQUIRED_DETAIL = (
@@ -18,26 +22,53 @@ LOCKED_HUB_MESSAGE = "Complete the previous practice set to unlock this one."
 
 
 def get_writing_skill_course_context(user_id: UUID) -> dict[str, Any]:
-    """Active writing_skill subscription + usage row (may have null exam_module)."""
+    """Active writing_skill or dual_bundle subscription + writing usage row.
+
+    Dual reuses the existing writing_skill plan_id for PCI (no dual catalog).
+    """
     from app.payments import repository as payments_repo
+
+    dual_sub_id: str | None = None
 
     for sub in payments_repo.list_active_subscriptions(user_id):
         plans = sub.get("plans") or {}
         if not isinstance(plans, dict):
             continue
-        if plans.get("slug") != WRITING_SKILL_SLUG:
-            continue
+        slug = plans.get("slug")
         sub_id = sub.get("id")
-        plan_id = sub.get("plan_id")
-        if not sub_id or not plan_id:
+        if not sub_id:
             continue
-        usage = payments_repo.get_user_program_usage_by_subscription(sub_id)
-        return {
-            "subscription_id": str(sub_id),
-            "plan_id": str(plan_id),
-            "usage": usage,
-            "exam_module": (usage or {}).get("exam_module"),
-        }
+
+        if slug == WRITING_SKILL_SLUG:
+            plan_id = sub.get("plan_id")
+            if not plan_id:
+                continue
+            usage = payments_repo.get_user_program_usage_by_subscription(
+                sub_id, skill=PROGRAM_SKILL_WRITING
+            )
+            return {
+                "subscription_id": str(sub_id),
+                "plan_id": str(plan_id),
+                "usage": usage,
+                "exam_module": (usage or {}).get("exam_module"),
+            }
+
+        if slug == DUAL_BUNDLE_SLUG and dual_sub_id is None:
+            dual_sub_id = str(sub_id)
+
+    if dual_sub_id is not None:
+        writing_plan = payments_repo.get_plan_row_by_slug(WRITING_SKILL_SLUG)
+        if writing_plan and writing_plan.get("id"):
+            usage = payments_repo.get_user_program_usage_by_subscription(
+                dual_sub_id, skill=PROGRAM_SKILL_WRITING
+            )
+            return {
+                "subscription_id": dual_sub_id,
+                "plan_id": str(writing_plan["id"]),
+                "usage": usage,
+                "exam_module": (usage or {}).get("exam_module"),
+            }
+
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,
         detail="Writing Skill entitlement required.",

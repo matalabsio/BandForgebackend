@@ -7,7 +7,11 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
-from app.payments.constants import SPEAKING_SKILL_SLUG
+from app.payments.constants import (
+    DUAL_BUNDLE_SLUG,
+    PROGRAM_SKILL_SPEAKING,
+    SPEAKING_SKILL_SLUG,
+)
 from app.practice import repository
 
 NOT_IN_PROGRAM_DETAIL = "This practice set is not part of your Speaking Skill program."
@@ -15,25 +19,51 @@ LOCKED_HUB_MESSAGE = "Complete the previous practice set to unlock this one."
 
 
 def get_speaking_skill_course_context(user_id: UUID) -> dict[str, Any]:
-    """Active speaking_skill subscription + usage row (exam_module always unused)."""
+    """Active speaking_skill or dual_bundle subscription + speaking usage row.
+
+    Dual reuses the existing speaking_skill plan_id for PCI (no dual catalog).
+    """
     from app.payments import repository as payments_repo
+
+    dual_sub_id: str | None = None
 
     for sub in payments_repo.list_active_subscriptions(user_id):
         plans = sub.get("plans") or {}
         if not isinstance(plans, dict):
             continue
-        if plans.get("slug") != SPEAKING_SKILL_SLUG:
-            continue
+        slug = plans.get("slug")
         sub_id = sub.get("id")
-        plan_id = sub.get("plan_id")
-        if not sub_id or not plan_id:
+        if not sub_id:
             continue
-        usage = payments_repo.get_user_program_usage_by_subscription(sub_id)
-        return {
-            "subscription_id": str(sub_id),
-            "plan_id": str(plan_id),
-            "usage": usage,
-        }
+
+        if slug == SPEAKING_SKILL_SLUG:
+            plan_id = sub.get("plan_id")
+            if not plan_id:
+                continue
+            usage = payments_repo.get_user_program_usage_by_subscription(
+                sub_id, skill=PROGRAM_SKILL_SPEAKING
+            )
+            return {
+                "subscription_id": str(sub_id),
+                "plan_id": str(plan_id),
+                "usage": usage,
+            }
+
+        if slug == DUAL_BUNDLE_SLUG and dual_sub_id is None:
+            dual_sub_id = str(sub_id)
+
+    if dual_sub_id is not None:
+        speaking_plan = payments_repo.get_plan_row_by_slug(SPEAKING_SKILL_SLUG)
+        if speaking_plan and speaking_plan.get("id"):
+            usage = payments_repo.get_user_program_usage_by_subscription(
+                dual_sub_id, skill=PROGRAM_SKILL_SPEAKING
+            )
+            return {
+                "subscription_id": dual_sub_id,
+                "plan_id": str(speaking_plan["id"]),
+                "usage": usage,
+            }
+
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,
         detail="Speaking Skill entitlement required.",
