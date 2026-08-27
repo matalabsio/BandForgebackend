@@ -20,6 +20,7 @@ from app.practice.schemas import (
     PracticeHubDetailOut,
     PracticeHubOut,
     PracticeProgressOut,
+    PracticeSpeakingReviewOut,
     PracticeWritingReviewOut,
     SkillName,
     WritingSkillExamModuleOut,
@@ -145,6 +146,26 @@ def practice_writing_review(
         attempt_id=attempt_id,
     )
     return PracticeWritingReviewOut.model_validate(data)
+
+
+@router.get(
+    "/hubs/{hub_id}/exercise/{attempt_id}/speaking-review",
+    response_model=PracticeSpeakingReviewOut,
+)
+def practice_speaking_review(
+    hub_id: str,
+    attempt_id: str,
+    user: Annotated[UserPublic, Depends(require_practice_access)],
+) -> PracticeSpeakingReviewOut:
+    """Poll provisional AI speaking feedback for a bank practice hub."""
+    from app.practice.speaking_ai import get_practice_speaking_review
+
+    data = get_practice_speaking_review(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        attempt_id=attempt_id,
+    )
+    return PracticeSpeakingReviewOut.model_validate(data)
 
 
 @router.get("/progress", response_model=PracticeProgressOut)

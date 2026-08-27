@@ -115,6 +115,9 @@ class ExerciseStartOut(BaseModel):
     skill: SkillName
     part: int
     section: BankExerciseSectionOut
+    # Speaking bank: linked speaking test_attempt for R2 upload + ASR.
+    speaking_attempt_id: str | None = None
+    speaking_manifest_hash: str | None = None
 
 
 class ExerciseSubmitRequest(BaseModel):
@@ -130,6 +133,9 @@ class ExerciseSubmitOut(BaseModel):
     # Writing bank exercises: Claude eval queued (v5); poll writing-review.
     writing_ai_pending: bool = False
     writing_part: int | None = None
+    # Speaking bank: ASR/LLM eval queued; poll speaking-review.
+    speaking_ai_pending: bool = False
+    speaking_attempt_id: str | None = None
 
 
 class PracticeWritingReviewOut(BaseModel):
@@ -169,3 +175,32 @@ class PracticeWritingReviewOut(BaseModel):
     saved_for_review: bool = True
     error: str | None = None
     word_count_estimate: float | None = None
+
+
+class PracticeSpeakingReviewOut(BaseModel):
+    """Provisional AI payload for practice speaking results (hub)."""
+
+    attempt_id: str
+    hub_id: str
+    speaking_attempt_id: str | None = None
+    status: str
+    module: str = "speaking"
+    test_title: str | None = None
+    ai_available: bool = False
+    ai_status: str | None = None
+    ai_band: float | None = None
+    band_source: str = "none"
+    ai_criteria: dict[str, float] = Field(default_factory=dict)
+    ai_strengths: list[str] = Field(default_factory=list)
+    ai_improvements: list[str] = Field(default_factory=list)
+    next_band_advice: str | None = None
+    ai_parts: list[Any] = Field(default_factory=list)
+    ai_evidence: list[Any] = Field(default_factory=list)
+    ai_patterns: list[Any] = Field(default_factory=list)
+    ai_fluency: dict[str, Any] = Field(default_factory=dict)
+    responses: list[Any] = Field(default_factory=list)
+    ai_model_name: str | None = None
+    ai_provider: str | None = None
+    submitted_at: str | None = None
+    error: str | None = None
+    evaluation_status: str | None = None

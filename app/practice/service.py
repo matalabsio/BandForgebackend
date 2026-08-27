@@ -736,15 +736,42 @@ def start_hub_exercise(
         )
         for q in qrows
     ]
+
+    speaking_attempt_id: str | None = None
+    speaking_manifest_hash: str | None = None
+    resolved_part = int(chosen["part"])
+    if skill == "speaking":
+        from app.practice.speaking_ai import (
+            bootstrap_practice_speaking_attempt,
+            resolve_speaking_part,
+        )
+
+        hub_title = str(flat.get("title") or chosen.get("title") or "").strip() or None
+        first_qtype = str(qrows[0].get("question_type") or "") if qrows else ""
+        resolved_part = resolve_speaking_part(
+            question_type=first_qtype,
+            section_part=int(chosen["part"]),
+            title=hub_title,
+        )
+        boot = bootstrap_practice_speaking_attempt(
+            user_id=user_id,
+            practice_attempt_id=attempt_id,
+            questions=list(qrows),
+            section_part=resolved_part,
+            hub_title=hub_title,
+        )
+        speaking_attempt_id = str(boot["speaking_attempt_id"])
+        speaking_manifest_hash = str(boot["speaking_manifest_hash"])
+
     return ExerciseStartOut(
         attempt_id=attempt_id,
         hub_id=str(hub_id),
         practice_set_id=set_id,
         skill=skill,  # type: ignore[arg-type]
-        part=int(chosen["part"]),
+        part=resolved_part,
         section=BankExerciseSectionOut(
             section_id=section_id,
-            part=int(chosen["part"]),
+            part=resolved_part,
             module=str(chosen.get("module") or skill),  # type: ignore[arg-type]
             title=chosen.get("title"),
             instructions=chosen.get("instructions"),
@@ -754,6 +781,8 @@ def start_hub_exercise(
             image_url=image_out,
             questions=questions,
         ),
+        speaking_attempt_id=speaking_attempt_id,
+        speaking_manifest_hash=speaking_manifest_hash,
     )
 
 
@@ -898,6 +927,8 @@ def submit_hub_exercise(
         score: dict[str, Any] | None = None
         writing_ai_pending = False
         writing_part: int | None = None
+        speaking_ai_pending = False
+        speaking_attempt_id_out: str | None = None
         qrows: list[dict[str, Any]] = []
 
         if section_id:
@@ -954,6 +985,48 @@ def submit_hub_exercise(
                     question_type=qtype,
                 )
                 writing_ai_pending = True
+            elif hub_skill == "speaking":
+                from app.practice.speaking_ai import (
+                    SCORE_KIND as SPEAKING_SCORE_KIND,
+                    finalize_practice_speaking_submit,
+                )
+
+                existing_score = (
+                    attempt.get("score")
+                    if isinstance(attempt.get("score"), dict)
+                    else {}
+                )
+                speaking_attempt_id = str(
+                    answers.get("speaking_attempt_id")
+                    or existing_score.get("speaking_attempt_id")
+                    or ""
+                ).strip()
+                speaking_manifest_hash = str(
+                    answers.get("speaking_manifest_hash")
+                    or existing_score.get("speaking_manifest_hash")
+                    or ""
+                ).strip()
+                if not speaking_attempt_id:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        detail="Speaking attempt is missing. Restart the exercise.",
+                    )
+                hub_title = str(flat.get("title") or "").strip() or None
+                score = finalize_practice_speaking_submit(
+                    user_id=user_id,
+                    practice_attempt_id=attempt_id,
+                    speaking_attempt_id=speaking_attempt_id,
+                    speaking_manifest_hash=speaking_manifest_hash,
+                    hub_title=hub_title,
+                    background_tasks=background_tasks,
+                )
+                speaking_ai_pending = True
+                speaking_attempt_id_out = speaking_attempt_id
+                if score.get("kind") != SPEAKING_SCORE_KIND:
+                    raise HTTPException(
+                        status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Speaking score linkage failed.",
+                    )
             else:
                 total = 0
                 correct = 0
@@ -1007,6 +1080,8 @@ def submit_hub_exercise(
             skill_progress=prog,
             writing_ai_pending=writing_ai_pending,
             writing_part=writing_part,
+            speaking_ai_pending=speaking_ai_pending,
+            speaking_attempt_id=speaking_attempt_id_out,
         )
     except HTTPException:
         raise

@@ -72,6 +72,7 @@ class AiHealthResponse(BaseModel):
     claude_configured: bool
     groq_configured: bool
     writing_eval_stub: bool
+    speaking_eval_stub: bool
     budget_ok: bool
     circuit_open: bool
     speaking_pending: int = 0
@@ -202,6 +203,7 @@ def get_ai_health() -> AiHealthResponse:
         claude_configured=claude_configured(),
         groq_configured=GroqWritingProvider().configured(),
         writing_eval_stub=bool(settings.writing_eval_stub),
+        speaking_eval_stub=bool(settings.speaking_eval_stub),
         budget_ok=budget.ok,
         circuit_open=circuit.open,
         speaking_pending=pending,
