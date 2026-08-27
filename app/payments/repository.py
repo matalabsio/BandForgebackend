@@ -59,6 +59,20 @@ def get_plan_by_slug(slug: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def get_plan_row_by_slug(slug: str) -> dict[str, Any] | None:
+    """Plan by slug regardless of is_active (sibling inventory resolution)."""
+    sb = get_supabase()
+    result = (
+        sb.table("plans")
+        .select(PLAN_COLUMNS)
+        .eq("slug", slug)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
 def get_plan_by_id(plan_id: str | UUID) -> dict[str, Any] | None:
     sb = get_supabase()
     result = (
@@ -674,18 +688,22 @@ def list_subscriptions_for_payment(
 
 def get_user_program_usage_by_subscription(
     subscription_id: str | UUID,
+    *,
+    skill: str | None = None,
 ) -> dict[str, Any] | None:
+    """Load usage for a subscription. Prefer skill-scoped lookup when provided."""
     sb = get_supabase()
-    result = (
+    query = (
         sb.table("user_program_usage")
         .select(
-            "id, user_id, subscription_id, plan_id, exam_module, "
+            "id, user_id, subscription_id, plan_id, skill, exam_module, "
             "mocks_granted, mocks_used, created_at, updated_at"
         )
         .eq("subscription_id", str(subscription_id))
-        .limit(1)
-        .execute()
     )
+    if skill:
+        query = query.eq("skill", str(skill))
+    result = query.limit(1).execute()
     rows = result.data or []
     return rows[0] if rows else None
 
@@ -718,11 +736,18 @@ def ensure_user_program_usage(
     user_id: UUID | str,
     subscription_id: str | UUID,
     plan_id: str | UUID,
+    skill: str,
     exam_module: str | None = None,
     mocks_granted: int = 1,
 ) -> dict[str, Any]:
-    """Idempotent insert of pack usage; UNIQUE(subscription_id) is the final guard."""
-    existing = get_user_program_usage_by_subscription(subscription_id)
+    """Idempotent insert of pack usage; UNIQUE(subscription_id, skill) is the guard."""
+    skill_norm = str(skill or "").strip().lower()
+    if skill_norm not in ("writing", "speaking"):
+        raise ValueError(f"invalid user_program_usage skill: {skill!r}")
+
+    existing = get_user_program_usage_by_subscription(
+        subscription_id, skill=skill_norm
+    )
     if existing:
         return existing
 
@@ -731,6 +756,7 @@ def ensure_user_program_usage(
         "user_id": str(user_id),
         "subscription_id": str(subscription_id),
         "plan_id": str(plan_id),
+        "skill": skill_norm,
         "exam_module": exam_module,
         "mocks_granted": int(mocks_granted),
         "mocks_used": 0,
@@ -745,17 +771,21 @@ def ensure_user_program_usage(
             return rows[0]
     except Exception as exc:
         if _is_unique_violation(exc):
-            raced = get_user_program_usage_by_subscription(subscription_id)
+            raced = get_user_program_usage_by_subscription(
+                subscription_id, skill=skill_norm
+            )
             if raced:
                 return raced
         raise
 
-    # Insert returned no row (unusual) — re-read by unique key.
-    final = get_user_program_usage_by_subscription(subscription_id)
+    final = get_user_program_usage_by_subscription(
+        subscription_id, skill=skill_norm
+    )
     if final:
         return final
     raise RuntimeError(
-        f"user_program_usage insert returned empty for subscription={subscription_id}"
+        f"user_program_usage insert returned empty for "
+        f"subscription={subscription_id} skill={skill_norm}"
     )
 
 
@@ -764,7 +794,7 @@ def get_user_program_usage_by_id(usage_id: str | UUID) -> dict[str, Any] | None:
     result = (
         sb.table("user_program_usage")
         .select(
-            "id, user_id, subscription_id, plan_id, exam_module, "
+            "id, user_id, subscription_id, plan_id, skill, exam_module, "
             "mocks_granted, mocks_used, created_at, updated_at"
         )
         .eq("id", str(usage_id))
