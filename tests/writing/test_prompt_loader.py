@@ -49,11 +49,22 @@ def test_writing_prompt_module_matches_loader():
 def test_load_writing_prompt_v5():
     loaded = load_writing_prompt("v5")
     assert loaded.version == "v5"
+    assert "all Academic writing evaluations" in loaded.system
+    assert "Task 1 and Task 2" in loaded.system
+    assert "Academic" in loaded.system
+    assert "General Training" in loaded.system
+    assert "150" in loaded.system
+    assert "250" in loaded.system
+    assert "Task 2" in loaded.system
     assert "next_band_advice" in loaded.system
     assert "vocabulary_highlights" in loaded.system
     assert "strong_spans" in loaded.system
     assert "confidence" in loaded.system
     assert "Target band" in loaded.system
+    assert loaded.task1_rules is not None
+    assert "150" in loaded.task1_rules
+    assert "250" in loaded.task1_rules
+    assert "Task 2" in loaded.task1_rules
 
 
 def test_build_user_prompt_includes_task1_visual_and_metadata():
@@ -74,6 +85,7 @@ def test_build_user_prompt_includes_task1_visual_and_metadata():
     assert "Student essay:" in prompt
     assert "Overall, Tokyo had the highest share." in prompt
     assert "Word count: 182" in prompt
+    assert "Academic minimum for this task: 150 words" in prompt
     assert "Target band: 7.5" in prompt
     assert "Do not inflate criterion scores" in prompt
     assert "Return JSON only." in prompt
@@ -94,6 +106,7 @@ def test_build_user_prompt_omits_visual_for_task2():
     assert "Visual / chart description:" not in prompt
     assert "This should not appear for Task 2." not in prompt
     assert "Word count: 40" in prompt
+    assert "Academic minimum for this task: 250 words" in prompt
     assert "Target band: 7" in prompt
 
 

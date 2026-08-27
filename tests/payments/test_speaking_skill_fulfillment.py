@@ -224,3 +224,125 @@ def test_speaking_skill_missing_payment_creates_no_usage():
                 captured_amount=89900,
             )
     ensure.assert_not_called()
+
+
+def test_speaking_skill_idempotent_confirm_twice():
+    usage_store: list[dict] = []
+
+    def _ensure(**kwargs):
+        if usage_store:
+            return usage_store[0]
+        row = _usage_row()
+        usage_store.append(row)
+        return row
+
+    with (
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_created_speaking_payment(),
+        ),
+        patch(
+            "app.payments.service.repository.list_subscriptions_for_payment",
+            return_value=[],
+        ),
+        patch(
+            "app.payments.service.repository.get_plan_by_id",
+            return_value=_speaking_plan(),
+        ),
+        patch(
+            "app.payments.service.repository.get_active_subscription",
+            return_value=None,
+        ),
+        patch(
+            "app.payments.service.repository.confirm_payment_paid_bundle",
+            return_value={"subscription_id": SUB_ID, "user_id": str(USER_ID)},
+        ),
+        patch(
+            "app.payments.service.repository.ensure_user_program_usage",
+            side_effect=_ensure,
+        ),
+        patch("app.payments.service.get_subscription", return_value=_sub_out()),
+        patch("app.payments.service.repository.invalidate_active_subscription_cache"),
+        patch("app.learning.service.schedule_personalized_plan_generation") as sched,
+    ):
+        service.confirm_payment_paid(
+            razorpay_order_id=ORDER_ID,
+            razorpay_payment_id=PAY_ID,
+            user_id=USER_ID,
+            captured_amount=89900,
+        )
+
+    with (
+        patch(
+            "app.payments.service.repository.get_payment_by_order_id",
+            return_value=_created_speaking_payment(status="paid"),
+        ),
+        patch(
+            "app.payments.service.repository.list_subscriptions_for_payment",
+            return_value=[{"id": SUB_ID}],
+        ),
+        patch(
+            "app.payments.service.repository.get_plan_by_id",
+            return_value=_speaking_plan(),
+        ),
+        patch(
+            "app.payments.service.repository.ensure_user_program_usage",
+            side_effect=_ensure,
+        ),
+        patch("app.payments.service.get_subscription", return_value=_sub_out()),
+        patch("app.payments.service.repository.invalidate_active_subscription_cache"),
+        patch("app.payments.service.repository.confirm_payment_paid_bundle") as bundle,
+        patch("app.learning.service.schedule_personalized_plan_generation") as sched2,
+    ):
+        service.confirm_payment_paid(
+            razorpay_order_id=ORDER_ID,
+            razorpay_payment_id=PAY_ID,
+            user_id=USER_ID,
+            captured_amount=89900,
+        )
+        bundle.assert_not_called()
+        sched2.assert_not_called()
+
+    assert len(usage_store) == 1
+    sched.assert_not_called()
+
+
+def test_webhook_captured_delegates_to_confirm_for_speaking_skill():
+    from app.payments import webhook
+
+    event_row = {"id": "evt_ss_1", "processing_status": "pending"}
+    payload = {
+        "event": "payment.captured",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": PAY_ID,
+                    "order_id": ORDER_ID,
+                    "amount": 89900,
+                }
+            }
+        },
+    }
+    with (
+        patch(
+            "app.payments.webhook.razorpay_client.verify_webhook_signature",
+            return_value=True,
+        ),
+        patch(
+            "app.payments.webhook.repository.insert_payment_event",
+            return_value=event_row,
+        ),
+        patch("app.payments.webhook.service.confirm_payment_paid") as confirm,
+        patch("app.payments.webhook.repository.mark_event_processed") as marked,
+    ):
+        out = webhook.handle_webhook(
+            raw_body=b"{}",
+            signature="sig",
+            event_id="evt_speaking_1",
+            payload=payload,
+        )
+    assert out == {"ok": True}
+    confirm.assert_called_once()
+    assert confirm.call_args.kwargs["razorpay_order_id"] == ORDER_ID
+    assert confirm.call_args.kwargs["captured_amount"] == 89900
+    marked.assert_called_once_with("evt_ss_1")

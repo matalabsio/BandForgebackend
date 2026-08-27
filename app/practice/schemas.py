@@ -115,6 +115,9 @@ class ExerciseStartOut(BaseModel):
     skill: SkillName
     part: int
     section: BankExerciseSectionOut
+    # Speaking bank: linked speaking test_attempt for R2 upload + ASR.
+    speaking_attempt_id: str | None = None
+    speaking_manifest_hash: str | None = None
 
 
 class ExerciseSubmitRequest(BaseModel):
@@ -127,3 +130,77 @@ class ExerciseSubmitOut(BaseModel):
     score: dict[str, Any] | None = None
     hub_completed: bool = False
     skill_progress: SkillHubProgressOut | None = None
+    # Writing bank exercises: Claude eval queued (v5); poll writing-review.
+    writing_ai_pending: bool = False
+    writing_part: int | None = None
+    # Speaking bank: ASR/LLM eval queued; poll speaking-review.
+    speaking_ai_pending: bool = False
+    speaking_attempt_id: str | None = None
+
+
+class PracticeWritingReviewOut(BaseModel):
+    """Same shape the student WritingFeedbackView expects (practice hub)."""
+
+    attempt_id: str
+    hub_id: str
+    status: str
+    module: str = "writing"
+    part: int
+    test_title: str | None = None
+    question_type: str = "writing"
+    prompt: str = ""
+    options: dict[str, Any] | None = None
+    user_answer: str = ""
+    word_count: int = 0
+    band: float | None = None
+    ai_band: float | None = None
+    ai_available: bool = False
+    ai_status: str | None = None
+    band_source: str = "none"
+    human_verified: bool = False
+    reviewer_notes: str | None = None
+    ai_criteria: dict[str, float] = Field(default_factory=dict)
+    ai_strengths: list[str] = Field(default_factory=list)
+    ai_improvements: list[str] = Field(default_factory=list)
+    ai_model_name: str | None = None
+    ai_provider: str | None = None
+    spelling_mistakes: list[Any] = Field(default_factory=list)
+    grammar_mistakes: list[Any] = Field(default_factory=list)
+    next_band_advice: str = ""
+    confidence: float | None = None
+    vocabulary_highlights: list[Any] = Field(default_factory=list)
+    strong_spans: list[Any] = Field(default_factory=list)
+    min_words: int = 150
+    submitted_at: str | None = None
+    saved_for_review: bool = True
+    error: str | None = None
+    word_count_estimate: float | None = None
+
+
+class PracticeSpeakingReviewOut(BaseModel):
+    """Provisional AI payload for practice speaking results (hub)."""
+
+    attempt_id: str
+    hub_id: str
+    speaking_attempt_id: str | None = None
+    status: str
+    module: str = "speaking"
+    test_title: str | None = None
+    ai_available: bool = False
+    ai_status: str | None = None
+    ai_band: float | None = None
+    band_source: str = "none"
+    ai_criteria: dict[str, float] = Field(default_factory=dict)
+    ai_strengths: list[str] = Field(default_factory=list)
+    ai_improvements: list[str] = Field(default_factory=list)
+    next_band_advice: str | None = None
+    ai_parts: list[Any] = Field(default_factory=list)
+    ai_evidence: list[Any] = Field(default_factory=list)
+    ai_patterns: list[Any] = Field(default_factory=list)
+    ai_fluency: dict[str, Any] = Field(default_factory=dict)
+    responses: list[Any] = Field(default_factory=list)
+    ai_model_name: str | None = None
+    ai_provider: str | None = None
+    submitted_at: str | None = None
+    error: str | None = None
+    evaluation_status: str | None = None

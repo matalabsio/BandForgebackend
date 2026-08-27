@@ -81,6 +81,11 @@ def build_user_prompt(
     meta_lines: list[str] = []
     if word_count is not None and word_count >= 0:
         meta_lines.append(f"Word count: {word_count}")
+        min_words = 150 if task_part == 1 else 250
+        meta_lines.append(
+            f"Academic minimum for this task: {min_words} words "
+            "(under-length must reduce Task Achievement / Task Response)."
+        )
     if target_band is not None and target_band > 0:
         meta_lines.append(f"Target band: {target_band:g}")
         meta_lines.append(
