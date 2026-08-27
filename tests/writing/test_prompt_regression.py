@@ -18,6 +18,13 @@ def test_v4_and_v5_prompts_load_distinct():
     assert v4.system.strip()
     assert v5.system.strip()
     assert v4.system != v5.system
+    assert "Academic" in v5.system
+    assert "all Academic writing evaluations" in v5.system
+    assert "Task 1 and Task 2" in v5.system
+    assert "150" in v5.system
+    assert "250" in v5.system
+    assert "Task 2" in v5.system
+    assert "General Training" in v5.system
 
 
 def test_prompt_version_override_changes_resolve(monkeypatch):

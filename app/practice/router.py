@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.auth.schemas import UserPublic
@@ -20,6 +20,7 @@ from app.practice.schemas import (
     PracticeHubDetailOut,
     PracticeHubOut,
     PracticeProgressOut,
+    PracticeWritingReviewOut,
     SkillName,
     WritingSkillExamModuleOut,
     WritingSkillExamModuleRequest,
@@ -114,6 +115,7 @@ def submit_practice_exercise(
     hub_id: str,
     attempt_id: str,
     body: ExerciseSubmitRequest,
+    background_tasks: BackgroundTasks,
     user: Annotated[UserPublic, Depends(require_practice_access)],
 ) -> ExerciseSubmitOut:
     return service.submit_hub_exercise(
@@ -121,7 +123,28 @@ def submit_practice_exercise(
         hub_id=hub_id,
         attempt_id=attempt_id,
         answers=body.answers,
+        background_tasks=background_tasks,
     )
+
+
+@router.get(
+    "/hubs/{hub_id}/exercise/{attempt_id}/writing-review",
+    response_model=PracticeWritingReviewOut,
+)
+def practice_writing_review(
+    hub_id: str,
+    attempt_id: str,
+    user: Annotated[UserPublic, Depends(require_practice_access)],
+) -> PracticeWritingReviewOut:
+    """Poll AI writing feedback for a bank practice essay (same engine as mocks)."""
+    from app.practice.writing_ai import get_practice_writing_review
+
+    data = get_practice_writing_review(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        attempt_id=attempt_id,
+    )
+    return PracticeWritingReviewOut.model_validate(data)
 
 
 @router.get("/progress", response_model=PracticeProgressOut)

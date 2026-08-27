@@ -869,12 +869,14 @@ def submit_hub_exercise(
     attempt_id: str,
     answers: dict[str, Any],
     mark_hub_complete: bool = True,
+    background_tasks: Any = None,
 ) -> Any:
     from app.practice.schemas import ExerciseSubmitOut
     from app.db.supabase_client import get_supabase
 
     try:
-        assert_hub_accessible(user_id=user_id, hub_id=hub_id)
+        flat = assert_hub_accessible(user_id=user_id, hub_id=hub_id)
+        hub_skill = str(flat.get("skill") or "")
 
         sb = get_supabase()
         rows = (
@@ -894,6 +896,10 @@ def submit_hub_exercise(
 
         section_id = attempt.get("section_id")
         score: dict[str, Any] | None = None
+        writing_ai_pending = False
+        writing_part: int | None = None
+        qrows: list[dict[str, Any]] = []
+
         if section_id:
             from app.cache.hybrid_cache import get_json, set_json
             from app.scoring.answers import is_answer_correct
@@ -903,30 +909,70 @@ def submit_hub_exercise(
             if not isinstance(qrows, list) or not qrows:
                 qrows = (
                     sb.table("bank_questions")
-                    .select("id, correct_answer, question_type")
+                    .select(
+                        "id, correct_answer, question_type, prompt, options, question_number"
+                    )
                     .eq("section_id", str(section_id))
                     .execute()
                 ).data or []
                 if qrows:
                     set_json(cache_key, qrows, 60)
-            total = 0
-            correct = 0
-            for q in qrows:
-                key = str(q["id"])
-                expected = (q.get("correct_answer") or "").strip()
-                if not expected:
-                    continue
-                total += 1
-                given = answers.get(key)
-                given_s = _score_user_answer(given)
-                if is_answer_correct(given_s, expected):
-                    correct += 1
-            if total:
-                score = {
-                    "correct": correct,
-                    "total": total,
-                    "percent": round(100.0 * correct / total, 1),
-                }
+
+            if hub_skill == "writing":
+                from app.practice.writing_ai import (
+                    build_pending_writing_score,
+                    enqueue_practice_writing_eval,
+                    extract_writing_essay_from_answers,
+                    resolve_ielts_writing_part,
+                )
+
+                essay, prompt, qtype, visual = extract_writing_essay_from_answers(
+                    answers, qrows if isinstance(qrows, list) else []
+                )
+                if not essay.strip():
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        detail="Essay cannot be empty.",
+                    )
+                hub_title = str(flat.get("title") or "").strip() or None
+                section_part = None
+                try:
+                    section_part = int(attempt.get("part") or 1)
+                except (TypeError, ValueError):
+                    section_part = 1
+                writing_part = resolve_ielts_writing_part(
+                    question_type=qtype,
+                    section_part=section_part,
+                    title=hub_title,
+                )
+                score = build_pending_writing_score(
+                    part=writing_part,
+                    question=prompt,
+                    essay=essay,
+                    visual_description=visual,
+                    test_title=hub_title,
+                    question_type=qtype,
+                )
+                writing_ai_pending = True
+            else:
+                total = 0
+                correct = 0
+                for q in qrows:
+                    key = str(q["id"])
+                    expected = (q.get("correct_answer") or "").strip()
+                    if not expected:
+                        continue
+                    total += 1
+                    given = answers.get(key)
+                    given_s = _score_user_answer(given)
+                    if is_answer_correct(given_s, expected):
+                        correct += 1
+                if total:
+                    score = {
+                        "correct": correct,
+                        "total": total,
+                        "percent": round(100.0 * correct / total, 1),
+                    }
 
         now = datetime.now(UTC).isoformat()
         sb.table("practice_exercise_attempts").update(
@@ -937,6 +983,14 @@ def submit_hub_exercise(
                 "completed_at": now,
             }
         ).eq("id", attempt_id).execute()
+
+        if writing_ai_pending:
+            from app.practice.writing_ai import enqueue_practice_writing_eval
+
+            enqueue_practice_writing_eval(
+                attempt_id=attempt_id,
+                background_tasks=background_tasks,
+            )
 
         hub_completed = False
         prog = None
@@ -951,6 +1005,8 @@ def submit_hub_exercise(
             score=score,
             hub_completed=hub_completed,
             skill_progress=prog,
+            writing_ai_pending=writing_ai_pending,
+            writing_part=writing_part,
         )
     except HTTPException:
         raise
