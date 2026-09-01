@@ -939,13 +939,13 @@ def submit_hub_exercise(
             from app.cache.hybrid_cache import get_json, set_json
             from app.scoring.answers import is_answer_correct
 
-            cache_key = f"practice:section:{section_id}:questions"
+            cache_key = f"practice:section:{section_id}:questions:v2"
             qrows = get_json(cache_key)
             if not isinstance(qrows, list) or not qrows:
                 qrows = (
                     sb.table("bank_questions")
                     .select(
-                        "id, correct_answer, question_type, prompt, options, question_number"
+                        "id, correct_answer, question_type, prompt, options, question_number, explanation"
                     )
                     .eq("section_id", str(section_id))
                     .execute()
