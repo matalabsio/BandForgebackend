@@ -7,6 +7,11 @@ import json
 from collections import defaultdict
 from typing import Any, TypedDict
 
+from app.speaking.transcript_utils import (
+    filter_meaningful_whisper_words,
+    meaningful_word_count,
+)
+
 FLUENCY_METRICS_VERSION = "response-weighted-v1"
 
 
@@ -17,6 +22,7 @@ class FluencyMetrics(TypedDict):
     response_count: int
     questions_asked: int
     word_count: int
+    meaningful_word_count: int
 
 
 def long_pause_markers(
@@ -93,18 +99,29 @@ def compute_fluency_metrics(
     duration_sec: int | None = None,
     response_count: int = 1,
     questions_asked: int = 1,
+    transcript: str | None = None,
 ) -> FluencyMetrics:
     """Compute per-part fluency metrics from Whisper word timestamps."""
+    meaningful_words = filter_meaningful_whisper_words(words)
     fallback = float(duration_sec) if duration_sec and duration_sec > 0 else None
-    total_seconds = total_speaking_seconds_from_words(words, fallback_sec=fallback)
-    word_count = len(words)
+    total_seconds = total_speaking_seconds_from_words(
+        meaningful_words, fallback_sec=fallback
+    )
+    meaningful_count = (
+        meaningful_word_count(transcript)
+        if transcript is not None
+        else len(meaningful_words)
+    )
+    if meaningful_count <= 0:
+        total_seconds = 0.0
     return {
-        "words_per_minute": words_per_minute(word_count, total_seconds),
+        "words_per_minute": words_per_minute(meaningful_count, total_seconds),
         "total_speaking_seconds": round(total_seconds, 1),
-        "long_pauses": long_pauses(words),
+        "long_pauses": long_pauses(meaningful_words),
         "response_count": max(0, response_count),
         "questions_asked": max(0, questions_asked),
-        "word_count": word_count,
+        "word_count": len(words),
+        "meaningful_word_count": meaningful_count,
     }
 
 
@@ -125,6 +142,7 @@ def aggregate_fluency_metrics(
 
     def combine(items: list[dict[str, Any]]) -> dict[str, Any]:
         word_count = 0
+        meaningful_total = 0
         seconds = 0.0
         pauses = 0
         for item in items:
@@ -132,15 +150,24 @@ def aggregate_fluency_metrics(
             if not isinstance(metrics, dict):
                 continue
             word_count += int(metrics.get("word_count") or 0)
+            meaningful_total += int(
+                metrics.get("meaningful_word_count")
+                if metrics.get("meaningful_word_count") is not None
+                else metrics.get("word_count")
+                or 0
+            )
             seconds += float(metrics.get("total_speaking_seconds") or 0)
             pauses += int(metrics.get("long_pauses") or 0)
+        if meaningful_total <= 0:
+            seconds = 0.0
         return {
-            "words_per_minute": words_per_minute(word_count, seconds),
+            "words_per_minute": words_per_minute(meaningful_total, seconds),
             "total_speaking_seconds": round(seconds, 1),
             "long_pauses": pauses,
             "response_count": len(items),
             "questions_asked": len(items),
             "word_count": word_count,
+            "meaningful_word_count": meaningful_total,
         }
 
     response_metrics = [

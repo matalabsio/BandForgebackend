@@ -108,6 +108,12 @@ class SkillHubProgress(BaseModel):
     mock_test_id: str | None = None
 
 
+class WeeklyHubCompletion(BaseModel):
+    date: str  # YYYY-MM-DD (local calendar day of completion)
+    skill: str
+    hub_id: str
+
+
 class LearningProfileResponse(BaseModel):
     user_id: str
     current_band: float | None = None
@@ -133,6 +139,7 @@ class LearningProfileResponse(BaseModel):
     days_remaining: int | None = None
     skill_difficulty: dict[str, str] = Field(default_factory=dict)
     hub_progress: dict[str, SkillHubProgress] = Field(default_factory=dict)
+    weekly_hub_completions: list[WeeklyHubCompletion] = Field(default_factory=list)
 
 
 class TaskStatusUpdate(BaseModel):

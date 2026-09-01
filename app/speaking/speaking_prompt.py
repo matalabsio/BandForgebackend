@@ -68,7 +68,9 @@ Rules:
   "transcript_inferred" and P_advisory_only to true. If P_confidence < 0.7, also add
   "low_confidence_pronunciation" to reviewer_flags. A human examiner listening to the
   recording is the authority for the released pronunciation score.
-- Do not invent fluency metrics — use the provided numbers."""
+- Do not invent fluency metrics — use the provided numbers.
+- If total meaningful words across all responses is fewer than 8, do not invent strengths
+  or band estimates. The server handles insufficient speech and you should not receive it."""
 
 
 def build_user_prompt(

@@ -206,6 +206,7 @@ async def _transcribe_claimed(row: dict[str, Any], lease_token: UUID) -> None:
                 duration_sec=int(row.get("duration_sec") or 0) or None,
                 response_count=1,
                 questions_asked=1,
+                transcript=transcript,
             )
 
         completed = repo.complete_speaking_response_transcription(

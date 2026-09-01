@@ -167,7 +167,12 @@ class SpeakingPendingResponse(BaseModel):
     ai_status: str | None = None
     evaluation_status: str | None = None
     score_source: Literal[
-        "human", "ai_estimate", "processing", "failed", "unavailable"
+        "human",
+        "ai_estimate",
+        "processing",
+        "failed",
+        "unavailable",
+        "insufficient_speech",
     ] = "processing"
     ai_band: float | None = Field(default=None, ge=0, le=9)
     ai_criteria: dict[str, float] = Field(default_factory=dict)

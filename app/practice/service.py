@@ -573,9 +573,13 @@ def complete_hub(*, user_id: UUID, hub_id: str) -> HubCompleteOut:
     flat = assert_hub_accessible(user_id=user_id, hub_id=hub_id)
     saved = repository.upsert_hub_completed(user_id=user_id, hub_id=hub_id)
     try:
-        from app.learning.service import invalidate_learning_profile_cache
+        from app.learning.service import (
+            invalidate_learning_profile_cache,
+            sync_study_plan_tasks_for_hub,
+        )
         from app.reliability.metrics import incr
 
+        sync_study_plan_tasks_for_hub(user_id, hub_id)
         invalidate_learning_profile_cache(user_id)
         incr("hub_complete")
     except Exception:

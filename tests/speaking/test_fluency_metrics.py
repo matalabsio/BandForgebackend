@@ -52,6 +52,23 @@ def test_compute_fluency_metrics():
     assert metrics["total_speaking_seconds"] > 0
 
 
+def test_compute_fluency_metrics_punctuation_only_has_zero_wpm():
+    words = [
+        {"word": ".", "start": 0.0, "end": 2.0},
+        {"word": "..", "start": 2.1, "end": 4.0},
+        {"word": ".", "start": 4.1, "end": 6.0},
+        {"word": ".", "start": 6.1, "end": 9.6},
+    ]
+    metrics = compute_fluency_metrics(
+        words=words,
+        duration_sec=10,
+        transcript="..",
+    )
+    assert metrics["meaningful_word_count"] == 0
+    assert metrics["words_per_minute"] == 0.0
+    assert metrics["total_speaking_seconds"] == 0.0
+
+
 def _response(
     response_id: str,
     *,
@@ -70,6 +87,7 @@ def _response(
         "transcription_model": "whisper-large-v3-turbo",
         "fluency_metrics": {
             "word_count": words,
+            "meaningful_word_count": words,
             "total_speaking_seconds": seconds,
             "long_pauses": pauses,
             "words_per_minute": 0,

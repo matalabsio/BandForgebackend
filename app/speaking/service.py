@@ -1324,6 +1324,10 @@ def get_pending_status(
         evaluation_status == "completed"
         and ai_status in ("ai_complete", "ai_stub")
     )
+    insufficient_speech = (
+        evaluation_status == "completed"
+        and ai_status == "insufficient_speech"
+    )
     ai_band: float | None = None
     if ai_complete:
         candidate = _parse_optional_float(ai_scores.get("ai_band"))
@@ -1378,11 +1382,13 @@ def get_pending_status(
     )
     ai_fluency = (
         dict(ai_scores.get("attempt_metrics") or ai_scores.get("fluency_metrics") or {})
-        if ai_complete
+        if ai_complete or insufficient_speech
         else {}
     )
     ai_part_metrics = (
-        dict(ai_scores.get("part_metrics") or {}) if ai_complete else {}
+        dict(ai_scores.get("part_metrics") or {})
+        if ai_complete or insufficient_speech
+        else {}
     )
 
     transcription_progress = repo.transcription_progress(attempt_id=attempt_id)
@@ -1406,6 +1412,12 @@ def get_pending_status(
         message = (
             f"Your provisional AI Speaking estimate is {ai_band:.1f}. "
             "A certified examiner is reviewing the official result."
+        )
+    elif insufficient_speech:
+        score_source = "insufficient_speech"
+        message = str(
+            ai_scores.get("message")
+            or "We couldn't detect enough speech to score this attempt."
         )
     elif ai_status == "ai_failed" or evaluation_status == "failed":
         score_source = "failed"
