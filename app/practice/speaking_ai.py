@@ -27,6 +27,16 @@ AI_STATUS_PENDING = "pending"
 AI_STATUS_COMPLETE = "ai_complete"
 AI_STATUS_STUB = "ai_stub"
 AI_STATUS_FAILED = "ai_failed"
+AI_STATUS_INSUFFICIENT = "insufficient_speech"
+
+TERMINAL_AI_STATUSES = frozenset(
+    {
+        AI_STATUS_COMPLETE,
+        AI_STATUS_STUB,
+        AI_STATUS_FAILED,
+        AI_STATUS_INSUFFICIENT,
+    }
+)
 
 # FK anchor for practice bank speaking attempts (M01 has speaking content).
 PRACTICE_SPEAKING_MOCK_TEST_ID = UUID("a0000000-0000-4000-8000-000000000001")
@@ -216,9 +226,10 @@ def _sync_score_from_review(
             review.get("id") or score.get("speaking_review_id") or ""
         ),
         "status": ai_status
-        if ai_status in (AI_STATUS_COMPLETE, AI_STATUS_STUB, AI_STATUS_FAILED)
+        if ai_status in TERMINAL_AI_STATUSES
         else AI_STATUS_PENDING,
         "ai_band": ai_scores.get("ai_band"),
+        "message": ai_scores.get("message"),
         "fluency": ai_scores.get("fluency"),
         "lexical": ai_scores.get("lexical"),
         "grammar": ai_scores.get("grammar"),
@@ -232,7 +243,7 @@ def _sync_score_from_review(
         "error": ai_scores.get("error"),
         "synced_at": datetime.now(UTC).isoformat(),
     }
-    if merged["status"] in (AI_STATUS_COMPLETE, AI_STATUS_STUB, AI_STATUS_FAILED):
+    if merged["status"] in TERMINAL_AI_STATUSES:
         merged["completed_at"] = datetime.now(UTC).isoformat()
     _sb().table("practice_exercise_attempts").update({"score": merged}).eq(
         "id", practice_attempt_id
@@ -313,6 +324,7 @@ def finalize_practice_speaking_submit(
         AI_STATUS_COMPLETE,
         AI_STATUS_STUB,
         AI_STATUS_FAILED,
+        AI_STATUS_INSUFFICIENT,
     ):
         score = _sync_score_from_review(practice_attempt_id, score, review)
     else:
@@ -494,6 +506,7 @@ def get_practice_speaking_review(
         "ai_model_name": score.get("model_eval"),
         "submitted_at": attempt.get("completed_at"),
         "error": score.get("error"),
+        "message": score.get("message"),
         "evaluation_status": (
             str(review.get("evaluation_status"))
             if review and review.get("evaluation_status")

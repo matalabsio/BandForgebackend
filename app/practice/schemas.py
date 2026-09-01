@@ -203,4 +203,5 @@ class PracticeSpeakingReviewOut(BaseModel):
     ai_provider: str | None = None
     submitted_at: str | None = None
     error: str | None = None
+    message: str | None = None
     evaluation_status: str | None = None

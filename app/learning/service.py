@@ -34,6 +34,7 @@ from app.learning.schemas import (
     VocabStats,
     WeaknessItem,
     WeeklyGoal,
+    WeeklyHubCompletion,
 )
 
 logger = logging.getLogger(__name__)
@@ -291,6 +292,155 @@ def _should_weekly_replan(row: dict[str, Any] | None) -> bool:
     if monday_of(last_replan_d) < this_monday:
         return True
     return (today - last_replan_d).days >= 7
+
+
+def _parse_completion_date(raw: Any) -> date | None:
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str):
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        elif isinstance(raw, datetime):
+            dt = raw
+        else:
+            return None
+        return dt.date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _hub_skill_map(hubs_by_skill: dict[str, list[dict[str, Any]]]) -> dict[str, str]:
+    from app.practice.repository import _flatten_hub_row
+
+    out: dict[str, str] = {}
+    for skill, rows in hubs_by_skill.items():
+        skill_key = str(skill or "").lower()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            flat = _flatten_hub_row(row)
+            hub_id = str(flat.get("id") or "")
+            if not hub_id:
+                continue
+            out[hub_id] = skill_key or str(flat.get("skill") or "").lower()
+    return out
+
+
+def weekly_hub_completions_for_user(
+    user_id: UUID,
+    *,
+    progress_map: dict[str, dict[str, Any]] | None = None,
+    hubs_by_skill: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[WeeklyHubCompletion]:
+    """Hub completions in the current Mon–Sun week (for dashboard Focus card)."""
+    today = date.today()
+    week_start = monday_of(today)
+    week_end = week_start + timedelta(days=6)
+
+    if progress_map is None or hubs_by_skill is None:
+        try:
+            from app.practice.service import practice_profile_bundle
+
+            _, progress_map, hubs_by_skill = practice_profile_bundle(user_id)
+        except Exception:
+            logger.exception("weekly_hub_completions_for_user bundle failed for %s", user_id)
+            return []
+
+    hub_to_skill = _hub_skill_map(hubs_by_skill or {})
+    out: list[WeeklyHubCompletion] = []
+    seen: set[tuple[str, str]] = set()
+
+    for hub_id, prog in (progress_map or {}).items():
+        if not isinstance(prog, dict):
+            continue
+        if str(prog.get("status") or "").lower() != "completed":
+            continue
+        completed_on = _parse_completion_date(prog.get("completed_at"))
+        if completed_on is None or completed_on < week_start or completed_on > week_end:
+            continue
+        skill = hub_to_skill.get(str(hub_id), "")
+        if not skill:
+            continue
+        key = (str(hub_id), completed_on.isoformat())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            WeeklyHubCompletion(
+                date=completed_on.isoformat(),
+                skill=skill,
+                hub_id=str(hub_id),
+            )
+        )
+    out.sort(key=lambda row: (row.date, row.skill, row.hub_id))
+    return out
+
+
+def sync_study_plan_tasks_for_hub(user_id: UUID, hub_id: str) -> bool:
+    """Mark pending practice/submit plan tasks for this hub as done."""
+    row = fetch_profile_row(user_id)
+    if row is None:
+        return False
+
+    study_plan = row.get("study_plan") or {}
+    if not isinstance(study_plan, dict):
+        return False
+
+    hub_key = str(hub_id)
+    changed = False
+    new_weeks: list[dict[str, Any]] = []
+
+    for week in study_plan.get("weeks") or []:
+        if not isinstance(week, dict):
+            new_weeks.append(week)
+            continue
+        days: list[dict[str, Any]] = []
+        for day in week.get("days") or []:
+            if not isinstance(day, dict):
+                days.append(day)
+                continue
+            tasks: list[dict[str, Any]] = []
+            for task in day.get("tasks") or []:
+                if not isinstance(task, dict):
+                    tasks.append(task)
+                    continue
+                task_hub = str(task.get("hub_id") or "")
+                task_type = str(task.get("task_type") or "practice").lower()
+                status = str(task.get("status") or "pending").lower()
+                if (
+                    task_hub == hub_key
+                    and task_type in ("practice", "submit")
+                    and status not in ("done", "skipped")
+                ):
+                    tasks.append({**task, "status": "done"})
+                    changed = True
+                else:
+                    tasks.append(task)
+            days.append({**day, "tasks": tasks})
+        new_weeks.append({**week, "days": days})
+
+    if not changed:
+        return False
+
+    study_plan = {**study_plan, "weeks": new_weeks}
+    now = datetime.now(UTC)
+    client = get_supabase()
+    execute_with_retry(
+        lambda: (
+            client.table("user_learning_profiles")
+            .update({"study_plan": study_plan, "updated_at": now.isoformat()})
+            .eq("user_id", str(user_id))
+            .execute()
+        )
+    )
+    invalidate_learning_profile_cache(user_id)
+    try:
+        from app.reliability.metrics import incr
+
+        incr("task_done")
+    except Exception:
+        pass
+    return True
 
 
 def _hub_progress_for_user(user_id: UUID) -> dict[str, SkillHubProgress]:
@@ -667,6 +817,14 @@ def row_to_response(row: dict[str, Any]) -> LearningProfileResponse:
     except Exception:
         logger.exception("practice_profile_bundle failed for %s", user_uuid)
         hub_progress = _hub_progress_for_user(user_uuid)
+        progress_map = None
+        hubs_by_skill = None
+
+    weekly_hub_completions = weekly_hub_completions_for_user(
+        user_uuid,
+        progress_map=progress_map,
+        hubs_by_skill=hubs_by_skill,
+    )
 
     rewritten_plan = _serve_rewritten_study_plan(
         study_plan_raw,
@@ -716,6 +874,7 @@ def row_to_response(row: dict[str, Any]) -> LearningProfileResponse:
         days_remaining=timeline["days_remaining"],
         skill_difficulty=timeline["skill_difficulty"],
         hub_progress=hub_progress,
+        weekly_hub_completions=weekly_hub_completions,
     )
 
 

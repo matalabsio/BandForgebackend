@@ -250,6 +250,44 @@ def evaluation_to_admin_criteria(evaluation: SpeakingEvaluation) -> dict[str, fl
     }
 
 
+def build_insufficient_speech_scores(
+    *,
+    metrics: dict[str, Any],
+    fingerprint: str,
+    meaningful_word_count: int,
+) -> dict[str, Any]:
+    """Deterministic scores when the attempt has too little speech for AI eval."""
+    from app.speaking.transcript_utils import INSUFFICIENT_SPEECH_MESSAGE
+
+    attempt_metrics = dict(metrics.get("attempt_metrics") or {})
+    attempt_metrics.setdefault("words_per_minute", 0.0)
+    attempt_metrics.setdefault("total_speaking_seconds", 0.0)
+    attempt_metrics["meaningful_word_count"] = meaningful_word_count
+
+    return {
+        "status": "insufficient_speech",
+        "ai_band": None,
+        "message": INSUFFICIENT_SPEECH_MESSAGE,
+        "evaluation": {
+            "band_scores": None,
+            "part_performance": [],
+            "evidence_quotes": [],
+            "recurring_patterns": [],
+            "strengths": [],
+            "improvements": [],
+            "vocabulary_highlights": [],
+            "reviewer_flags": ["insufficient_speech"],
+            "next_band_advice": (
+                "Record again and speak in full sentences so we can score your attempt."
+            ),
+        },
+        "evaluation_input_fingerprint": fingerprint,
+        **metrics,
+        "attempt_metrics": attempt_metrics,
+        "fluency_metrics": attempt_metrics,
+    }
+
+
 def build_stub_evaluation(
     *,
     transcript: str,

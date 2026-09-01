@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
-from unittest.mock import patch
+from datetime import date, datetime, timezone
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from app.learning.schemas import StudyDay, StudyPlan, StudyTask, StudyWeek
@@ -11,6 +11,8 @@ from app.learning.service import (
     _serve_rewritten_study_plan,
     _todays_tasks,
     row_to_response,
+    sync_study_plan_tasks_for_hub,
+    weekly_hub_completions_for_user,
 )
 
 USER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -256,3 +258,104 @@ def test_row_to_response_empty_bootstrap():
     assert profile.target_band == 7.0
     assert profile.recommendations[0].id == "onboard-listening"
     assert len(profile.todays_tasks) == 1
+
+
+def test_sync_study_plan_tasks_for_hub_marks_matching_tasks_done():
+    row = {
+        "study_plan": {
+            "weekly_focus": "Writing",
+            "weeks": [
+                {
+                    "id": "w1",
+                    "label": "Week 1",
+                    "days": [
+                        {
+                            "date": date.today().isoformat(),
+                            "label": "Today",
+                            "tasks": [
+                                {
+                                    "id": "practice-w",
+                                    "title": "Practice",
+                                    "module": "writing",
+                                    "task_type": "practice",
+                                    "hub_id": "hub-1",
+                                    "status": "pending",
+                                },
+                                {
+                                    "id": "watch-w",
+                                    "title": "Watch",
+                                    "module": "writing",
+                                    "task_type": "watch",
+                                    "hub_id": "hub-1",
+                                    "status": "pending",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    updated_payload: dict = {}
+
+    def _capture_update(payload):
+        updated_payload.update(payload)
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[{}])
+        return result
+
+    table = MagicMock()
+    table.update.side_effect = _capture_update
+    table.eq.return_value = table
+    client = MagicMock()
+    client.table.return_value = table
+
+    with (
+        patch("app.learning.service.fetch_profile_row", return_value=row),
+        patch("app.learning.service.get_supabase", return_value=client),
+        patch("app.learning.service.execute_with_retry", side_effect=lambda fn: fn()),
+        patch("app.learning.service.invalidate_learning_profile_cache"),
+    ):
+        changed = sync_study_plan_tasks_for_hub(USER_ID, "hub-1")
+
+    assert changed is True
+    tasks = updated_payload["study_plan"]["weeks"][0]["days"][0]["tasks"]
+    assert tasks[0]["status"] == "done"
+    assert tasks[1]["status"] == "pending"
+
+
+def test_weekly_hub_completions_for_user_filters_current_week():
+    today = date.today()
+    week_start = today - __import__("datetime").timedelta(days=today.weekday())
+    progress_map = {
+        "hub-1": {
+            "status": "completed",
+            "completed_at": datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat(),
+        },
+        "hub-old": {
+            "status": "completed",
+            "completed_at": "2020-01-01T00:00:00+00:00",
+        },
+    }
+    hubs_by_skill = {
+        "writing": [
+            {
+                "id": "hub-1",
+                "set_id": "set-1",
+                "practice_sets": {
+                    "id": "set-1",
+                    "practice_banks": {"skill": "writing"},
+                },
+            }
+        ]
+    }
+    rows = weekly_hub_completions_for_user(
+        USER_ID,
+        progress_map=progress_map,
+        hubs_by_skill=hubs_by_skill,
+    )
+    assert len(rows) == 1
+    assert rows[0].hub_id == "hub-1"
+    assert rows[0].skill == "writing"
+    assert rows[0].date == today.isoformat()
+    assert week_start <= date.fromisoformat(rows[0].date) <= week_start + __import__("datetime").timedelta(days=6)

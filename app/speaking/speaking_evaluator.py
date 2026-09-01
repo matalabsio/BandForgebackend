@@ -18,11 +18,18 @@ from app.config import get_settings
 from app.speaking import repository as repo
 from app.speaking.evaluation_schemas import (
     SpeakingEvaluation,
+    build_insufficient_speech_scores,
     build_stub_evaluation,
     evaluation_to_admin_criteria,
     validate_evidence_against_responses,
 )
 from app.speaking.fluency_metrics import aggregate_fluency_metrics, compute_fluency_metrics
+from app.speaking.transcript_utils import (
+    MIN_MEANINGFUL_WORDS_RESPONSE,
+    attempt_meaningful_word_count,
+    is_sufficient_attempt_speech,
+    meaningful_word_count,
+)
 from app.speaking.providers.constants import (
     PROVIDER_NAME_ANTHROPIC_CLAUDE,
     PROVIDER_NAME_GROQ,
@@ -229,7 +236,23 @@ async def _evaluate_full_attempt(
         f"part={item['part']}]\n{item['transcript']}"
         for item in inputs
     )
+    meaningful_total = attempt_meaningful_word_count(inputs)
     try:
+        if not is_sufficient_attempt_speech(inputs):
+            scores = build_insufficient_speech_scores(
+                metrics=metrics,
+                fingerprint=fingerprint,
+                meaningful_word_count=meaningful_total,
+            )
+            repo.complete_speaking_attempt_evaluation(
+                review_id=review_id,
+                lease_token=lease_token,
+                fingerprint=fingerprint,
+                transcript=transcript,
+                ai_scores=scores,
+                completed_at_iso=datetime.now(UTC).isoformat(),
+            )
+            return True
         if settings.speaking_eval_stub:
             evaluation = _stub_attempt_evaluation(inputs)
             status_value = "ai_stub"
@@ -366,6 +389,7 @@ async def process_speaking_review_async(review_id: UUID) -> None:
     if isinstance(existing_scores, dict) and existing_scores.get("status") in (
         "ai_complete",
         "ai_stub",
+        "insufficient_speech",
     ):
         return
     mock_test_id = UUID(str(attempt["mock_test_id"]))
@@ -426,14 +450,32 @@ async def process_speaking_review_async(review_id: UUID) -> None:
         asr_result = await asr.transcribe(audio_bytes=audio_bytes, filename=filename)
         transcript = str(asr_result.get("text") or "").strip()
         words = list(asr_result.get("words") or [])
-        if not transcript:
-            raise RuntimeError("ASR returned an empty transcript")
+        if meaningful_word_count(transcript) < MIN_MEANINGFUL_WORDS_RESPONSE:
+            metrics = compute_fluency_metrics(
+                words=words,
+                duration_sec=duration_sec,
+                response_count=1,
+                questions_asked=questions_asked,
+                transcript=transcript,
+            )
+            scores = build_insufficient_speech_scores(
+                metrics={"attempt_metrics": metrics, "fluency_metrics": metrics},
+                fingerprint="legacy-single-audio",
+                meaningful_word_count=meaningful_word_count(transcript),
+            )
+            repo.update_speaking_review_evaluation(
+                review_id=review_id,
+                transcript=transcript or None,
+                ai_scores=scores,
+            )
+            return
 
         metrics = compute_fluency_metrics(
             words=words,
             duration_sec=duration_sec,
             response_count=1,
             questions_asked=questions_asked,
+            transcript=transcript,
         )
         last_error: Exception | None = None
         eval_provider = None
