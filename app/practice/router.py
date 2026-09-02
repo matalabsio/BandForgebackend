@@ -19,6 +19,7 @@ from app.practice.schemas import (
     MockUnlockOut,
     PracticeHubDetailOut,
     PracticeHubOut,
+    PracticeObjectiveReviewOut,
     PracticeProgressOut,
     PracticeSpeakingReviewOut,
     PracticeWritingReviewOut,
@@ -166,6 +167,46 @@ def practice_speaking_review(
         attempt_id=attempt_id,
     )
     return PracticeSpeakingReviewOut.model_validate(data)
+
+
+@router.get(
+    "/hubs/{hub_id}/exercise/{attempt_id}/listening-review",
+    response_model=PracticeObjectiveReviewOut,
+)
+def practice_listening_review(
+    hub_id: str,
+    attempt_id: str,
+    user: Annotated[UserPublic, Depends(require_practice_access)],
+) -> PracticeObjectiveReviewOut:
+    from app.practice.objective_review import get_practice_objective_review
+
+    data = get_practice_objective_review(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        attempt_id=attempt_id,
+        module="listening",
+    )
+    return PracticeObjectiveReviewOut.model_validate(data)
+
+
+@router.get(
+    "/hubs/{hub_id}/exercise/{attempt_id}/reading-review",
+    response_model=PracticeObjectiveReviewOut,
+)
+def practice_reading_review(
+    hub_id: str,
+    attempt_id: str,
+    user: Annotated[UserPublic, Depends(require_practice_access)],
+) -> PracticeObjectiveReviewOut:
+    from app.practice.objective_review import get_practice_objective_review
+
+    data = get_practice_objective_review(
+        user_id=UUID(str(user.id)),
+        hub_id=hub_id,
+        attempt_id=attempt_id,
+        module="reading",
+    )
+    return PracticeObjectiveReviewOut.model_validate(data)
 
 
 @router.get("/progress", response_model=PracticeProgressOut)

@@ -205,3 +205,23 @@ class PracticeSpeakingReviewOut(BaseModel):
     error: str | None = None
     message: str | None = None
     evaluation_status: str | None = None
+
+
+class PracticeObjectiveReviewQuestionOut(BaseModel):
+    question_id: str
+    question_number: int
+    question_type: str = ""
+    prompt: str = ""
+    user_answer: str = ""
+    correct_answer: str = ""
+    is_correct: bool = False
+    explanation: str = ""
+
+
+class PracticeObjectiveReviewOut(BaseModel):
+    attempt_id: str
+    hub_id: str
+    module: Literal["listening", "reading"]
+    raw_score: int = 0
+    total_questions: int = 0
+    questions: list[PracticeObjectiveReviewQuestionOut] = Field(default_factory=list)
