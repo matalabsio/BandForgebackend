@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     rate_limit_verify: int | None = Field(
         default=None, validation_alias="RATE_LIMIT_VERIFY"
     )
+    rate_limit_redeem_coupon: int | None = Field(
+        default=None, validation_alias="RATE_LIMIT_REDEEM_COUPON"
+    )
     rate_limit_register: int | None = Field(
         default=None, validation_alias="RATE_LIMIT_REGISTER"
     )
