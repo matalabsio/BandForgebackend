@@ -31,7 +31,7 @@ def test_build_personalized_study_plan_day_count_and_tasks():
 
     today_day = next(d for d in all_days if d.date == today.isoformat())
     task_types = {t.task_type for t in today_day.tasks}
-    assert "watch" in task_types
+    assert "watch" not in task_types
     assert "practice" in task_types
     assert "submit" in task_types
 
@@ -53,15 +53,16 @@ def test_mixed_path_dedupes_repeated_session_skills():
         prep_start=today,
     )
     day = plan.weeks[0].days[0]
-    watches = [t for t in day.tasks if t.task_type == "watch"]
-    watch_by_module = Counter(t.module for t in watches)
-    assert all(count == 1 for count in watch_by_module.values())
-    assert set(watch_by_module) == set(session_order)
+    practices = [t for t in day.tasks if t.task_type == "practice"]
+    practice_by_module = Counter(t.module for t in practices)
+    assert all(count == 1 for count in practice_by_module.values())
+    assert set(practice_by_module) == set(session_order)
 
     unique = list(dict.fromkeys(session_order))
     for skill in unique:
         types = {t.task_type for t in day.tasks if t.module == skill}
-        assert "watch" in types and "practice" in types
+        assert "practice" in types
+        assert "watch" not in types
         if skill in ("writing", "speaking"):
             assert "submit" in types
 
@@ -79,18 +80,20 @@ def test_build_personalized_study_plan_foundation_session_order():
     assert plan.session_path_kind == "foundation"
     first_day = plan.weeks[0].days[0]
     titles = [t.title for t in first_day.tasks]
-    assert titles[0] == "Listening — Watch"
-    assert titles[1] == "Listening — Practice"
-    assert titles[2] == "Reading — Watch"
+    assert titles[0] == "Listening — Practice"
+    assert titles[1] == "Reading — Practice"
+    assert titles[2] == "Writing — Practice"
+    assert titles[3] == "Writing — Submit"
 
-    watches = [t for t in first_day.tasks if t.task_type == "watch"]
-    assert [t.module for t in watches] == [
+    practices = [t for t in first_day.tasks if t.task_type == "practice"]
+    assert [t.module for t in practices] == [
         "listening",
         "reading",
         "writing",
         "speaking",
     ]
-    assert len(watches) == 4
+    assert len(practices) == 4
+    assert not any(t.task_type == "watch" for t in first_day.tasks)
 
 
 def test_personalized_plan_bloated_detector():

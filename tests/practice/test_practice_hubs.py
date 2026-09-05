@@ -375,10 +375,11 @@ def test_build_personalized_study_plan_assigns_hub_ids():
     assert hub_ids
     assert all(isinstance(h, str) for h in hub_ids)
     assert plan.assigned_hub_ids
-    watch = next(t for t in plan.weeks[0].days[0].tasks if t.task_type == "watch")
-    assert watch.href.startswith("/practice/")
-    assert "from=plan" in watch.href
-    assert "task=watch" in watch.href
+    practice = next(t for t in plan.weeks[0].days[0].tasks if t.task_type == "practice")
+    assert practice.href.startswith("/practice/") or practice.href.startswith("/test/")
+    assert "from=plan" in practice.href
+    assert "task=practice" in practice.href
+    assert not any(t.task_type == "watch" for t in plan.weeks[0].days[0].tasks)
 
 
 def test_pick_hub_for_slot_does_not_wrap():

@@ -8,10 +8,15 @@ from uuid import UUID
 
 from app.learning.schemas import StudyDay, StudyPlan, StudyTask, StudyWeek
 from app.learning.service import (
+    PROFILE_CACHE_TTL_DEFAULT,
+    PROFILE_CACHE_TTL_FSP,
+    _plan_hubs_materialized,
+    _profile_cache_ttl_seconds,
     _serve_rewritten_study_plan,
     _todays_tasks,
     row_to_response,
     sync_study_plan_tasks_for_hub,
+    warm_learning_profile_cache,
     weekly_hub_completions_for_user,
 )
 
@@ -359,3 +364,101 @@ def test_weekly_hub_completions_for_user_filters_current_week():
     assert rows[0].skill == "writing"
     assert rows[0].date == today.isoformat()
     assert week_start <= date.fromisoformat(rows[0].date) <= week_start + __import__("datetime").timedelta(days=6)
+
+
+def _materialized_plan_for_today() -> dict:
+    today = date.today().isoformat()
+    return {
+        "weekly_focus": "Focus",
+        "hubs_materialized_at": "2026-01-01T00:00:00+00:00",
+        "hubs_materialized_catalog_version": 1,
+        "assigned_hub_ids": ["hub-l"],
+        "weeks": [
+            {
+                "id": "w1",
+                "label": "Week 1",
+                "focus": "Focus",
+                "days": [
+                    {
+                        "date": today,
+                        "label": "Mon",
+                        "tasks": [
+                            {
+                                "id": "watch-l",
+                                "title": "Watch",
+                                "module": "listening",
+                                "task_type": "watch",
+                                "hub_id": "hub-l",
+                                "href": "/practice/listening/hub-l",
+                                "status": "pending",
+                            },
+                            {
+                                "id": "practice-l",
+                                "title": "Practice",
+                                "module": "listening",
+                                "task_type": "practice",
+                                "hub_id": "hub-l",
+                                "href": "/practice/listening/hub-l",
+                                "status": "pending",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_plan_hubs_materialized_true_when_stamped_and_catalog_matches():
+    plan = _materialized_plan_for_today()
+    assert _plan_hubs_materialized(plan, catalog_version=1) is True
+
+
+def test_plan_hubs_materialized_false_when_catalog_version_changes():
+    plan = _materialized_plan_for_today()
+    assert _plan_hubs_materialized(plan, catalog_version=2) is False
+
+
+def test_serve_rewritten_skips_rewrite_when_plan_materialized():
+    plan = _materialized_plan_for_today()
+    with (
+        patch("app.practice.repository.get_practice_catalog_version", return_value=1),
+        patch("app.cache.hybrid_cache.get_json", return_value=None),
+        patch("app.cache.hybrid_cache.set_json") as set_cache,
+        patch("app.practice.assignment.rewrite_plan_hubs") as rewrite,
+    ):
+        out = _serve_rewritten_study_plan(
+            plan,
+            user_id=USER_ID,
+            prep_start=date.today(),
+            progress_map={},
+        )
+    rewrite.assert_not_called()
+    assert out is plan
+    set_cache.assert_called_once()
+
+
+def test_profile_cache_ttl_fsp_for_active_personalized_plan():
+    row = {
+        "plan_tier": "full_skill_program",
+        "exam_date": (date.today() + __import__("datetime").timedelta(days=30)).isoformat(),
+        "study_plan": {"plan_tier": "full_skill_program", "weeks": [{"days": []}]},
+    }
+    assert _profile_cache_ttl_seconds(row) == PROFILE_CACHE_TTL_FSP
+
+
+def test_profile_cache_ttl_default_for_diagnostic_only():
+    row = {"plan_tier": None, "study_plan": {"weeks": []}}
+    assert _profile_cache_ttl_seconds(row) == PROFILE_CACHE_TTL_DEFAULT
+
+
+def test_warm_learning_profile_cache_calls_ensure_profile():
+    fake_response = MagicMock()
+    with patch(
+        "app.learning.service.ensure_profile",
+        return_value=fake_response,
+    ) as ensure:
+        out = warm_learning_profile_cache(USER_ID)
+    ensure.assert_called_once_with(USER_ID, force=True)
+    assert out is fake_response
+

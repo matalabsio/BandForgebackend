@@ -724,7 +724,18 @@ def _plan_open_href(
     if task_id:
         q_task += f"&taskId={task_id}"
     if task_type == "watch":
-        return f"/practice/{skill}/{hub_id}?{q_task}"
+        # Legacy Watch → open Practice (FSP plans no longer use a video step).
+        return _plan_open_href(
+            skill=skill,
+            hub_id=hub_id,
+            task_type="practice",
+            task_id=task_id.replace("-watch-", "-practice-")
+            if task_id and "-watch-" in task_id
+            else task_id,
+            catalog_number=catalog_number,
+            part=part,
+            submit_config=submit_config,
+        )
 
     from app.practice.module_href import plan_module_href
 
@@ -788,7 +799,8 @@ def _tasks_for_session_skill(
     hub_id: str | None = None,
     slot_index: int = 0,
 ) -> list[StudyTask]:
-    task_types = ["watch", "practice"]
+    # Practice (+ Submit for W/S) only — no Watch / video step in FSP plans.
+    task_types = ["practice"]
     if skill in ("writing", "speaking"):
         task_types.append("submit")
     tasks: list[StudyTask] = []

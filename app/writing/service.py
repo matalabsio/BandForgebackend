@@ -36,7 +36,7 @@ from app.writing.constants import (
     WRITING_GRACE_SECONDS,
 )
 from app.writing.evaluation import calculate_writing_band, min_words_for_part
-from app.writing.eval_utils import visual_description_from_task_options
+from app.writing.eval_utils import MIN_WORDS_FOR_AI, visual_description_from_task_options
 from app.writing.providers.constants import PROVIDER_NAME_ANTHROPIC_CLAUDE, PROVIDER_NAME_GROQ
 from app.writing.schemas import (
     AutosaveResponse,
@@ -867,9 +867,26 @@ def get_pending_status(
     ai_scores = review.get("ai_scores") or {}
     if not isinstance(ai_scores, dict):
         ai_scores = {}
+    meta = review.get("submission_meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
     ai_status = _ai_status_from_scores(ai_scores)
     ai_band = _ai_band_from_scores(ai_scores)
     ai_available = ai_evaluation_available()
+
+    word_count_raw = ai_scores.get("word_count", meta.get("word_count"))
+    try:
+        word_count_val = int(word_count_raw) if word_count_raw is not None else None
+    except (TypeError, ValueError):
+        word_count_val = None
+    ai_error = str(ai_scores.get("error") or "").lower()
+    short_response = bool(ai_scores.get("short_response")) or (
+        ai_status == AI_STATUS_FAILED
+        and (
+            "too short" in ai_error
+            or (word_count_val is not None and word_count_val < MIN_WORDS_FOR_AI)
+        )
+    )
 
     if review_status == "completed" and band_val is not None:
         message = f"Your Writing band is {band_val:.1f}."
@@ -883,6 +900,13 @@ def get_pending_status(
         message = (
             f"AI feedback is ready{preview}. A certified examiner is still reviewing "
             "your essay — you will receive your official band within 24 hours."
+        )
+    elif ai_status == AI_STATUS_FAILED and short_response:
+        message = (
+            f"Your essay is under the minimum word count for AI evaluation "
+            f"(need at least {MIN_WORDS_FOR_AI} words). "
+            "A certified examiner will still review it manually and confirm "
+            "your band within 24 hours."
         )
     elif ai_status == AI_STATUS_FAILED:
         message = (
@@ -912,6 +936,8 @@ def get_pending_status(
         ai_status=ai_status,
         ai_band=ai_band,
         ai_available=ai_available,
+        word_count=word_count_val,
+        short_response=short_response,
         submitted_at=submitted_at,
         message=message,
         session_tasks=_session_tasks(attempt, user_id=user_id),

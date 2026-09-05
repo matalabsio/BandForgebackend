@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 REFRESH_MAX_AGE = timedelta(hours=24)
 FULL_SKILL_PROGRAM_TIER = "full_skill_program"
+PROFILE_CACHE_TTL_DEFAULT = 30
+PROFILE_CACHE_TTL_FSP = 300
+PLAN_REWRITTEN_CACHE_TTL = 300
 
 
 def _record_persisted_plan_assignments(
@@ -507,6 +510,110 @@ def _has_active_personalized_plan(row: dict[str, Any] | None) -> bool:
     return exam_date >= date.today()
 
 
+def _profile_cache_ttl_seconds(row: dict[str, Any] | None) -> int:
+    if row is None:
+        return PROFILE_CACHE_TTL_DEFAULT
+    if _has_active_personalized_plan(row):
+        return PROFILE_CACHE_TTL_FSP
+    if row.get("plan_tier") == FULL_SKILL_PROGRAM_TIER:
+        return PROFILE_CACHE_TTL_FSP
+    study_plan = row.get("study_plan")
+    if isinstance(study_plan, dict) and study_plan.get("plan_tier") == FULL_SKILL_PROGRAM_TIER:
+        return PROFILE_CACHE_TTL_FSP
+    return PROFILE_CACHE_TTL_DEFAULT
+
+
+def _plan_hubs_materialized(
+    study_plan_raw: dict[str, Any],
+    *,
+    catalog_version: int,
+) -> bool:
+    """True when hub assignments were persisted at plan write and catalog is unchanged."""
+    if not isinstance(study_plan_raw, dict):
+        return False
+    if not study_plan_raw.get("hubs_materialized_at"):
+        return False
+    stored_version = int(study_plan_raw.get("hubs_materialized_catalog_version") or -1)
+    if stored_version != int(catalog_version or 0):
+        return False
+    assigned = study_plan_raw.get("assigned_hub_ids")
+    if not isinstance(assigned, list) or not assigned:
+        return False
+
+    from app.practice.assignment import SKILLS, _existing_hub_for_skill
+
+    for week in study_plan_raw.get("weeks") or []:
+        if not isinstance(week, dict):
+            continue
+        for day in week.get("days") or []:
+            if not isinstance(day, dict):
+                continue
+            tasks = [t for t in (day.get("tasks") or []) if isinstance(t, dict)]
+            skills_on_day = {
+                str(t.get("module") or "").strip().lower()
+                for t in tasks
+                if str(t.get("module") or "").strip().lower() in SKILLS
+            }
+            for skill in skills_on_day:
+                hub = _existing_hub_for_skill(tasks, skill)
+                if not hub:
+                    return False
+    return True
+
+
+def _materialize_study_plan_hubs(
+    user_id: UUID,
+    study_plan_raw: dict[str, Any],
+    *,
+    skill_weaknesses: list[dict[str, Any]] | None = None,
+    prep_start: date | None = None,
+) -> dict[str, Any]:
+    """Assign hubs once at plan write time and stamp materialization metadata."""
+    progress_map: dict[str, dict[str, Any]] | None = None
+    try:
+        from app.practice.repository import get_user_progress_map
+
+        progress_map = get_user_progress_map(user_id)
+    except Exception:
+        logger.exception("could not load progress for plan materialization %s", user_id)
+
+    rewritten = _serve_rewritten_study_plan(
+        study_plan_raw,
+        user_id=user_id,
+        prep_start=prep_start,
+        progress_map=progress_map,
+        skill_weaknesses=skill_weaknesses,
+        expected_updated_at=None,
+    )
+    try:
+        from app.practice.repository import get_practice_catalog_version
+
+        catalog_version = get_practice_catalog_version()
+    except Exception:
+        catalog_version = 0
+    rewritten["hubs_materialized_at"] = datetime.now(UTC).isoformat()
+    rewritten["hubs_materialized_catalog_version"] = int(catalog_version or 0)
+    return rewritten
+
+
+def warm_learning_profile_cache(user_id: UUID) -> LearningProfileResponse:
+    """Rebuild and cache the learning profile after plan writes."""
+    import time
+
+    t0 = time.perf_counter()
+    try:
+        response = ensure_profile(user_id, force=True)
+        logger.info(
+            "warmed learning profile cache for %s in %.2fs",
+            user_id,
+            time.perf_counter() - t0,
+        )
+        return response
+    except Exception:
+        logger.exception("failed to warm learning profile cache for %s", user_id)
+        raise
+
+
 def _parse_date(value: Any) -> date | None:
     if value is None:
         return None
@@ -653,6 +760,10 @@ def _serve_rewritten_study_plan(
     ):
         return cached
 
+    if _plan_hubs_materialized(study_plan_raw, catalog_version=catalog_version):
+        set_json(cache_key, study_plan_raw, PLAN_REWRITTEN_CACHE_TTL)
+        return study_plan_raw
+
     try:
         from app.practice.assignment import rewrite_plan_hubs
         from app.practice.catalog import (
@@ -739,9 +850,9 @@ def _serve_rewritten_study_plan(
                 expected_updated_at=expected_updated_at,
             )
             if persisted:
-                set_json(cache_key, rewritten, 60)
+                set_json(cache_key, rewritten, PLAN_REWRITTEN_CACHE_TTL)
             return rewritten
-        set_json(cache_key, rewritten, 60)
+        set_json(cache_key, rewritten, PLAN_REWRITTEN_CACHE_TTL)
         return rewritten
     except Exception:
         logger.exception("rewrite_plan_hubs failed for %s", user_id)
@@ -1102,11 +1213,10 @@ def ensure_profile(user_id: UUID, *, force: bool = False) -> LearningProfileResp
         row = refresh_profile(user_id)
     assert row is not None
     response = row_to_response(row)
-    # Phase 4: 30s TTL; mutations invalidate via invalidate_learning_profile_cache.
     set_json(
         cache_key,
         response.model_dump(mode="json"),
-        30,
+        _profile_cache_ttl_seconds(row),
     )
     return response
 
@@ -1386,6 +1496,12 @@ def generate_personalized_plan(
     now = datetime.now(UTC)
     plan_dump = study_plan.model_dump(mode="json")
     plan_dump["last_replan_at"] = now.isoformat()
+    plan_dump = _materialize_study_plan_hubs(
+        user_id,
+        plan_dump,
+        skill_weaknesses=list(aggregate.get("skill_weaknesses") or []),
+        prep_start=prep_start,
+    )
 
     payload = {
         "user_id": str(user_id),
@@ -1427,14 +1543,12 @@ def generate_personalized_plan(
             )
         ).data or []
 
+    if not rows:
+        raise RuntimeError("failed to persist personalized study plan")
+
     invalidate_learning_profile_cache(user_id)
     _record_persisted_plan_assignments(user_id, plan_dump, source="plan_generate")
-    if rows:
-        return row_to_response(rows[0])
-    row = fetch_profile_row(user_id)
-    if row is None:
-        raise RuntimeError("failed to persist personalized study plan")
-    return row_to_response(row)
+    return warm_learning_profile_cache(user_id)
 
 
 def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
@@ -1516,6 +1630,12 @@ def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
     now = datetime.now(UTC)
     merged["last_replan_at"] = now.isoformat()
     merged["prep_start"] = prep_start.isoformat()
+    merged = _materialize_study_plan_hubs(
+        user_id,
+        merged,
+        skill_weaknesses=list(aggregate.get("skill_weaknesses") or []),
+        prep_start=prep_start,
+    )
 
     from app.learning.rules import (
         apply_weekly_goal_completion,
@@ -1564,14 +1684,12 @@ def replan_remaining_schedule(user_id: UUID) -> LearningProfileResponse:
             .execute()
         )
     ).data or []
+    if not rows:
+        raise RuntimeError("failed to persist replanned study plan")
+
     invalidate_learning_profile_cache(user_id)
     _record_persisted_plan_assignments(user_id, merged, source="replan")
-    if rows:
-        return row_to_response(rows[0])
-    row = fetch_profile_row(user_id)
-    if row is None:
-        raise RuntimeError("failed to persist replanned study plan")
-    return row_to_response(row)
+    return warm_learning_profile_cache(user_id)
 
 
 def schedule_personalized_plan_generation(user_id: UUID) -> None:
