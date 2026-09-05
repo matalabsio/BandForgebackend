@@ -151,6 +151,9 @@ def run_reconcile(*, hours: int = 48, apply: bool = False) -> ReconcileReport:
 
     for row in all_local:
         order_id = str(row.get("razorpay_order_id") or "") or None
+        # Coupon grants never hit Razorpay — skip from capture reconcile.
+        if order_id and order_id.startswith("coupon_ord_"):
+            continue
         pay_id = str(row.get("razorpay_payment_id") or "") or None
         key = order_id or pay_id or str(row["id"])
         entry = by_order.setdefault(

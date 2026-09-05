@@ -124,6 +124,16 @@ class VerifyPaymentResponse(BaseModel):
     subscription: SubscriptionOut
 
 
+class RedeemCouponRequest(BaseModel):
+    plan_slug: str = Field(min_length=1, max_length=80)
+    code: str = Field(min_length=1, max_length=64)
+
+
+class RedeemCouponResponse(BaseModel):
+    ok: bool = True
+    subscription: SubscriptionOut
+
+
 class PaymentHistoryItem(BaseModel):
     id: UUID
     plan_name: str | None = None

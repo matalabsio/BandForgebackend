@@ -111,3 +111,43 @@ class RazorpayAuthError(HTTPException):
                 "then restart the backend."
             ),
         )
+
+
+class CouponInvalidError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Invalid coupon code.",
+        )
+
+
+class CouponInactiveError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="This coupon is no longer active.",
+        )
+
+
+class CouponExpiredError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="This coupon has expired.",
+        )
+
+
+class CouponExhaustedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="This coupon has already been used.",
+        )
+
+
+class CouponUserAlreadyRedeemedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_400_BAD_REQUEST,
+            detail="You have already redeemed a coupon.",
+        )

@@ -6,7 +6,7 @@ Used by:
 - POST /auth/send-email-otp — per IP and per email
 - POST /auth/verify-otp — per IP (login bucket)
 - POST /auth/register, /forgot-password, /collect-lead — per IP
-- POST /api/payments/create-order|verify — per user
+- POST /api/payments/create-order|verify|redeem-coupon — per user
 - POST /api/diagnostic/* public abuse surfaces — per IP
 - AI spend paths (writing/speaking submit, tutor chat) — per user
 """
@@ -26,6 +26,8 @@ CREATE_ORDER_LIMIT = 10
 CREATE_ORDER_WINDOW_SEC = 60
 VERIFY_LIMIT = 30
 VERIFY_WINDOW_SEC = 60
+REDEEM_COUPON_LIMIT = 10
+REDEEM_COUPON_WINDOW_SEC = 60
 
 REGISTER_LIMIT = 5
 REGISTER_WINDOW_SEC = 900
@@ -332,6 +334,16 @@ def enforce_verify_rate_limit(*, user_id: str) -> None:
         limit=_limit("rate_limit_verify", VERIFY_LIMIT),
         window_sec=VERIFY_WINDOW_SEC,
         detail="Too many verify attempts. Please try again shortly.",
+    )
+
+
+def enforce_redeem_coupon_rate_limit(*, user_id: str) -> None:
+    enforce_user_rate_limit(
+        user_id=user_id,
+        bucket="payments:redeem_coupon",
+        limit=_limit("rate_limit_redeem_coupon", REDEEM_COUPON_LIMIT),
+        window_sec=REDEEM_COUPON_WINDOW_SEC,
+        detail="Too many coupon attempts. Please try again shortly.",
     )
 
 

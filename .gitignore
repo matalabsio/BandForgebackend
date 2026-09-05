@@ -103,23 +103,38 @@ dmypy.json
 *.ipynb_checkpoints
 
 # -----------------------------------------------------------------------------
-# Local Supabase (Docker) — keep migrations tracked
+# Local Supabase (Docker) — keep migrations/ + config.toml tracked
+# Do NOT ignore supabase/migrations/ — those are schema history, not the DB.
+# Live Postgres data lives in Docker volumes / hosted Supabase — never in git.
 # -----------------------------------------------------------------------------
 supabase/.branches/
 supabase/.temp/
 supabase/.env
 supabase/.env.*
+supabase/db/
+supabase/docker/
+supabase/volumes/
 
 # -----------------------------------------------------------------------------
-# Local databases & dumps
+# Local databases & dumps (never commit live data)
 # -----------------------------------------------------------------------------
 *.db
 *.sqlite
 *.sqlite3
 *.sql.gz
+*.sql.bak
 *.dump
 *.bak
 dump.rdb
+pgdata/
+postgres-data/
+docker/volumes/
+**/docker-volumes/
+
+# Private / one-off seeds with secrets (e.g. redeemable coupon codes)
+seed/*.local.sql
+seed/*_private.sql
+seed/coupons_seed.sql
 
 # -----------------------------------------------------------------------------
 # Generated / local media (uploaded to object storage, never checked in)

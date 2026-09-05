@@ -894,3 +894,82 @@ def list_payment_events_for_payment_id(
         .execute()
     )
     return list(result.data or [])
+
+
+def redeem_coupon_bundle(
+    *,
+    user_id: UUID,
+    plan_slug: str,
+    code: str,
+) -> dict[str, Any]:
+    """Atomically claim coupon + insert paid payment + subscription + redemption."""
+    client = get_supabase()
+    payment_log(
+        "COUPON_RPC_START",
+        user_id=str(user_id),
+        plan_slug=plan_slug,
+        code_last4=(code or "")[-4:] if code else None,
+    )
+    try:
+        result = _exec(
+            client.rpc(
+                "redeem_coupon_bundle",
+                {
+                    "p_user_id": str(user_id),
+                    "p_plan_slug": plan_slug,
+                    "p_code": code,
+                },
+            )
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        payment_log(
+            "COUPON_RPC_FAILED",
+            user_id=str(user_id),
+            plan_slug=plan_slug,
+            code_last4=(code or "")[-4:] if code else None,
+            error=str(exc)[:300],
+        )
+        if "coupon_invalid" in msg:
+            from app.payments.exceptions import CouponInvalidError
+
+            raise CouponInvalidError() from exc
+        if "coupon_inactive" in msg:
+            from app.payments.exceptions import CouponInactiveError
+
+            raise CouponInactiveError() from exc
+        if "coupon_expired" in msg:
+            from app.payments.exceptions import CouponExpiredError
+
+            raise CouponExpiredError() from exc
+        if "coupon_exhausted" in msg:
+            from app.payments.exceptions import CouponExhaustedError
+
+            raise CouponExhaustedError() from exc
+        if "coupon_user_already_redeemed" in msg:
+            from app.payments.exceptions import CouponUserAlreadyRedeemedError
+
+            raise CouponUserAlreadyRedeemedError() from exc
+        if "plan_not_found" in msg:
+            from app.payments.exceptions import PlanNotFoundError
+
+            raise PlanNotFoundError() from exc
+        raise
+
+    data = result.data
+    if isinstance(data, str):
+        data = json.loads(data)
+    if not isinstance(data, dict):
+        raise RuntimeError("redeem_coupon_bundle returned unexpected payload")
+    payment_log(
+        "COUPON_RPC_SUCCESS",
+        user_id=str(user_id),
+        plan_slug=plan_slug,
+        payment_id=str(data.get("payment_id") or ""),
+        subscription_id=str(data.get("subscription_id") or ""),
+        coupon_id=str(data.get("coupon_id") or ""),
+    )
+    uid = data.get("user_id")
+    if uid:
+        invalidate_active_subscription_cache(uid)
+    return data

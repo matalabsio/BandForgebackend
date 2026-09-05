@@ -17,6 +17,8 @@ from app.payments.schemas import (
     OpsStatusResponse,
     PaymentHistoryResponse,
     PlansResponse,
+    RedeemCouponRequest,
+    RedeemCouponResponse,
     SubscriptionOut,
     VerifyPaymentRequest,
     VerifyPaymentResponse,
@@ -24,6 +26,7 @@ from app.payments.schemas import (
 )
 from app.security.rate_limit import (
     enforce_create_order_rate_limit,
+    enforce_redeem_coupon_rate_limit,
     enforce_verify_rate_limit,
 )
 
@@ -51,6 +54,19 @@ def verify_payment(
 ) -> VerifyPaymentResponse:
     enforce_verify_rate_limit(user_id=str(current_user.id))
     return service.verify_payment(user=current_user, body=body)
+
+
+@router.post("/redeem-coupon", response_model=RedeemCouponResponse)
+def redeem_coupon(
+    body: RedeemCouponRequest,
+    current_user: Annotated[UserPublic, Depends(get_current_user)],
+) -> RedeemCouponResponse:
+    enforce_redeem_coupon_rate_limit(user_id=str(current_user.id))
+    return service.redeem_coupon(
+        user=current_user,
+        plan_slug=body.plan_slug,
+        code=body.code,
+    )
 
 
 @router.get("/subscription", response_model=SubscriptionOut)

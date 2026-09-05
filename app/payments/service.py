@@ -50,6 +50,7 @@ from app.payments.schemas import (
     PlanOut,
     PlansResponse,
     RazorpayOrderPayload,
+    RedeemCouponResponse,
     SubscriptionOut,
     VerifyPaymentRequest,
     VerifyPaymentResponse,
@@ -489,6 +490,44 @@ def _ensure_pack_usage_after_fulfillment(
     )
 
 
+def _apply_fulfillment_side_effects(
+    *,
+    payment_user_id: UUID,
+    payment: dict[str, Any],
+    plan: dict[str, Any],
+    subscription_id: str | None,
+    order_id_for_log: str | None = None,
+) -> None:
+    """Pack usage / FSP plan generation shared by paid confirm and coupon redeem."""
+    if plan.get("slug") in (
+        WRITING_SKILL_SLUG,
+        SPEAKING_SKILL_SLUG,
+        DUAL_BUNDLE_SLUG,
+    ):
+        _ensure_pack_usage_after_fulfillment(
+            user_id=payment_user_id,
+            payment=payment,
+            plan=plan,
+            subscription_id=subscription_id,
+        )
+    elif plan.get("slug") == FULL_SKILL_PROGRAM_SLUG:
+        from app.learning.ingest import load_user_exam_and_target
+        from app.learning.service import (
+            invalidate_learning_profile_cache,
+            schedule_personalized_plan_generation,
+        )
+
+        invalidate_learning_profile_cache(payment_user_id)
+        schedule_personalized_plan_generation(payment_user_id)
+        user_row = load_user_exam_and_target(payment_user_id)
+        if not user_row or not user_row.get("exam_date"):
+            payment_log(
+                "PLAN_GEN_MISSING_EXAM_DATE",
+                user_id=str(payment_user_id),
+                order=order_id_for_log,
+            )
+
+
 def confirm_payment_paid(
     *,
     razorpay_order_id: str,
@@ -596,6 +635,7 @@ def confirm_payment_paid(
     )
     repository.invalidate_active_subscription_cache(payment_user_id)
 
+    subscription_id: str | None = None
     if plan.get("slug") in (
         WRITING_SKILL_SLUG,
         SPEAKING_SKILL_SLUG,
@@ -605,30 +645,73 @@ def confirm_payment_paid(
             payment_id=payment["id"],
             bundle_result=bundle_result if isinstance(bundle_result, dict) else None,
         )
-        _ensure_pack_usage_after_fulfillment(
-            user_id=payment_user_id,
-            payment=payment,
-            plan=plan,
-            subscription_id=subscription_id,
-        )
-    elif plan.get("slug") == FULL_SKILL_PROGRAM_SLUG:
-        from app.learning.ingest import load_user_exam_and_target
-        from app.learning.service import (
-            invalidate_learning_profile_cache,
-            schedule_personalized_plan_generation,
-        )
-
-        invalidate_learning_profile_cache(payment_user_id)
-        schedule_personalized_plan_generation(payment_user_id)
-        user_row = load_user_exam_and_target(payment_user_id)
-        if not user_row or not user_row.get("exam_date"):
-            payment_log(
-                "PLAN_GEN_MISSING_EXAM_DATE",
-                user_id=str(payment_user_id),
-                order=razorpay_order_id,
-            )
+    _apply_fulfillment_side_effects(
+        payment_user_id=payment_user_id,
+        payment=payment,
+        plan=plan,
+        subscription_id=subscription_id,
+        order_id_for_log=razorpay_order_id,
+    )
 
     return get_subscription(user_id=payment_user_id)
+
+
+def redeem_coupon(
+    *, user: UserPublic, plan_slug: str, code: str
+) -> RedeemCouponResponse:
+    """Grant plan entitlement via 100% coupon — skips Razorpay entirely."""
+    if str(getattr(user, "role", "") or "") == "guest":
+        raise GuestCheckoutNotAllowedError()
+
+    normalized = (code or "").strip().upper()
+    code_last4 = normalized[-4:] if normalized else None
+    payment_log(
+        "COUPON_REDEEM_RECEIVED",
+        user_id=str(user.id),
+        plan_slug=plan_slug,
+        code_last4=code_last4,
+    )
+
+    plan = repository.get_plan_by_slug(plan_slug)
+    if not plan:
+        raise PlanNotFoundError()
+
+    bundle = repository.redeem_coupon_bundle(
+        user_id=user.id,
+        plan_slug=plan_slug,
+        code=normalized,
+    )
+    repository.invalidate_active_subscription_cache(user.id)
+
+    payment_id = str(bundle.get("payment_id") or "")
+    payment = {
+        "id": payment_id,
+        "user_id": str(user.id),
+        "plan_id": str(plan["id"]),
+        "status": PAYMENT_PAID,
+        "amount": 0,
+        "razorpay_order_id": str(bundle.get("razorpay_order_id") or ""),
+        "razorpay_payment_id": str(bundle.get("razorpay_payment_id") or ""),
+    }
+    _apply_fulfillment_side_effects(
+        payment_user_id=user.id,
+        payment=payment,
+        plan=plan,
+        subscription_id=str(bundle.get("subscription_id") or "") or None,
+        order_id_for_log=str(bundle.get("razorpay_order_id") or None),
+    )
+
+    subscription = get_subscription(user_id=user.id)
+    payment_log(
+        "COUPON_REDEEM_SUCCESS",
+        user_id=str(user.id),
+        plan_slug=plan_slug,
+        code_last4=code_last4,
+        payment_id=payment_id,
+        subscription_active=bool(subscription.is_active),
+        success=True,
+    )
+    return RedeemCouponResponse(subscription=subscription)
 
 
 def verify_payment(
