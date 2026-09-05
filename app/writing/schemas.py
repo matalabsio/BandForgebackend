@@ -128,6 +128,8 @@ class WritingPendingResponse(BaseModel):
     ai_status: str | None = None
     ai_band: float | None = None
     ai_available: bool = False
+    word_count: int | None = None
+    short_response: bool = False
     submitted_at: datetime | None = None
     message: str
     session_tasks: list[WritingSessionTaskSummary] = Field(default_factory=list)

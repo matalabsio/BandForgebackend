@@ -165,6 +165,42 @@ def test_get_pending_status_exposes_ai_fields():
     assert "AI feedback is ready" in res.message
 
 
+def test_get_pending_status_short_essay_message():
+    from app.writing.ai_evaluator import AI_STATUS_FAILED
+    from app.writing.eval_utils import MIN_WORDS_FOR_AI
+
+    attempt = _attempt()
+    review = {
+        "id": str(REVIEW),
+        "status": "pending",
+        "human_band": None,
+        "submission_meta": {"word_count": 40, "essay": "too short"},
+        "ai_scores": {
+            "status": AI_STATUS_FAILED,
+            "error": "Response too short for IELTS AI evaluation.",
+            "word_count": 40,
+            "short_response": True,
+        },
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+
+    with (
+        patch("app.writing.service.repo.get_attempt", return_value=attempt),
+        patch(
+            "app.writing.service.repo.get_writing_review_for_attempt",
+            return_value=review,
+        ),
+        patch("app.writing.service.ai_evaluation_available", return_value=True),
+    ):
+        res = get_pending_status(attempt_id=ATTEMPT, user_id=USER)
+
+    assert res.ai_status == AI_STATUS_FAILED
+    assert res.short_response is True
+    assert res.word_count == 40
+    assert "under the minimum word count" in res.message
+    assert str(MIN_WORDS_FOR_AI) in res.message
+
+
 def test_get_review_does_not_call_llm_when_cached():
     attempt = _attempt()
     review = {

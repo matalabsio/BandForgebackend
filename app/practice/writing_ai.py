@@ -147,6 +147,8 @@ async def _evaluate_practice_writing_async(attempt_id: str) -> None:
             **score,
             "status": AI_STATUS_FAILED,
             "error": "Response too short for IELTS AI evaluation.",
+            "word_count": words,
+            "short_response": True,
             "completed_at": datetime.now(UTC).isoformat(),
         }
         _update_attempt_score(attempt_id, failed)
@@ -333,4 +335,12 @@ def get_practice_writing_review(
         "saved_for_review": True,
         "error": score.get("error"),
         "word_count_estimate": score.get("word_count_estimate"),
+        "short_response": bool(score.get("short_response"))
+        or (
+            ai_status == AI_STATUS_FAILED
+            and (
+                "too short" in str(score.get("error") or "").lower()
+                or int(score.get("word_count") or 0) < MIN_WORDS_FOR_AI
+            )
+        ),
     }

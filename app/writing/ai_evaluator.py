@@ -171,6 +171,21 @@ async def _evaluate_review_async(review_id: UUID) -> None:
             **existing_scores,
             "status": AI_STATUS_FAILED,
             "error": "Review has no essay text",
+            "word_count": 0,
+            "short_response": True,
+        }
+        repo.update_writing_review_ai_scores(review_id=review_id, ai_scores=failed)
+        return
+
+    cleaned = sanitize_essay(essay, question)
+    words = word_count(cleaned)
+    if words < MIN_WORDS_FOR_AI:
+        failed = {
+            **existing_scores,
+            "status": AI_STATUS_FAILED,
+            "error": "Response too short for IELTS AI evaluation.",
+            "word_count": words,
+            "short_response": True,
         }
         repo.update_writing_review_ai_scores(review_id=review_id, ai_scores=failed)
         return
@@ -186,7 +201,7 @@ async def _evaluate_review_async(review_id: UUID) -> None:
         if evaluation is None:
             raise RuntimeError(
                 "Writing AI evaluation returned no result "
-                "(essay too short, provider unavailable, or call failed)"
+                "(provider unavailable or call failed)"
             )
         status = (
             AI_STATUS_STUB
