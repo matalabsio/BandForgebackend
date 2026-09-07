@@ -158,13 +158,47 @@ def bootstrap_practice_speaking_attempt(
     frozen = _freeze_manifest_from_rows(rows)
     payload = _manifest_payload(frozen)
 
-    speaking_row = speaking_repo.insert_speaking_attempt(
+    # Every bank speaking hub anchors to the same M01 / part-1 / null-mock slot
+    # (idx_speaking_attempts_one_in_progress). Abandon leftovers first — otherwise
+    # a second hub, refresh, or leftover mock speaking start hard-500s.
+    existing = speaking_repo.find_in_progress_speaking_attempt(
         user_id=user_id,
         mock_test_id=PRACTICE_SPEAKING_MOCK_TEST_ID,
         part=1,
-        speaking_manifest=payload,
-        speaking_manifest_hash=digest,
+        mock_attempt_id=None,
     )
+    if existing:
+        speaking_repo.abandon_speaking_attempt(
+            attempt_id=UUID(str(existing["id"]))
+        )
+
+    try:
+        speaking_row = speaking_repo.insert_speaking_attempt(
+            user_id=user_id,
+            mock_test_id=PRACTICE_SPEAKING_MOCK_TEST_ID,
+            part=1,
+            speaking_manifest=payload,
+            speaking_manifest_hash=digest,
+        )
+    except Exception:
+        raced = speaking_repo.find_in_progress_speaking_attempt(
+            user_id=user_id,
+            mock_test_id=PRACTICE_SPEAKING_MOCK_TEST_ID,
+            part=1,
+            mock_attempt_id=None,
+        )
+        if raced is None:
+            raise
+        speaking_repo.abandon_speaking_attempt(
+            attempt_id=UUID(str(raced["id"]))
+        )
+        speaking_row = speaking_repo.insert_speaking_attempt(
+            user_id=user_id,
+            mock_test_id=PRACTICE_SPEAKING_MOCK_TEST_ID,
+            part=1,
+            speaking_manifest=payload,
+            speaking_manifest_hash=digest,
+        )
     speaking_attempt_id = str(speaking_row["id"])
 
     score = {

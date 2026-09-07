@@ -674,11 +674,31 @@ def start_hub_exercise(
         return rows
 
     def _abandon_in_progress() -> None:
+        prior = (
+            sb.table("practice_exercise_attempts")
+            .select("id, score")
+            .eq("user_id", str(user_id))
+            .eq("hub_id", str(hub_id))
+            .eq("status", "in_progress")
+            .execute()
+        ).data or []
+        linked_speaking_ids: list[str] = []
+        for row in prior:
+            score = row.get("score") if isinstance(row, dict) else None
+            if not isinstance(score, dict):
+                continue
+            sid = str(score.get("speaking_attempt_id") or "").strip()
+            if sid:
+                linked_speaking_ids.append(sid)
         sb.table("practice_exercise_attempts").update(
             {"status": "abandoned"}
         ).eq("user_id", str(user_id)).eq("hub_id", str(hub_id)).eq(
             "status", "in_progress"
         ).execute()
+        if linked_speaking_ids:
+            sb.table("test_attempts").update({"status": "abandoned"}).in_(
+                "id", linked_speaking_ids
+            ).eq("module", "speaking").eq("status", "in_progress").execute()
 
     # Questions + abandon in parallel (were sequential).
     with ThreadPoolExecutor(max_workers=2) as pool:
