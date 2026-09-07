@@ -223,6 +223,8 @@ def _start_exercise_supabase(*, questions: list[dict], module: str = "speaking")
         m = MagicMock()
         m.select.return_value = m
         m.eq.return_value = m
+        m.is_.return_value = m
+        m.in_.return_value = m
         m.order.return_value = m
         m.update.return_value = m
         m.insert.return_value = m
@@ -247,6 +249,16 @@ def _start_exercise_supabase(*, questions: list[dict], module: str = "speaking")
         elif name == "practice_exercise_attempts":
             m.execute.return_value = MagicMock(
                 data=[{"id": "77777777-7777-4777-8777-777777777777"}]
+            )
+        elif name == "test_attempts":
+            # Bootstrap speaking attempt insert (find_in_progress returns []).
+            m.execute.return_value = MagicMock(
+                data=[
+                    {
+                        "id": "99999999-9999-4999-8999-999999999999",
+                        "status": "in_progress",
+                    }
+                ]
             )
         else:
             m.execute.return_value = MagicMock(data=[])
