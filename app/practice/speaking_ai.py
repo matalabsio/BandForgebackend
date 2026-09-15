@@ -38,8 +38,8 @@ TERMINAL_AI_STATUSES = frozenset(
     }
 )
 
-# FK anchor for practice bank speaking attempts (M01 has speaking content).
-PRACTICE_SPEAKING_MOCK_TEST_ID = UUID("a0000000-0000-4000-8000-000000000001")
+# FK anchor for practice bank speaking attempts (SC Community / Test 1).
+PRACTICE_SPEAKING_MOCK_TEST_ID = UUID("a1000000-0000-4000-8000-000000000001")
 
 
 def _sb():

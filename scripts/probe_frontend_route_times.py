@@ -6,7 +6,7 @@ Supports Google-auth via TEST_EMAIL (session mint) or BF_ACCESS.
 
 Usage:
   cd backend
-  TEST_EMAIL=arsh8795737563@gmail.com .venv/bin/python scripts/probe_frontend_route_times.py \\
+  TEST_EMAIL=you@example.com .venv/bin/python scripts/probe_frontend_route_times.py \\
     --warm --out ../docs/frontend-route-times.json
 """
 

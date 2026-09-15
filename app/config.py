@@ -243,6 +243,11 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="SPEAKING_EVAL_STUB",
     )
+    english_forge_eval_stub: bool = Field(
+        default=False,
+        validation_alias="ENGLISH_FORGE_EVAL_STUB",
+        description="Skip live ASR/LLM for English Forge; use deterministic coach stub.",
+    )
     writing_eval_stub: bool = Field(
         default=False,
         validation_alias="WRITING_EVAL_STUB",

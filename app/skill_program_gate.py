@@ -18,7 +18,8 @@ def assert_skill_program_module_start(
 ) -> dict | None:
     """When skill_context is set, require FSP or Writing Skill (writing only).
 
-    FSP: catalogue skill-mock unlock still needs 12/12 hubs (unless from_plan).
+    FSP: catalogue skill-mock unlock uses skill_full_mocks.unlock_requires_sets
+    (speaking = 15 SC hubs) unless from_plan.
     Writing Skill: course-complete + quota + allotted mock (when mock_test_id given).
 
     Returns Writing Skill access context when pack rules apply; else None.

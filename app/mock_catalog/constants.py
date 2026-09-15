@@ -1,26 +1,36 @@
-"""Published full-mock catalog IDs (M01 = Test 1, M02 = Test 2)."""
+"""Published full-mock catalog IDs (Test 1–2 = Society & Culture speaking)."""
 
 from __future__ import annotations
 
-# Academic Mock 1 — single container for all L/R modules
-# Valid UUID (hex only). Prefix a000 = Academic Mock 1 (plan mnemonic m000 is not valid in Postgres).
-M01_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000001"
+# Society & Culture speaking mocks (student catalog Tests 1–5).
+SC1_MOCK_TEST_ID = "a1000000-0000-4000-8000-000000000001"
+SC2_MOCK_TEST_ID = "a1000000-0000-4000-8000-000000000002"
+SC3_MOCK_TEST_ID = "a1000000-0000-4000-8000-000000000003"
+SC4_MOCK_TEST_ID = "a1000000-0000-4000-8000-000000000004"
+SC5_MOCK_TEST_ID = "a1000000-0000-4000-8000-000000000005"
 
-# Academic Mock 2 — Test 2 (content seeded separately).
-M02_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000002"
+# Legacy aliases: Test 1 / Test 2 published IDs (SC Community / Festivals).
+M01_MOCK_TEST_ID = SC1_MOCK_TEST_ID
+M02_MOCK_TEST_ID = SC2_MOCK_TEST_ID
 
-# Academic Mock 3 — listening, reading, writing seeded; unpublished until admin publishes.
-M03_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000003"
+# Parked academic full mocks (L/R/W content retained; not in student catalog).
+ACADEMIC_M01_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000001"
+ACADEMIC_M02_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000002"
+ACADEMIC_M03_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000003"
+ACADEMIC_M04_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000004"
+ACADEMIC_M05_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000005"
 
-# Academic Mock 4 — listening, reading, writing seeded; unpublished until admin publishes.
-M04_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000004"
-
-# Academic Mock 5 — listening, reading, writing T1 seeded; unpublished until admin publishes.
-M05_MOCK_TEST_ID = "a0000000-0000-4000-8000-000000000005"
+# Back-compat names used by MODULE_LIVE_PARTS below.
+M03_MOCK_TEST_ID = ACADEMIC_M03_MOCK_TEST_ID
+M04_MOCK_TEST_ID = ACADEMIC_M04_MOCK_TEST_ID
+M05_MOCK_TEST_ID = ACADEMIC_M05_MOCK_TEST_ID
 
 PUBLISHED_FULL_MOCK_IDS: tuple[str, ...] = (
-    M01_MOCK_TEST_ID,
-    M02_MOCK_TEST_ID,
+    SC1_MOCK_TEST_ID,
+    SC2_MOCK_TEST_ID,
+    SC3_MOCK_TEST_ID,
+    SC4_MOCK_TEST_ID,
+    SC5_MOCK_TEST_ID,
 )
 
 # Candidate app: published mocks with catalog_number in 1..MAX are startable.
@@ -39,37 +49,42 @@ MODULE_ORDER = ("listening", "reading", "writing", "speaking")
 # Parts that count toward full-test progression (subset of questions in DB).
 # Test 1 flow: Listening parts 1-4 → Reading passages 1-2 → writing tasks 1-2 → results.
 MODULE_LIVE_PARTS: dict[str, dict[str, tuple[int, ...]]] = {
-    M01_MOCK_TEST_ID: {
+    ACADEMIC_M01_MOCK_TEST_ID: {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2),
         "writing": (1, 2),
     },
-    M02_MOCK_TEST_ID: {
+    ACADEMIC_M02_MOCK_TEST_ID: {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2, 3),
         "writing": (1, 2),
     },
-    M03_MOCK_TEST_ID: {
+    ACADEMIC_M03_MOCK_TEST_ID: {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2, 3),
         "writing": (1, 2),
     },
-    M04_MOCK_TEST_ID: {
+    ACADEMIC_M04_MOCK_TEST_ID: {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2, 3),
         "writing": (1, 2),
     },
-    M05_MOCK_TEST_ID: {
+    ACADEMIC_M05_MOCK_TEST_ID: {
         "listening": (1, 2, 3, 4),
         "reading": (1, 2, 3),
         "writing": (1,),
     },
+    SC1_MOCK_TEST_ID: {"speaking": (1, 2, 3)},
+    SC2_MOCK_TEST_ID: {"speaking": (1, 2, 3)},
+    SC3_MOCK_TEST_ID: {"speaking": (1, 2, 3)},
+    SC4_MOCK_TEST_ID: {"speaking": (1, 2, 3)},
+    SC5_MOCK_TEST_ID: {"speaking": (1, 2, 3)},
 }
 
-# Legacy URL aliases only — live Reading for M01 is passages (1, 2).
+# Legacy URL aliases only — live Reading for academic M01 is passages (1, 2).
 # Requests for passage 3/4 remap to 1/2 so old links do not 404.
 MODULE_CONTENT_PART_ALIAS: dict[str, dict[str, dict[int, int]]] = {
-    M01_MOCK_TEST_ID: {
+    ACADEMIC_M01_MOCK_TEST_ID: {
         "reading": {3: 1, 4: 2},
     },
 }

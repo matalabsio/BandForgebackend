@@ -192,7 +192,7 @@ def test_list_hubs_marks_accessible_flag():
 
 
 def test_skill_progress_full_catalog_total():
-    """Phase 5: 12 hubs per skill; required_for_mock stays 12; unlock at 12/12."""
+    """Progress uses catalog size; required_for_mock follows skill_full_mocks config."""
     hubs = [_hub_row("writing", f"h{i}", (i - 1) // 3 + 1, (i - 1) % 3 + 1) for i in range(1, 13)]
     progress_11 = {
         str(h["id"]): {"status": "completed"} for h in hubs[:11]
@@ -522,7 +522,7 @@ def test_rewrite_plan_hubs_keeps_assigned_and_fills_empty():
     out = rewrite_plan_hubs(
         plan,
         ordered_ids={
-            "listening": ["L-easy", "L-med", "L-hard"],
+            "listening": ["today-assigned", "L-easy", "L-med", "L-hard"],
             "reading": [],
             "writing": [],
             "speaking": [],
@@ -546,6 +546,110 @@ def test_rewrite_plan_hubs_keeps_assigned_and_fills_empty():
     assert d1[0]["hub_id"] == "today-assigned"
     assert d2[0]["hub_id"] == "L-easy"
     assert d0[0]["href"] == "/ok/stale"
+
+
+def test_rewrite_plan_hubs_replaces_dead_hub_on_today_keeps_past():
+    """Deleted/unpublished hubs on today/future are reassigned; past stays sticky."""
+    from datetime import date, timedelta
+
+    from app.practice.assignment import rewrite_plan_hubs
+
+    start = date(2026, 8, 1)
+    today = date(2026, 8, 2)
+    plan = {
+        "prep_start": start.isoformat(),
+        "weeks": [
+            {
+                "id": "w1",
+                "label": "Week 1",
+                "focus": "x",
+                "days": [
+                    {
+                        "date": start.isoformat(),
+                        "label": "Sat",
+                        "tasks": [
+                            {
+                                "id": "t1",
+                                "title": "S Practice",
+                                "module": "speaking",
+                                "task_type": "practice",
+                                "hub_id": "dead-past",
+                            },
+                        ],
+                    },
+                    {
+                        "date": today.isoformat(),
+                        "label": "Sun",
+                        "tasks": [
+                            {
+                                "id": "t2",
+                                "title": "S Practice",
+                                "module": "speaking",
+                                "task_type": "practice",
+                                "hub_id": "dead-today",
+                            },
+                        ],
+                    },
+                    {
+                        "date": (today + timedelta(days=1)).isoformat(),
+                        "label": "Mon",
+                        "tasks": [
+                            {
+                                "id": "t3",
+                                "title": "S Practice",
+                                "module": "speaking",
+                                "task_type": "practice",
+                                "hub_id": "dead-future",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    out = rewrite_plan_hubs(
+        plan,
+        ordered_ids={
+            "listening": [],
+            "reading": [],
+            "writing": [],
+            "speaking": ["sc-p1", "sc-p2"],
+        },
+        hub_to_set={
+            "dead-past": "set-dead-past",
+            "dead-today": "set-dead-today",
+            "dead-future": "set-dead-future",
+            "sc-p1": "set-sc1",
+            "sc-p2": "set-sc2",
+        },
+        today=today,
+        claim=False,
+    )
+    days = out["weeks"][0]["days"]
+    assert days[0]["tasks"][0]["hub_id"] == "dead-past"
+    assert days[1]["tasks"][0]["hub_id"] == "sc-p1"
+    assert days[2]["tasks"][0]["hub_id"] == "sc-p2"
+
+
+def test_should_preserve_assignment_dead_hub_rules():
+    from app.practice.assignment import _should_preserve_assignment
+
+    alive = {"hub-a", "hub-b"}
+    assert _should_preserve_assignment(
+        kind="past", existing_hub="dead", assignable_hub_ids=alive
+    )
+    assert not _should_preserve_assignment(
+        kind="today", existing_hub="dead", assignable_hub_ids=alive
+    )
+    assert not _should_preserve_assignment(
+        kind="future", existing_hub="dead", assignable_hub_ids=alive
+    )
+    assert _should_preserve_assignment(
+        kind="today", existing_hub="hub-a", assignable_hub_ids=alive
+    )
+    assert not _should_preserve_assignment(
+        kind="today", existing_hub=None, assignable_hub_ids=alive
+    )
 
 
 
