@@ -28,7 +28,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     APP_ENV=production \
     API_HOST=0.0.0.0 \
-    WEB_CONCURRENCY=2 \
+    WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=120 \
     GUNICORN_GRACEFUL_TIMEOUT=30 \
     GUNICORN_KEEPALIVE=5
@@ -60,7 +60,7 @@ USER app
 # Railway injects PORT at runtime (often 8080). Do not hardcode EXPOSE to 8000.
 EXPOSE 8000 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD sh -c 'for p in ${PORT:-8080} 8000 8080; do curl -fsS "http://127.0.0.1:${p}/health" && exit 0; done; exit 1'
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=5 \
+    CMD sh -c 'curl -fsS "http://127.0.0.1:${PORT:-8080}/health" || exit 1'
 
 ENTRYPOINT ["docker-entrypoint.sh"]

@@ -17,25 +17,11 @@ else
   PRIMARY_PORT=8000
 fi
 
-# Build deduplicated bind port list
-BIND_PORTS="$PRIMARY_PORT"
-add_bind_port() {
-  port="$1"
-  case " $BIND_PORTS " in
-    *" $port "*) ;;
-    *) BIND_PORTS="$BIND_PORTS $port" ;;
-  esac
-}
+# Bind only the port Railway/proxy expects. Extra 8000/8080 binds used to
+# confuse healthchecks and look like a 1–2 minute crash loop.
+echo "[bandforge-api] railway=${ON_RAILWAY} PORT=${PORT:-unset} API_PORT=${API_PORT:-unset} bind=${PRIMARY_PORT}" >&2
 
-# Railway public domain Target Port is often 8000 while injected PORT is 8080 — bind both (+ primary).
-if [ "$ON_RAILWAY" = "true" ]; then
-  add_bind_port 8000
-  add_bind_port 8080
-fi
-
-echo "[bandforge-api] railway=${ON_RAILWAY} PORT=${PORT:-unset} API_PORT=${API_PORT:-unset} bind=${BIND_PORTS}" >&2
-
-WORKERS="${WEB_CONCURRENCY:-2}"
+WORKERS="${WEB_CONCURRENCY:-1}"
 TIMEOUT="${GUNICORN_TIMEOUT:-120}"
 GRACEFUL="${GUNICORN_GRACEFUL_TIMEOUT:-30}"
 KEEPALIVE="${GUNICORN_KEEPALIVE:-5}"
@@ -61,8 +47,6 @@ set -- gunicorn app.main:app \
   --error-logfile - \
   --capture-output
 
-for port in $BIND_PORTS; do
-  set -- "$@" --bind "${HOST}:${port}"
-done
+set -- "$@" --bind "${HOST}:${PRIMARY_PORT}"
 
 exec "$@"
