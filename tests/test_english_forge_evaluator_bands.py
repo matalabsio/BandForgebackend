@@ -3,29 +3,21 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-# Prefer monorepo English/backend when present; else vendored backend/english_forge.
 _BACKEND = Path(__file__).resolve().parents[1]
-_REPO = _BACKEND.parent  # MATA-lab/ when nested; backend parent otherwise
-_ENGLISH_BACKEND = _REPO / "English" / "backend"
+_REPO = _BACKEND.parent
 _FIXTURES = _REPO / "English" / "calibration" / "fixtures"
 
-for _candidate in (_ENGLISH_BACKEND, _BACKEND):
-    if (_candidate / "english_forge").is_dir() and str(_candidate) not in sys.path:
-        sys.path.insert(0, str(_candidate))
-        break
-
-from english_forge.evaluator_stub import evaluate_stub  # noqa: E402
-from english_forge.rubric import (  # noqa: E402
+from app.english_forge.evaluator_stub import evaluate_stub  # noqa: E402
+from app.english_forge.rubric import (  # noqa: E402
     RUBRIC_VERSION,
     STUB_EVALUATOR_VERSION,
     get_rubric,
 )
-from english_forge.schemas import CoachCard, EvaluateRequest  # noqa: E402
+from app.english_forge.schemas import CoachCard, EvaluateRequest  # noqa: E402
 
 IELTS_BANNED = (
     "ielts",
@@ -236,7 +228,7 @@ def test_rubric_labels_match_product_sets():
 
 
 def test_build_system_prompt_injects_band_block():
-    from english_forge.evaluator import build_system_prompt
+    from app.english_forge.evaluator import build_system_prompt
 
     sys_13 = build_system_prompt("1-3")
     sys_910 = build_system_prompt("9-10")
