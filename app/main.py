@@ -86,8 +86,10 @@ async def lifespan(_app: FastAPI):
                 )
             raise RuntimeError(detail)
         if "onboarding@resend.dev" in settings.email_from.lower():
-            raise RuntimeError(
-                "EMAIL_FROM must use a verified production sender, not onboarding@resend.dev."
+            print(
+                "[bandforge-api] WARNING: EMAIL_FROM uses onboarding@resend.dev — "
+                "Resend will only deliver to verified recipients. Set EMAIL_FROM to "
+                "a verified domain (e.g. BandForge <noreply@matalabs.io>)."
             )
         if settings.meta_whatsapp_enabled:
             required_meta = (
@@ -118,22 +120,15 @@ async def lifespan(_app: FastAPI):
                 ("RAZORPAY_KEY_ID", settings.razorpay_key_id),
                 ("RAZORPAY_KEY_SECRET", settings.razorpay_key_secret),
             ]
-            # Live keys must have webhook backup in production; Test mode can use /verify only.
-            if key_id.startswith("rzp_live_"):
-                required.append(
-                    ("RAZORPAY_WEBHOOK_SECRET", settings.razorpay_webhook_secret)
-                )
             missing = [name for name, val in required if not val]
             if missing:
                 raise RuntimeError(
                     f"Payments enabled in production but missing: {', '.join(missing)}"
                 )
-            if key_id.startswith("rzp_test_") and not (
-                settings.razorpay_webhook_secret or ""
-            ).strip():
+            if not (settings.razorpay_webhook_secret or "").strip():
                 print(
                     "[bandforge-api] WARNING: RAZORPAY_WEBHOOK_SECRET unset — "
-                    "Test checkout works via /verify; set webhook secret for backup fulfillment"
+                    "checkout still works via /verify; webhook backup is disabled"
                 )
     elif settings.razorpay_enabled:
         missing = [
