@@ -20,20 +20,7 @@ from app.speaking.router import router as speaking_router
 from app.notifications.router import router as notifications_router
 from app.writing.router import router as writing_router
 from app.routers import attempts, dashboard, diagnostic, marketing, mock_attempts, status, tests
-
-# english_forge is vendored at backend/english_forge (Docker + Railway).
-# Monorepo checkout may also expose English/backend — prefer that when present
-# so local edits under English/ still win over a stale vendored copy.
-import sys
-from pathlib import Path
-
-_backend_root = Path(__file__).resolve().parents[1]
-_monorepo_english = _backend_root.parent / "English" / "backend"
-for _candidate in (_monorepo_english, _backend_root):
-    if (_candidate / "english_forge").is_dir() and str(_candidate) not in sys.path:
-        sys.path.insert(0, str(_candidate))
-        break
-from english_forge.router import router as english_forge_router  # noqa: E402
+from app.english_forge.router import router as english_forge_router
 
 
 @asynccontextmanager
