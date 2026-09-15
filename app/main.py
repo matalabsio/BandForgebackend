@@ -21,6 +21,15 @@ from app.notifications.router import router as notifications_router
 from app.writing.router import router as writing_router
 from app.routers import attempts, dashboard, diagnostic, marketing, mock_attempts, status, tests
 
+# English Forge package lives under repo-root English/backend/
+import sys
+from pathlib import Path
+
+_english_backend = Path(__file__).resolve().parents[2] / "English" / "backend"
+if _english_backend.is_dir() and str(_english_backend) not in sys.path:
+    sys.path.insert(0, str(_english_backend))
+from english_forge.router import router as english_forge_router  # noqa: E402
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -211,6 +220,7 @@ app.include_router(listening_router)
 app.include_router(reading_router)
 app.include_router(writing_router)
 app.include_router(speaking_router)
+app.include_router(english_forge_router)
 app.include_router(notifications_router)
 app.include_router(payments_router)
 app.include_router(learning_router)

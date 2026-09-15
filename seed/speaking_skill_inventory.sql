@@ -1,15 +1,10 @@
--- Speaking Skill production inventory: attach 12 part hubs + 1 mock to speaking_skill,
--- then activate the plan for checkout.
+-- Speaking Skill production inventory (Society & Culture).
+-- Prefer migration: supabase/migrations/20260915140000_speaking_bank_society_culture.sql
+-- which owns Speaking Bank 4 as 15 SC part hubs + Community mock.
 --
--- Prerequisites (run first if hubs are missing):
---   seed/speaking_skill_dummy_inventory.sql  → MT1 P1/P2/P3 + SS_P*_02..04 (12 hubs)
---
--- Resolves plan_id by slug (no hardcoded UUID). Idempotent PCI delete+insert.
+-- This seed is a lightweight PCI re-attach if hubs already exist (c161… / a100…0001).
 -- exam_module = 'both' so course listing accepts academic/GT/both filters.
 
--- ---------------------------------------------------------------------------
--- program_content_items: 12 hubs (4×P1, 4×P2, 4×P3) + 1 Speaking mock (M01)
--- ---------------------------------------------------------------------------
 DO $$
 DECLARE
   v_plan_id uuid;
@@ -24,27 +19,49 @@ BEGIN
   INSERT INTO program_content_items (
     id, plan_id, item_type, item_id, exam_module, sort_order, is_active
   )
-  VALUES
-    -- Part 1 (4 hubs)
-    ('d2000000-0000-4000-8000-000000000001', v_plan_id, 'practice_hub', 'c1100000-0000-4000-8000-000000000031', 'both', 1, true),
-    ('d2000000-0000-4000-8000-000000000002', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000102', 'both', 2, true),
-    ('d2000000-0000-4000-8000-000000000003', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000103', 'both', 3, true),
-    ('d2000000-0000-4000-8000-000000000004', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000104', 'both', 4, true),
-    -- Part 2 (4 hubs)
-    ('d2000000-0000-4000-8000-000000000005', v_plan_id, 'practice_hub', 'c1100000-0000-4000-8000-000000000032', 'both', 5, true),
-    ('d2000000-0000-4000-8000-000000000006', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000202', 'both', 6, true),
-    ('d2000000-0000-4000-8000-000000000007', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000203', 'both', 7, true),
-    ('d2000000-0000-4000-8000-000000000008', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000204', 'both', 8, true),
-    -- Part 3 (4 hubs)
-    ('d2000000-0000-4000-8000-000000000009', v_plan_id, 'practice_hub', 'c1100000-0000-4000-8000-000000000033', 'both', 9, true),
-    ('d2000000-0000-4000-8000-00000000000a', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000302', 'both', 10, true),
-    ('d2000000-0000-4000-8000-00000000000b', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000303', 'both', 11, true),
-    ('d2000000-0000-4000-8000-00000000000c', v_plan_id, 'practice_hub', 'c1510000-0000-4000-8000-000000000304', 'both', 12, true),
-    -- Allotted Speaking mock (M01)
-    ('d2000000-0000-4000-8000-00000000000d', v_plan_id, 'mock_test', 'a0000000-0000-4000-8000-000000000001', 'both', 100, true);
-END $$;
+  SELECT
+    ('d2100000-0000-4000-8000-' || lpad(v.sort_order::text, 12, '0'))::uuid,
+    v_plan_id,
+    'practice_hub',
+    v.hub_id::uuid,
+    'both',
+    v.sort_order,
+    true
+  FROM (VALUES
+    (1, 'c1610000-0000-4000-8000-000000010100'),
+    (2, 'c1610000-0000-4000-8000-000000010200'),
+    (3, 'c1610000-0000-4000-8000-000000010300'),
+    (4, 'c1610000-0000-4000-8000-000000020100'),
+    (5, 'c1610000-0000-4000-8000-000000020200'),
+    (6, 'c1610000-0000-4000-8000-000000020300'),
+    (7, 'c1610000-0000-4000-8000-000000030100'),
+    (8, 'c1610000-0000-4000-8000-000000030200'),
+    (9, 'c1610000-0000-4000-8000-000000030300'),
+    (10, 'c1610000-0000-4000-8000-000000040100'),
+    (11, 'c1610000-0000-4000-8000-000000040200'),
+    (12, 'c1610000-0000-4000-8000-000000040300'),
+    (13, 'c1610000-0000-4000-8000-000000050100'),
+    (14, 'c1610000-0000-4000-8000-000000050200'),
+    (15, 'c1610000-0000-4000-8000-000000050300')
+  ) AS v(sort_order, hub_id);
 
--- Activate after inventory is attached (12 hubs + 1 mock).
-UPDATE plans
-SET is_active = true
-WHERE slug = 'speaking_skill';
+  INSERT INTO program_content_items (
+    id, plan_id, item_type, item_id, exam_module, sort_order, is_active
+  )
+  VALUES (
+    'd2100000-0000-4000-8000-000000000100',
+    v_plan_id,
+    'mock_test',
+    'a1000000-0000-4000-8000-000000000001',
+    'both',
+    100,
+    true
+  );
+
+  UPDATE skill_full_mocks
+  SET mock_test_id = 'a1000000-0000-4000-8000-000000000001',
+      unlock_requires_sets = 15
+  WHERE skill = 'speaking';
+
+  UPDATE plans SET is_active = true WHERE id = v_plan_id;
+END $$;

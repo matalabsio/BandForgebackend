@@ -324,11 +324,20 @@ def _should_preserve_assignment(
     *,
     kind: str,
     existing_hub: str | None,
+    assignable_hub_ids: set[str] | None = None,
 ) -> bool:
-    """Sticky: past never changes; any existing assignment is kept."""
+    """Sticky past days; today/future keep only hubs still in the assignable pool.
+
+    Deleted/unpublished hubs on today/future are not preserved so rewrite can
+    pick a fresh Question Bank hub (e.g. after SC speaking bank replacement).
+    """
     if kind == "past":
         return True
-    return bool(existing_hub)
+    if not existing_hub:
+        return False
+    if assignable_hub_ids is not None and existing_hub not in assignable_hub_ids:
+        return False
+    return True
 
 
 def _ledger_orphans_by_skill(
@@ -508,7 +517,12 @@ def rewrite_plan_hubs(
 
         for skill in skills_on_day:
             existing = _existing_hub_for_skill(tasks_in, skill)
-            if _should_preserve_assignment(kind=kind, existing_hub=existing):
+            skill_assignable = set(ordered_pools.get(skill) or [])
+            if _should_preserve_assignment(
+                kind=kind,
+                existing_hub=existing,
+                assignable_hub_ids=skill_assignable,
+            ):
                 hub_for_skill[skill] = existing
                 if existing:
                     _mark_used(existing, str(mapping.get(existing) or ""), used_h, used_s)

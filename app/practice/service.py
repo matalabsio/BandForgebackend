@@ -176,7 +176,12 @@ def skill_progress(
         if progress.get(str(h["id"]), {}).get("status") == "completed"
     )
     mock = mock_row if mock_row is not None else repository.get_skill_full_mock(skill)
-    configured = int(mock.get("unlock_requires_sets") or 12) if mock else 12
+    default_required = 15 if skill == "speaking" else 12
+    configured = (
+        int(mock.get("unlock_requires_sets") or default_required)
+        if mock
+        else default_required
+    )
     required = _effective_required(catalog_total=total, configured=configured)
     mock_test_id = str(mock["mock_test_id"]) if mock and mock.get("mock_test_id") else None
     return SkillHubProgressOut(

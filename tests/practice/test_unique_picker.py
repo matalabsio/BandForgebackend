@@ -56,17 +56,28 @@ def _listening_hubs_from_plan(plan) -> list[str | None]:
         days = week.days if hasattr(week, "days") else week.get("days")
         for day in days:
             tasks = day.tasks if hasattr(day, "tasks") else day.get("tasks")
-            watches = [
+            listening = [
                 t
                 for t in tasks
                 if (t.module if hasattr(t, "module") else t.get("module")) == "listening"
-                and (t.task_type if hasattr(t, "task_type") else t.get("task_type"))
-                == "watch"
             ]
-            if not watches:
+            if not listening:
                 continue
-            t0 = watches[0]
-            hid = t0.hub_id if hasattr(t0, "hub_id") else t0.get("hub_id")
+            # Prefer practice (current plan shape); fall back to first listening task.
+            preferred = next(
+                (
+                    t
+                    for t in listening
+                    if (t.task_type if hasattr(t, "task_type") else t.get("task_type"))
+                    == "practice"
+                ),
+                listening[0],
+            )
+            hid = (
+                preferred.hub_id
+                if hasattr(preferred, "hub_id")
+                else preferred.get("hub_id")
+            )
             out.append(hid if hid else None)
     return out
 
@@ -274,7 +285,7 @@ def test_started_and_completed_today_unchanged():
     for status in ("in_progress", "completed"):
         out = rewrite_plan_hubs(
             plan,
-            ordered_ids={"listening": ["S9"], "reading": [], "writing": [], "speaking": []},
+            ordered_ids={"listening": ["S5", "S9"], "reading": [], "writing": [], "speaking": []},
             hub_to_set=_mapping(["S5", "S9"]),
             progress_map={"S5": {"status": status}},
             today=today,
@@ -288,12 +299,25 @@ def test_future_assigned_day_unchanged():
     plan = _listening_days(start=today, n=2, hubs=["S1", "S2"])
     out = rewrite_plan_hubs(
         plan,
-        ordered_ids={"listening": ["S9"], "reading": [], "writing": [], "speaking": []},
+        ordered_ids={"listening": ["S1", "S2", "S9"], "reading": [], "writing": [], "speaking": []},
         hub_to_set=_mapping(["S1", "S2", "S9"]),
         today=today,
         claim=False,
     )
     assert _listening_hubs_from_plan(out)[1] == "S2"
+
+
+def test_future_dead_hub_is_replaced():
+    today = date(2026, 8, 1)
+    plan = _listening_days(start=today, n=2, hubs=["S1", "dead-ss"])
+    out = rewrite_plan_hubs(
+        plan,
+        ordered_ids={"listening": ["S1", "S9"], "reading": [], "writing": [], "speaking": []},
+        hub_to_set=_mapping(["S1", "S9", "dead-ss"]),
+        today=today,
+        claim=False,
+    )
+    assert _listening_hubs_from_plan(out) == ["S1", "S9"]
 
 
 def test_future_empty_filled_from_unused_catalog():

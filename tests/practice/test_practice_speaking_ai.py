@@ -21,8 +21,10 @@ def test_resolve_speaking_part_from_question_type():
 
 
 def test_resolve_speaking_part_from_hub_title():
-    assert resolve_speaking_part(question_type="", title="SS_P3_02") == 3
-    assert resolve_speaking_part(question_type="", title="MT1_ST_P2") == 2
+    assert resolve_speaking_part(question_type="", title="Community — Part 3") == 3
+    assert resolve_speaking_part(question_type="", title="Festivals — Part 2") == 2
+    assert resolve_speaking_part(question_type="", title="Family — Part 1") == 1
+    # Legacy title patterns still resolve (historical attempts / old snapshots)
     assert resolve_speaking_part(question_type="", title="speaking-mt1-p1") == 1
 
 
@@ -85,7 +87,7 @@ def test_bootstrap_abandons_leftover_in_progress_speaking_attempt():
             practice_attempt_id="77777777-7777-4777-8777-777777777777",
             questions=questions,
             section_part=1,
-            hub_title="SS_P1_01",
+            hub_title="Community — Part 1",
         )
 
     speaking_repo.find_in_progress_speaking_attempt.assert_called_with(
