@@ -43,6 +43,7 @@ RUN apt-get update \
 
 COPY --from=builder /install /usr/local
 COPY app ./app
+COPY english_forge ./english_forge
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Fail the image build if the app cannot import (catches missing prod deps early).

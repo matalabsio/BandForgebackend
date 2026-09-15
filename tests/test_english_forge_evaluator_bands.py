@@ -8,13 +8,16 @@ from pathlib import Path
 
 import pytest
 
-# English Forge package lives under repo-root English/backend/ (same as app.main).
-_REPO = Path(__file__).resolve().parents[2]  # MATA-lab/
+# Prefer monorepo English/backend when present; else vendored backend/english_forge.
+_BACKEND = Path(__file__).resolve().parents[1]
+_REPO = _BACKEND.parent  # MATA-lab/ when nested; backend parent otherwise
 _ENGLISH_BACKEND = _REPO / "English" / "backend"
 _FIXTURES = _REPO / "English" / "calibration" / "fixtures"
 
-if _ENGLISH_BACKEND.is_dir() and str(_ENGLISH_BACKEND) not in sys.path:
-    sys.path.insert(0, str(_ENGLISH_BACKEND))
+for _candidate in (_ENGLISH_BACKEND, _BACKEND):
+    if (_candidate / "english_forge").is_dir() and str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
+        break
 
 from english_forge.evaluator_stub import evaluate_stub  # noqa: E402
 from english_forge.rubric import (  # noqa: E402
