@@ -284,6 +284,34 @@ def test_premium_gate_routes_speaking_skill_pack():
     assert_ss.assert_called_once()
 
 
+def test_premium_gate_dual_bundle_allows_speaking_when_writing_mismatch():
+    """Dual must not stop at writing-first failure for a speaking allotment."""
+    with (
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value=_ent(speaking_skill=True, writing_skill=True),
+        ),
+        patch(
+            "app.practice.writing_skill_mock.assert_writing_skill_mock_for_test",
+            side_effect=HTTPException(
+                status_code=403,
+                detail="Writing Skill mock access required for this mock.",
+            ),
+        ) as assert_ws,
+        patch(
+            "app.practice.speaking_skill_mock.assert_speaking_skill_mock_for_test",
+            return_value={"usage_id": USAGE_ID},
+        ) as assert_ss,
+    ):
+        enforce_premium_mock_flags(
+            user=_user(),
+            mock_test_id=UUID(MOCK_SS),
+            flags={"is_free": False, "is_diagnostic": False},
+        )
+    assert_ws.assert_called_once()
+    assert_ss.assert_called_once()
+
+
 def test_fsp_still_uses_subscription_gate():
     with (
         patch(

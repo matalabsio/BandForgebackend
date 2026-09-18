@@ -16,13 +16,13 @@ def assert_skill_program_module_start(
     from_plan: bool = False,
     mock_test_id: UUID | None = None,
 ) -> dict | None:
-    """When skill_context is set, require FSP or Writing Skill (writing only).
+    """When skill_context is set, require FSP or the matching skill pack.
 
     FSP: catalogue skill-mock unlock uses skill_full_mocks.unlock_requires_sets
-    (speaking = 15 SC hubs) unless from_plan.
-    Writing Skill: course-complete + quota + allotted mock (when mock_test_id given).
+    unless from_plan.
+    Writing / Speaking Skill packs: course-complete + quota + allotted mock.
 
-    Returns Writing Skill access context when pack rules apply; else None.
+    Returns pack access context when pack rules apply; else None.
     """
     if not skill_context:
         return None
@@ -52,6 +52,18 @@ def assert_skill_program_module_start(
                 user_id=user_id, mock_test_id=mock_test_id
             )
         return assert_writing_skill_mock_access(user_id=user_id)
+
+    if skill_context == "speaking" and ent["speaking_skill"]:
+        from app.practice.speaking_skill_mock import (
+            assert_speaking_skill_mock_access,
+            assert_speaking_skill_mock_for_test,
+        )
+
+        if mock_test_id is not None:
+            return assert_speaking_skill_mock_for_test(
+                user_id=user_id, mock_test_id=mock_test_id
+            )
+        return assert_speaking_skill_mock_access(user_id=user_id)
 
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,

@@ -32,15 +32,31 @@ router = APIRouter(prefix="/api/learning", tags=["learning"])
 def get_learning_profile(
     user: Annotated[UserPublic, Depends(get_current_user)],
 ) -> LearningProfileResponse:
-    """Return adaptive learning profile (creates/refreshes when stale)."""
-    return ensure_profile(UUID(str(user.id)))
+    """Return adaptive learning profile (creates/refreshes when stale).
+
+    Pack-only subscribers get bands/progress but an empty personalized study_plan
+    so FSP Today UI cannot render from API data.
+    """
+    from app.security.entitlements import has_full_skill_program
+
+    profile = ensure_profile(UUID(str(user.id)))
+    if has_full_skill_program(UUID(str(user.id))):
+        return profile
+    return profile.model_copy(
+        update={
+            "todays_tasks": [],
+            "study_plan": profile.study_plan.model_copy(
+                update={"weeks": [], "plan_tier": None}
+            ),
+        }
+    )
 
 
 @router.get("/today", response_model=TodayBundleResponse)
 def get_learning_today(
-    user: Annotated[UserPublic, Depends(get_current_user)],
+    user: Annotated[UserPublic, Depends(require_full_skill_program)],
 ) -> TodayBundleResponse:
-    """Slim Today bundle — todays_tasks + hub_progress + timeline (no full calendar)."""
+    """Slim Today bundle — FSP only (pack SKUs use skill course homes)."""
     return ensure_today_bundle(UUID(str(user.id)))
 
 

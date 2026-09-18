@@ -62,6 +62,73 @@ def test_assert_skill_program_module_start_from_plan_skips_mock_unlock():
         mock_unlock.assert_not_called()
 
 
+def test_assert_skill_program_module_start_writing_pack():
+    access = {"mock_test_id": "wt", "usage_id": "wu"}
+    with (
+        patch("app.security.entitlements.has_full_skill_program", return_value=False),
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value={
+                "writing_skill": True,
+                "speaking_skill": False,
+                "full_skill_program": False,
+            },
+        ),
+        patch(
+            "app.practice.writing_skill_mock.assert_writing_skill_mock_access",
+            return_value=access,
+        ) as mock_access,
+    ):
+        out = assert_skill_program_module_start(
+            user_id=USER_ID, skill_context="writing"
+        )
+    assert out == access
+    mock_access.assert_called_once_with(user_id=USER_ID)
+
+
+def test_assert_skill_program_module_start_speaking_pack():
+    access = {"mock_test_id": "st", "usage_id": "su"}
+    with (
+        patch("app.security.entitlements.has_full_skill_program", return_value=False),
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value={
+                "writing_skill": False,
+                "speaking_skill": True,
+                "full_skill_program": False,
+            },
+        ),
+        patch(
+            "app.practice.speaking_skill_mock.assert_speaking_skill_mock_access",
+            return_value=access,
+        ) as mock_access,
+    ):
+        out = assert_skill_program_module_start(
+            user_id=USER_ID, skill_context="speaking"
+        )
+    assert out == access
+    mock_access.assert_called_once_with(user_id=USER_ID)
+
+
+def test_assert_skill_program_module_start_pack_wrong_skill_forbidden():
+    with (
+        patch("app.security.entitlements.has_full_skill_program", return_value=False),
+        patch(
+            "app.security.entitlements.resolve_entitlements",
+            return_value={
+                "writing_skill": True,
+                "speaking_skill": False,
+                "full_skill_program": False,
+            },
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            assert_skill_program_module_start(
+                user_id=USER_ID, skill_context="speaking"
+            )
+        assert exc.value.status_code == 403
+
+
 def test_start_attempt_request_accepts_skill_context():
     body = StartAttemptRequest(module="listening", skill_context="listening")
     assert body.skill_context == "listening"

@@ -218,23 +218,36 @@ def enforce_premium_mock_flags(
             )
         return
 
-    if ent["writing_skill"]:
-        # Pack-only: same rules as writing/mock-attempts (course + allotment + quota).
-        # Do not allow L/R/S/module starts to bypass via allotment-only checks.
-        from app.practice.writing_skill_mock import assert_writing_skill_mock_for_test
+    # Pack-only (Writing, Speaking, or Dual): assert by allotted mock, not
+    # writing-first — Dual must reach Speaking allotment for speaking mocks.
+    if ent["writing_skill"] or ent["speaking_skill"]:
+        last_error: HTTPException | None = None
+        if ent["writing_skill"]:
+            from app.practice.writing_skill_mock import assert_writing_skill_mock_for_test
 
-        assert_writing_skill_mock_for_test(
-            user_id=user.id, mock_test_id=mock_test_id
+            try:
+                assert_writing_skill_mock_for_test(
+                    user_id=user.id, mock_test_id=mock_test_id
+                )
+                return
+            except HTTPException as exc:
+                last_error = exc
+        if ent["speaking_skill"]:
+            from app.practice.speaking_skill_mock import assert_speaking_skill_mock_for_test
+
+            try:
+                assert_speaking_skill_mock_for_test(
+                    user_id=user.id, mock_test_id=mock_test_id
+                )
+                return
+            except HTTPException as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="This mock is not part of your skill pack.",
         )
-        return
-
-    if ent["speaking_skill"]:
-        from app.practice.speaking_skill_mock import assert_speaking_skill_mock_for_test
-
-        assert_speaking_skill_mock_for_test(
-            user_id=user.id, mock_test_id=mock_test_id
-        )
-        return
 
     subscribed = (
         subscription_active
