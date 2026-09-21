@@ -1,7 +1,10 @@
 """Personalized Question Bank assignment: unique unused-set picker.
 
 Pool is the live assignable Question Bank catalog. Used is the union of
-ledger, hub progress, and hubs already on the current plan. Never wraps.
+ledger, hub progress, and hubs already on the current plan.
+
+Prefer unique unused hubs. When the unique pool is exhausted, soft-repeat
+wraps the catalog so Today / future days stay actionable.
 """
 
 from __future__ import annotations
@@ -38,6 +41,30 @@ def pick_unused_hub(
         return hid
     return None
 
+
+def pick_soft_repeat_hub(
+    *,
+    hub_ids: list[str],
+    day_offset: int = 0,
+    previous_hub_id: str | None = None,
+) -> str | None:
+    """Wrap the catalog when every hub/set is already used.
+
+    Uses ``day_offset % n`` with a one-step skip when the pick would match
+    the previous day's hub (pool size > 1).
+    """
+    ids = [str(h).strip() for h in hub_ids if str(h or "").strip()]
+    if not ids:
+        return None
+    n = len(ids)
+    start = int(day_offset) % n
+    prev = str(previous_hub_id or "").strip() or None
+    for offset in range(n):
+        cand = ids[(start + offset) % n]
+        if prev and cand == prev and n > 1:
+            continue
+        return cand
+    return ids[0]
 
 def _mark_used(
     hub_id: str,
@@ -480,6 +507,9 @@ def rewrite_plan_hubs(
     today_d = today or date.today()
     do_claim = bool(claim and user_id)
     new_fills: list[str] = []
+    # Track last assigned hub per skill while walking days (anti-consecutive soft-repeat).
+    prev_hub_by_skill: dict[str, str | None] = {skill: None for skill in SKILLS}
+    day_offset = 0
 
     day_entries: list[tuple[int, int, dict[str, Any]]] = []
     for wi, week in enumerate(study_plan.get("weeks") or []):
@@ -526,12 +556,14 @@ def rewrite_plan_hubs(
                 hub_for_skill[skill] = existing
                 if existing:
                     _mark_used(existing, str(mapping.get(existing) or ""), used_h, used_s)
+                    prev_hub_by_skill[skill] = existing
                 continue
             recovered = _pop_orphan_hub(orphan_hubs_by_skill, skill)
             if recovered:
                 hub_for_skill[skill] = recovered
                 _mark_used(recovered, str(mapping.get(recovered) or ""), used_h, used_s)
                 new_fills.append(recovered)
+                prev_hub_by_skill[skill] = recovered
                 continue
             hub = pick_hub_for_slot(
                 skill=skill,
@@ -546,9 +578,25 @@ def rewrite_plan_hubs(
                 user_exam_module=track,
                 hub_exam_module_by_id=exam_map,
             )
+            if (
+                not hub
+                and kind in ("today", "future")
+                and ordered_pools.get(skill)
+            ):
+                # Unique pool exhausted — soft-repeat so Today/future stay open.
+                hub = pick_soft_repeat_hub(
+                    hub_ids=ordered_pools.get(skill) or [],
+                    day_offset=day_offset,
+                    previous_hub_id=prev_hub_by_skill.get(skill),
+                )
             hub_for_skill[skill] = hub
             if hub:
                 new_fills.append(hub)
+                if hub not in used_h:
+                    _mark_used(hub, str(mapping.get(hub) or ""), used_h, used_s)
+                prev_hub_by_skill[skill] = hub
+
+        day_offset += 1
 
         tasks_out: list[dict[str, Any]] = []
         for task in day.get("tasks") or []:

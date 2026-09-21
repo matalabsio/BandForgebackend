@@ -389,6 +389,58 @@ def test_concurrent_conflict_skips_to_next_unused():
     assert "S6" in used_h
 
 
+def test_soft_repeat_fills_today_when_unique_pool_exhausted():
+    """When every hub is already used, Today still gets a soft-repeat hub."""
+    today = date(2026, 8, 10)
+    # Three past days consume the whole 3-hub pool; today starts empty.
+    plan = _listening_days(
+        start=date(2026, 8, 7),
+        n=4,
+        hubs=["S1", "S2", "S3", None],
+    )
+    out = rewrite_plan_hubs(
+        plan,
+        ordered_ids={
+            "listening": ["S1", "S2", "S3"],
+            "reading": [],
+            "writing": [],
+            "speaking": [],
+        },
+        hub_to_set=_mapping(["S1", "S2", "S3"]),
+        today=today,
+        claim=False,
+    )
+    hubs = _listening_hubs_from_plan(out)
+    assert hubs[:3] == ["S1", "S2", "S3"]
+    assert hubs[3] in {"S1", "S2", "S3"}
+    assert hubs[3] != "S3"  # anti-consecutive soft-repeat
+
+
+def test_soft_repeat_future_when_only_hub_already_used():
+    today = date(2026, 8, 10)
+    plan = _listening_days(
+        start=date(2026, 8, 9),
+        n=3,
+        hubs=["S1", "S1", None],
+    )
+    out = rewrite_plan_hubs(
+        plan,
+        ordered_ids={
+            "listening": ["S1"],
+            "reading": [],
+            "writing": [],
+            "speaking": [],
+        },
+        hub_to_set=_mapping(["S1"]),
+        today=today,
+        claim=False,
+    )
+    hubs = _listening_hubs_from_plan(out)
+    assert hubs[0] == "S1"  # past preserved
+    assert hubs[1] == "S1"  # today preserved
+    assert hubs[2] == "S1"  # future soft-repeats sole hub
+
+
 def test_mock_and_module_hubs_are_not_question_bank():
     mockish = {
         "id": "phase0-hub",
@@ -449,11 +501,13 @@ def test_try_claim_returns_conflict_on_unique_violation():
     assert status == "conflict"
 
 
-def test_no_modulo_in_assignment_module():
+def test_unique_pick_path_has_no_modulo_wrap():
+    """Unique picker still never wraps; soft-repeat is a separate fallback."""
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[2] / "app" / "practice" / "assignment.py"
     text = src.read_text()
-    assert "% n" not in text
-    assert "% pool" not in text
-    assert "soft-repeat" not in text
+    # Unique path must stay wrap-free.
+    assert "Never wraps or repeats a used set/hub" in text
+    assert "def pick_soft_repeat_hub" in text
+    assert "def pick_unused_hub" in text

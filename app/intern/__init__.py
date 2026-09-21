@@ -1,0 +1,1 @@
+"""Internship applicant screening assessment."""
