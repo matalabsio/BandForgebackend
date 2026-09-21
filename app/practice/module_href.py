@@ -80,6 +80,25 @@ def module_submit_config(
     return config
 
 
+def _is_bank_submit_config(cfg: dict[str, Any]) -> bool:
+    if str(cfg.get("type") or "").strip().lower() == "bank":
+        return True
+    href = cfg.get("href")
+    return isinstance(href, str) and "/practice/" in href
+
+
+def _bank_exercise_base(*, skill: str, hub_id: str, cfg: dict[str, Any]) -> str:
+    href = cfg.get("href")
+    if isinstance(href, str) and href.startswith("/"):
+        base = href.split("?", 1)[0].rstrip("/")
+        if base.endswith("/exercise"):
+            return base
+        # Hub landing → exercise
+        if f"/practice/{skill}/" in base:
+            return f"{base}/exercise"
+    return f"/practice/{skill}/{hub_id}/exercise"
+
+
 def plan_module_href(
     *,
     skill: str,
@@ -90,8 +109,19 @@ def plan_module_href(
     part: int | None = None,
     submit_config: dict[str, Any] | None = None,
 ) -> str:
-    """Full plan-aware href for Practice/Submit opening a mock module."""
+    """Full plan-aware href for Practice/Submit (mock module or bank exercise)."""
     cfg = submit_config if isinstance(submit_config, dict) else {}
+    skill_n = str(skill or "").strip().lower()
+
+    # Custom question-bank hubs stay on /practice/.../exercise — never /test/.
+    if _is_bank_submit_config(cfg):
+        base = _bank_exercise_base(skill=skill_n, hub_id=hub_id, cfg=cfg)
+        sep = "&" if "?" in base else "?"
+        q = f"from=plan&task={task_type}"
+        if task_id:
+            q += f"&taskId={task_id}"
+        return f"{base}{sep}{q}"
+
     catalog = int(cfg.get("catalog_number") or catalog_number or 1)
     catalog = 1 if catalog <= 1 else 2
     cfg_part = cfg.get("part")
@@ -102,14 +132,14 @@ def plan_module_href(
     )
 
     base = module_submit_config(
-        skill=skill,
+        skill=skill_n,
         catalog_number=catalog,
         part=resolved_part,
         hub_id=hub_id,
     )["href"]
     # Writing practice vs submit historically maps task type → part when config
     # has no part (non–Phase-0 hubs).
-    if skill == "writing" and resolved_part is None:
+    if skill_n == "writing" and resolved_part is None:
         p = 2 if task_type == "submit" else 1
         mock = "m01" if catalog == 1 else "m02"
         base = (

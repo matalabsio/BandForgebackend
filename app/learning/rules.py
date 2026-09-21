@@ -719,7 +719,7 @@ def _plan_open_href(
     part: int | None = None,
     submit_config: dict[str, Any] | None = None,
 ) -> str:
-    """Direct destination for Today links — mock module UI with hub targeting."""
+    """Direct destination for Today links — bank exercise or mock module UI."""
     q_task = f"from=plan&task={task_type}"
     if task_id:
         q_task += f"&taskId={task_id}"

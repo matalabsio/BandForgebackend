@@ -57,6 +57,27 @@ def test_plan_module_href_uses_submit_config():
     assert "task=practice" in href
 
 
+def test_plan_module_href_bank_stays_on_practice_exercise():
+    hub_id = "c5100000-0000-4000-8000-000000000002"
+    cfg = {
+        "type": "bank",
+        "module": "listening",
+        "href": f"/practice/listening/{hub_id}/exercise",
+    }
+    href = plan_module_href(
+        skill="listening",
+        hub_id=hub_id,
+        task_type="practice",
+        task_id="t-2026-09-21-listening-practice-s0",
+        submit_config=cfg,
+    )
+    assert href.startswith(f"/practice/listening/{hub_id}/exercise?")
+    assert "from=plan" in href
+    assert "task=practice" in href
+    assert "taskId=t-2026-09-21-listening-practice-s0" in href
+    assert "/test/" not in href
+
+
 def test_config_from_slug_or_defaults():
     cfg = config_from_slug_or_defaults(
         skill="listening",
