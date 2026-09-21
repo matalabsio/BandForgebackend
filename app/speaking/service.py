@@ -443,6 +443,20 @@ def start_attempt(
         repo.abandon_speaking_attempt(attempt_id=UUID(str(existing["id"])))
         existing = None
 
+    # Empty timed-out attempts cannot be finalized (no audio left in the browser).
+    # Abandon them so resume starts a fresh attempt instead of an infinite expiry loop.
+    if existing and not force_new:
+        started_at = _parse_started_at(existing)
+        elapsed_sec = (datetime.now(UTC) - started_at).total_seconds()
+        duration_sec = SPEAKING_DURATION_MINUTES * 60
+        if elapsed_sec > duration_sec:
+            existing_responses = repo.list_speaking_responses(
+                attempt_id=UUID(str(existing["id"]))
+            )
+            if not existing_responses:
+                repo.abandon_speaking_attempt(attempt_id=UUID(str(existing["id"])))
+                existing = None
+
     test = TestSummary(
         id=UUID(str(test_row["id"])),
         title=str(test_row["title"]),
@@ -1171,6 +1185,11 @@ def finalize_attempt(
                 "unexpected_question_ids": unexpected,
             },
         )
+
+    # Count only attempts that will create a review / trigger AI scoring.
+    from app.security.rate_limit import enforce_speaking_finalize_rate_limit
+
+    enforce_speaking_finalize_rate_limit(user_id=str(user_id))
 
     response_meta = [
         {

@@ -8,7 +8,7 @@ Used by:
 - POST /auth/register, /forgot-password, /collect-lead — per IP
 - POST /api/payments/create-order|verify|redeem-coupon — per user
 - POST /api/diagnostic/* public abuse surfaces — per IP
-- AI spend paths (writing/speaking submit, tutor chat) — per user
+- AI spend paths (writing/speaking submit, speaking finalize, tutor chat) — per user
 """
 
 from __future__ import annotations
@@ -421,6 +421,21 @@ def enforce_speaking_submit_rate_limit(*, user_id: str) -> None:
     enforce_user_rate_limit(
         user_id=user_id,
         bucket="ai:speaking-submit",
+        limit=_limit("rate_limit_ai_speaking_submit", AI_SPEAKING_SUBMIT_LIMIT),
+        window_sec=AI_SPEAKING_SUBMIT_WINDOW_SEC,
+        detail="Too many speaking submissions. Please try again later.",
+    )
+
+
+def enforce_speaking_finalize_rate_limit(*, user_id: str) -> None:
+    """Rate-limit multi-response speaking finalize (AI scoring).
+
+    Kept on a separate bucket from legacy single-file submit so retries that
+    never reached scoring cannot exhaust the finalize budget.
+    """
+    enforce_user_rate_limit(
+        user_id=user_id,
+        bucket="ai:speaking-finalize",
         limit=_limit("rate_limit_ai_speaking_submit", AI_SPEAKING_SUBMIT_LIMIT),
         window_sec=AI_SPEAKING_SUBMIT_WINDOW_SEC,
         detail="Too many speaking submissions. Please try again later.",

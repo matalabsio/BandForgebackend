@@ -635,11 +635,15 @@ async def logout_session(*, refresh_token: str | None) -> None:
         session_id = str(payload["sid"])
     except Exception:
         return
-    sb = get_supabase()
-    sb.table("refresh_sessions").update({"revoked_at": utcnow().isoformat()}).eq(
-        "id", session_id
-    ).execute()
-
+    try:
+        sb = get_supabase()
+        sb.table("refresh_sessions").update({"revoked_at": utcnow().isoformat()}).eq(
+            "id", session_id
+        ).execute()
+    except Exception:
+        # Best-effort revoke — client still clears cookies on 200.
+        logger.exception("logout_session revoke failed for sid=%s", session_id)
+        return
 
 async def forgot_password(*, email: str) -> None:
     sb = get_supabase()

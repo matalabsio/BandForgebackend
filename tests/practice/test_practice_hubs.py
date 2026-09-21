@@ -511,7 +511,7 @@ def test_rewrite_plan_hubs_keeps_assigned_and_fills_empty():
                                 "module": "listening",
                                 "task_type": "watch",
                                 "hub_id": None,
-                                "href": "/study-plan/today?skill=listening&unavailable=1",
+                                "href": "/study-plan?date=2026-01-15&skill=listening&unavailable=1",
                             },
                         ],
                     },

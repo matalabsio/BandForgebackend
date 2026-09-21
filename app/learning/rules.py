@@ -709,6 +709,40 @@ def _merge_task_status_by_slot(new_plan: StudyPlan, prior: dict[str, Any]) -> St
     return new_plan.model_copy(update={"weeks": weeks})
 
 
+def plan_date_from_task_id(task_id: str | None) -> str | None:
+    """Extract YYYY-MM-DD from t-{date}-{skill}-{type}-s{slot} ids."""
+    if not task_id:
+        return None
+    parts = str(task_id).split("-")
+    if len(parts) >= 4 and parts[0] == "t":
+        candidate = "-".join(parts[1:4])
+        if len(candidate) == 10 and candidate[4] == "-" and candidate[7] == "-":
+            return candidate
+    return None
+
+
+def unavailable_plan_href(
+    *,
+    skill: str,
+    day_date: date | str | None = None,
+    reason: str | None = None,
+) -> str:
+    """Deep-link Full plan for empty-hub tasks (never bounce to Today's plan)."""
+    params: list[str] = []
+    if day_date is not None:
+        if isinstance(day_date, date):
+            params.append(f"date={day_date.isoformat()}")
+        else:
+            raw = str(day_date).strip()[:10]
+            if raw:
+                params.append(f"date={raw}")
+    params.append(f"skill={skill}")
+    params.append("unavailable=1")
+    if reason:
+        params.append(f"reason={reason}")
+    return "/study-plan?" + "&".join(params)
+
+
 def _plan_open_href(
     *,
     skill: str,
@@ -776,7 +810,7 @@ def _personalized_task(
             task_id=task_id,
         )
     else:
-        href = f"/study-plan/today?skill={skill}&unavailable=1"
+        href = unavailable_plan_href(skill=skill, day_date=day_date)
     return StudyTask(
         id=task_id,
         title=titles[task_type],

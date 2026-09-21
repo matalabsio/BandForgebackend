@@ -197,6 +197,8 @@ def test_serve_rewritten_plan_unavailable_when_empty_pool():
 
     assert tasks[0].hub_id is None
     assert "unavailable=1" in tasks[0].href
+    assert tasks[0].href.startswith("/study-plan?")
+    assert "/study-plan/today" not in tasks[0].href
     assert not tasks[0].href.startswith("/practice/writing")
 
 

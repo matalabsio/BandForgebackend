@@ -241,7 +241,8 @@ def finalize_speaking(
     current_user: Annotated[UserPublic, Depends(get_current_user)],
     background_tasks: BackgroundTasks,
 ) -> SubmitSpeakingResponse:
-    enforce_speaking_submit_rate_limit(user_id=str(current_user.id))
+    # Rate limit is applied inside finalize_attempt only when scoring work starts
+    # (idempotent completed returns and 409 incomplete uploads do not burn the budget).
     return service.finalize_attempt(
         attempt_id=attempt_id,
         user_id=current_user.id,

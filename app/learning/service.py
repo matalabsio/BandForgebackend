@@ -21,6 +21,8 @@ from app.learning.rules import (
     apply_plan_rules,
     build_personalized_study_plan,
     monday_of,
+    plan_date_from_task_id,
+    unavailable_plan_href,
 )
 from app.learning.schemas import (
     GrammarStats,
@@ -648,11 +650,12 @@ def _rewrite_plan_task_href(task: StudyTask, *, hub_id: str | None) -> StudyTask
     if skill not in ("listening", "reading", "writing", "speaking"):
         return task
     if not hub_id:
-        # Prefer disabled catalogue link over bare skill browse from Today
+        # Prefer Full-plan deep link over bouncing to Today's plan
+        day = plan_date_from_task_id(task.id)
         return task.model_copy(
             update={
                 "hub_id": None,
-                "href": f"/study-plan/today?skill={skill}&unavailable=1",
+                "href": unavailable_plan_href(skill=skill, day_date=day),
             }
         )
     return task.model_copy(
@@ -811,12 +814,14 @@ def _serve_rewritten_study_plan(
                     )
                 except Exception:
                     pass
+                day = plan_date_from_task_id(task_id)
                 if skill == "writing" and not user_exam_module:
-                    return (
-                        "/study-plan/today?skill=writing&unavailable=1"
-                        "&reason=writing_track_required"
+                    return unavailable_plan_href(
+                        skill=skill,
+                        day_date=day,
+                        reason="writing_track_required",
                     )
-                return f"/study-plan/today?skill={skill}&unavailable=1"
+                return unavailable_plan_href(skill=skill, day_date=day)
             tt = task_type if task_type in ("watch", "practice", "submit") else "practice"
             cfg = submit_by_hub.get(str(hub_id)) or {}
             return _plan_open_href(
